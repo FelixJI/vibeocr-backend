@@ -1,0 +1,7 @@
+{
+  "platform": "win_amd64",
+  "schema_version": 1,
+  "sha256": "5b4093f92d9bffcb0d92aea050f3d77d5a4fc8e918b31cea000ee4b3ca751f1d",
+  "source_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260325/cpython-3.13.12+20260325-x86_64-pc-windows-msvc-install_only.tar.gz",
+  "version": "3.13.12"
+}

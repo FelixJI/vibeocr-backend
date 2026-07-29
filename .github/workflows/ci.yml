@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  required:
+    name: required
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+        if: hashFiles('global.json') != ''
+      - name: Verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v2.0.0 --repo FelixJI/vibeocr-protocol --dir .protocol
+          Get-ChildItem .protocol -File | Where-Object Name -ne 'SHA256SUMS' | ForEach-Object { gh attestation verify $_.FullName --repo FelixJI/vibeocr-protocol; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+          python scripts/bind_component_releases.py protocol-lock --release-dir .protocol --repository FelixJI/vibeocr-protocol --version 2.0.0 --output .protocol/protocol.lock.json
+          if ((Get-FileHash .protocol/protocol.lock.json -Algorithm SHA256).Hash -ne (Get-FileHash release/protocol.lock.json -Algorithm SHA256).Hash) { throw 'Protocol lock mismatch' }
+          python -m pip install --upgrade pip
+          python -m pip install pytest pyyaml ruff ./.protocol/vibeocr_runtime_contracts-2.0.0-py3-none-any.whl ./packages/vibeocr-backend
+          python scripts/check_runtime_protocol_conformance.py
+          python -m pytest tests/runtime tests/application tests/core tests/models
+          python -m ruff check packages/vibeocr-backend scripts tests/runtime

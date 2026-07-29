@@ -1,0 +1,31 @@
+{
+  "name": "mineru-legacy",
+  "synthetic": true,
+  "source": {
+    "legacy_html": "<table><tr><th data-cell-id=\"r0c0\" rowspan=\"2\">纵向</th><th data-cell-id=\"r0c1\" colspan=\"2\">横向</th></tr><tr><td data-cell-id=\"r1c1\">左下</td><td data-cell-id=\"r1c2\">右下</td></tr></table>",
+    "provider_payload": {
+      "results": {
+        "fixture": {
+          "md_content": "",
+          "content_list": "[{\"type\": \"table\", \"block_id\": \"mixed-span-v1\", \"table_body\": \"<table><tr><th data-cell-id=\\\"r0c0\\\" rowspan=\\\"2\\\">纵向</th><th data-cell-id=\\\"r0c1\\\" colspan=\\\"2\\\">横向</th></tr><tr><td data-cell-id=\\\"r1c1\\\">左下</td><td data-cell-id=\\\"r1c2\\\">右下</td></tr></table>\"}]"
+        }
+      }
+    }
+  },
+  "expected": {
+    "canonical_table": {
+      "schema_version": 1,
+      "table_id": "mixed-span-v1",
+      "row_count": 2,
+      "column_count": 3,
+      "coordinate_space": "unknown",
+      "cells": [
+        {"cell_id": "r0c0", "row": 0, "column": 0, "rowspan": 2, "colspan": 1, "text": "纵向", "is_header": true, "bbox": null, "confidence": null, "source_refs": []},
+        {"cell_id": "r0c1", "row": 0, "column": 1, "rowspan": 1, "colspan": 2, "text": "横向", "is_header": true, "bbox": null, "confidence": null, "source_refs": []},
+        {"cell_id": "r1c1", "row": 1, "column": 1, "rowspan": 1, "colspan": 1, "text": "左下", "is_header": false, "bbox": null, "confidence": null, "source_refs": []},
+        {"cell_id": "r1c2", "row": 1, "column": 2, "rowspan": 1, "colspan": 1, "text": "右下", "is_header": false, "bbox": null, "confidence": null, "source_refs": []}
+      ],
+      "provenance": {"pipeline": "MinerU", "provider_schema": "mineru-content-list", "provider_version": "", "warnings": []}
+    }
+  }
+}

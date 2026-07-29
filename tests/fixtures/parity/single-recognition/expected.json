@@ -1,0 +1,11 @@
+{
+  "raw_text": "VibeOCR parity ✓\n第二行",
+  "markdown_text": "# VibeOCR parity ✓\n\n第二行",
+  "html_text": "<h1>VibeOCR parity ✓</h1><p>第二行</p>",
+  "txt_sha256": "9d976705c76fcdfc797db9f58e2c4ba383df5ca7bb80bad6048530fa1947aa92",
+  "markdown_sha256": "7617344b5cb46369b64dbfc59ec66ed35531ecb824ec662019fc3f941ed9009f",
+  "blocks": [
+    { "type": "title", "level": 1, "text": "VibeOCR parity ✓" },
+    { "type": "text", "text": "第二行" }
+  ]
+}

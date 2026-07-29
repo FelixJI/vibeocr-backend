@@ -1,0 +1,11 @@
+{
+  "discardedTypes": ["header", "footer", "page_number", "page_footnote", "aside_text"],
+  "blocks": [
+    { "type": "title", "level": 2, "text": "章节：Unicode ✓" },
+    { "type": "text", "text": "普通正文 <script>alert(1)</script>" },
+    { "type": "table", "table_body": "<table onclick='bad()'><tr><th>列</th><td rowspan='2'>值<script>bad()</script></td></tr></table>" },
+    { "type": "formula", "text": "E = mc^2" },
+    { "type": "code", "text": "print('<unsafe>')" },
+    { "type": "header", "text": "应丢弃" }
+  ]
+}

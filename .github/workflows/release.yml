@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags: ['v0.7.0']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: release
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+        if: hashFiles('global.json') != ''
+      - name: Verify immutable tag
+        shell: pwsh
+        run: |
+          if ('${{ github.ref_name }}' -ne 'v0.7.0') { exit 1 }
+      - name: Build release assets
+        shell: pwsh
+        run: ./scripts/build-release.ps1
+      - uses: actions/attest@v4
+        with:
+          subject-checksums: artifacts/SHA256SUMS
+      - uses: actions/attest@v4
+        with:
+          subject-checksums: artifacts/SHA256SUMS
+          sbom-path: artifacts/SBOM.spdx.json
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create ${{ github.ref_name }} artifacts/* --verify-tag --generate-notes

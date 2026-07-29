@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "description": "Fixed inference test corpus for the unified supervisor rewrite. Fixtures are referenced by golden/contract/benchmark/E2E tests; their paths and semantics must remain stable across releases. Add new fixtures only by appending entries — never rename or delete an existing id without bumping `version`.",
+  "images": [
+    {
+      "id": "img-small-text",
+      "path": "tests/fixtures/inference/images/small-text.png",
+      "category": ["small", "plain_text"],
+      "description": "Small plain-text image for warm/cold single-recognize latency baseline."
+    },
+    {
+      "id": "img-medium-table",
+      "path": "tests/fixtures/inference/images/medium-table.png",
+      "category": ["medium", "table"],
+      "description": "Medium image with a structured table."
+    },
+    {
+      "id": "img-large-formula",
+      "path": "tests/fixtures/inference/images/large-formula.png",
+      "category": ["large", "formula"],
+      "description": "Large image containing mathematical formulas."
+    },
+    {
+      "id": "img-structured-doc",
+      "path": "tests/fixtures/inference/images/structured-doc.png",
+      "category": ["medium", "structured"],
+      "description": "Medium structured document (mixed headings/paragraphs/lists)."
+    },
+    {
+      "id": "img-corrupt",
+      "path": "tests/fixtures/inference/images/corrupt.png",
+      "category": ["corrupt"],
+      "description": "Bytes that decode as a truncated PNG; used for input-isolation recovery tests."
+    }
+  ],
+  "pdfs": [
+    {
+      "id": "pdf-normal",
+      "path": "tests/fixtures/inference/pdfs/normal.pdf",
+      "category": ["normal"],
+      "description": "Standard multi-page text PDF for page OCR throughput."
+    },
+    {
+      "id": "pdf-encrypted",
+      "path": "tests/fixtures/inference/pdfs/encrypted.pdf",
+      "category": ["encrypted"],
+      "password": "vibeocr-fixture",
+      "description": "Password-protected PDF for access-error classification."
+    },
+    {
+      "id": "pdf-corrupt",
+      "path": "tests/fixtures/inference/pdfs/corrupt.pdf",
+      "category": ["corrupt"],
+      "description": "Truncated PDF for worker-crash isolation."
+    },
+    {
+      "id": "pdf-oversized",
+      "path": "tests/fixtures/inference/pdfs/oversized.pdf",
+      "category": ["oversized"],
+      "description": "PDF exceeding the transport safety budget on a single page."
+    }
+  ],
+  "mineru": [
+    {
+      "id": "mineru-multi-file",
+      "path": "tests/fixtures/inference/mineru/",
+      "files": ["a.pdf", "b.pdf", "c.pdf"],
+      "category": ["multi_file"],
+      "description": "Budget-sized multi-file set exercising a single /file_parse request."
+    },
+    {
+      "id": "mineru-stem-collision",
+      "path": "tests/fixtures/inference/mineru/",
+      "files": ["copy.pdf", "copy.pdf", "copy.pdf"],
+      "category": ["stem_collision"],
+      "description": "Duplicate stems proving unique-internal-stem mapping."
+    }
+  ],
+  "benchmark_matrix": {
+    "paddle": {
+      "pipelines": ["OCR", "PP-StructureV3", "PaddleOCR-VL", "table", "formula"],
+      "devices": ["cpu", "gpu-low-vram", "gpu-mid-vram", "gpu-high-vram"],
+      "batch_sweep": [1, 2, 4, 8, 16, 32],
+      "warm_cold": ["cold", "warm"]
+    },
+    "mineru": {
+      "backends": ["hybrid-engine", "vlm-engine", "pipeline"],
+      "axes": ["doc_count", "total_bytes", "total_pages", "mixed_and_corrupt"],
+      "strategies": ["per_file", "budgeted_multi_file", "chunked"]
+    }
+  }
+}

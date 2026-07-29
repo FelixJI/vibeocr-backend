@@ -1,0 +1,13 @@
+{
+  "geometry": {
+    "rect": [100, 200, 500, 600],
+    "scaled": [50, 100, 250, 300],
+    "rotated90": [400, 100, 800, 500],
+    "cropped": [0, 0, 500, 500]
+  },
+  "commands": [
+    { "kind": "add", "annotation": { "id": "a1", "type": "rect", "rect": [100, 100, 300, 300] } },
+    { "kind": "move", "id": "a1", "from": [100, 100, 300, 300], "to": [200, 250, 400, 450] },
+    { "kind": "text", "id": "a1", "from": "", "to": "Unicode：识别 ✓" }
+  ]
+}

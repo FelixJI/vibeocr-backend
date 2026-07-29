@@ -1,0 +1,4 @@
+{
+  "preload_pipelines": ["OCR"],
+  "preload_enabled": true
+}

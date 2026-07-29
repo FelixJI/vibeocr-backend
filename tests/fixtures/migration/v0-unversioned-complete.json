@@ -1,0 +1,8 @@
+{
+  "preload_pipelines": ["OCR", "TABLE_RECOGNITION"],
+  "preload_enabled": true,
+  "pipeline_ttl_seconds": 600,
+  "max_heavy_pipelines": 1,
+  "export_settings": { "default_format": "markdown" },
+  "hotkeys": { "global_screenshot": "Ctrl+Alt+Q" }
+}

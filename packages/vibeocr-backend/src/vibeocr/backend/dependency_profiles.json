@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "dependencies": {
+    "paddlepaddle-gpu": "paddlepaddle-gpu>=3.3.1",
+    "torch": "torch>=2.6.0",
+    "paddleocr": "paddleocr[doc-parser]>=3.7.0",
+    "mineru": "mineru[core]>=3.4.3",
+    "markdown": "markdown>=3.10.2",
+    "pymupdf": "pymupdf>=1.28.0",
+    "fastapi": "fastapi>=0.139.0",
+    "uvicorn": "uvicorn>=0.51.0",
+    "pydantic": "pydantic>=2.13.4",
+    "fonttools": "fonttools>=4.63.0"
+  },
+  "profiles": {
+    "cpu": {
+      "paddle_index": "https://www.paddlepaddle.org.cn/packages/stable/cpu/"
+    },
+    "gpu-cu126": {
+      "paddle_index": "https://www.paddlepaddle.org.cn/packages/stable/cu126/",
+      "torch_index": "https://download.pytorch.org/whl/cu126"
+    }
+  },
+  "locked_versions": {}
+}

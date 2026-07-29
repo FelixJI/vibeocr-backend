@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vibeocr.local/schemas/phase0-baseline.json",
+  "title": "VibeOCR Phase 0 Baseline Report",
+  "description": "门禁脚本生成的基准报告 schema。报告不得包含本机绝对路径。",
+  "type": "object",
+  "required": ["generated_at", "gate", "schema", "result", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "报告生成时间（UTC，ISO 8601）"
+    },
+    "gate": {
+      "type": "string",
+      "const": "phase0",
+      "description": "门禁标识"
+    },
+    "schema": {
+      "type": "string",
+      "description": "对应 schema 文件的相对路径"
+    },
+    "result": {
+      "type": "string",
+      "enum": ["PASS", "FAIL"],
+      "description": "门禁总体结果"
+    },
+    "steps": {
+      "type": "array",
+      "description": "各门禁步骤的结果",
+      "items": {
+        "type": "object",
+        "required": ["name", "exit", "seconds", "ok"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "步骤名称（命令）"
+          },
+          "exit": {
+            "type": "integer",
+            "description": "退出码"
+          },
+          "seconds": {
+            "type": "number",
+            "minimum": 0,
+            "description": "耗时（秒）"
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "是否通过（exit == 0 或在容差基线内）"
+          },
+          "note": {
+            "type": "string",
+            "description": "可选说明（如 warning-mode 容差信息）"
+          }
+        }
+      }
+    }
+  }
+}

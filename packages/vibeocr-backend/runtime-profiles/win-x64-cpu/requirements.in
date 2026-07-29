@@ -1,0 +1,23 @@
+# Resolved for CPython 3.13 / Windows x64 by scripts/build_runtime_manifest.py.
+pillow>=12.3.0
+numpy>=2.3.5
+httpx>=0.28.1
+jsonschema>=4.25.0
+pymupdf>=1.28.0
+pydantic>=2.13.4
+fastapi>=0.139.0
+uvicorn>=0.51.0
+fonttools>=4.63.0
+markdown>=3.10.2
+python-docx>=1.2.0
+openpyxl>=3.1.5
+qrcode[pil]>=8.2
+python-barcode>=0.16.1
+opencv-contrib-python>=4.10.0.84
+pyzbar>=0.1.9
+pynvml>=11.5.0
+paddlepaddle>=3.3.1
+paddleocr[doc-parser]>=3.7.0
+# MinerU's ``core`` extra hard-pins cu126 Torch/TorchVision.  The CPU profile
+# intentionally carries only the remote/document client surface.
+mineru>=3.4.3

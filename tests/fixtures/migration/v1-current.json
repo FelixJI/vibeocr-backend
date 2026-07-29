@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "preload_pipelines": ["OCR"],
+  "preload_enabled": true
+}

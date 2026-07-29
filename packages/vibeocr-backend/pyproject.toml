@@ -1,0 +1,52 @@
+[project]
+name = "vibeocr-backend"
+version = "0.7.0"
+description = "UI-free VibeOCR inference Supervisor runtime"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "vibeocr-runtime-contracts==2.0.0",
+    "pillow>=12.3.0",
+    "numpy>=2.3.5",
+    "httpx>=0.28.1",
+    "jsonschema>=4.25.0",
+    "pymupdf>=1.28.0",
+    "pydantic>=2.13.4",
+    "fastapi>=0.139.0",
+    "uvicorn>=0.51.0",
+    "fonttools>=4.63.0",
+    "markdown>=3.10.2",
+    "python-docx>=1.2.0",
+    "openpyxl>=3.1.5",
+    "qrcode[pil]>=8.2",
+    "python-barcode>=0.16.1",
+    "opencv-contrib-python>=4.10.0.84",
+    "pyzbar>=0.1.9",
+    "pynvml>=11.5.0",
+]
+
+[project.optional-dependencies]
+cpu = [
+    "paddlepaddle>=3.3.1",
+    "paddleocr[doc-parser]>=3.7.0",
+    "mineru>=3.4.3",
+]
+gpu-cu126 = [
+    "paddlepaddle-gpu>=3.3.1",
+    "torch>=2.6.0",
+    "paddleocr[doc-parser]>=3.7.0",
+    "mineru[core]>=3.4.3",
+]
+
+[project.scripts]
+vibeocr-supervisor = "vibeocr.backend.supervisor.main:main"
+vibeocr-runtime-installer = "vibeocr.backend.runtime_installer:main"
+
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vibeocr"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/vibeocr/backend/dependency_profiles.json" = "vibeocr/backend/dependency_profiles.json"
