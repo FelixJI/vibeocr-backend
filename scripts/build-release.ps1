@@ -30,8 +30,11 @@ $committedLock = Join-Path $root 'release/protocol.lock.json'
 if (-not (Test-Path -LiteralPath $committedLock -PathType Leaf)) {
     throw 'release/protocol.lock.json is required'
 }
-if ((Get-FileHash $generatedLock -Algorithm SHA256).Hash -ne
-    (Get-FileHash $committedLock -Algorithm SHA256).Hash) {
+$generatedLockJson = Get-Content $generatedLock -Raw |
+  ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
+$committedLockJson = Get-Content $committedLock -Raw |
+  ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
+if ($generatedLockJson -ne $committedLockJson) {
     throw 'committed Protocol lock does not match downloaded release'
 }
 $runtimeLock = Get-Content (Join-Path $root 'release/python-runtime.lock.json') -Raw |

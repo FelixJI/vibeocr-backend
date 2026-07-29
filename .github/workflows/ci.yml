@@ -28,7 +28,9 @@ jobs:
           gh release download v2.0.0 --repo FelixJI/vibeocr-protocol --dir .protocol
           Get-ChildItem .protocol -File | Where-Object Name -ne 'SHA256SUMS' | ForEach-Object { gh attestation verify $_.FullName --repo FelixJI/vibeocr-protocol; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
           python scripts/bind_component_releases.py protocol-lock --release-dir .protocol --repository FelixJI/vibeocr-protocol --version 2.0.0 --output .protocol/protocol.lock.json
-          if ((Get-FileHash .protocol/protocol.lock.json -Algorithm SHA256).Hash -ne (Get-FileHash release/protocol.lock.json -Algorithm SHA256).Hash) { throw 'Protocol lock mismatch' }
+          $generatedLock = Get-Content .protocol/protocol.lock.json -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
+          $committedLock = Get-Content release/protocol.lock.json -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
+          if ($generatedLock -ne $committedLock) { throw 'Protocol lock mismatch' }
           python -m pip install --upgrade pip
           python -m pip install pytest pyyaml ruff ./.protocol/vibeocr_runtime_contracts-2.0.0-py3-none-any.whl ./packages/vibeocr-backend
           python scripts/check_runtime_protocol_conformance.py
