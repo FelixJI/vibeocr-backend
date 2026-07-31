@@ -1,49 +1,59 @@
-name: Release
+name: Build Release Assets
 
 on:
-  push:
-    tags: ['v0.7.0']
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Immutable tag to recover
+        description: Existing draft Release tag, for example v0.7.1
         required: true
-        default: v0.7.0
         type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-assets-${{ github.repository }}-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
 jobs:
   release:
-    name: release
+    name: Build and upload Windows package
     runs-on: windows-latest
     environment: release
     permissions:
       contents: write
       id-token: write
       attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag }}
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: "3.13"
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
         if: hashFiles('global.json') != ''
-      - name: Verify immutable tag
-        shell: pwsh
-        run: |
-          $tag = '${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}'
-          if ($tag -ne 'v0.7.0') { exit 1 }
-      - name: Build release assets
+      - name: Verify tag and draft Release
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: ./scripts/build-release.ps1
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $version = (python -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('packages/vibeocr-backend/pyproject.toml').read_text(encoding='utf-8'))['project']['version'])").Trim()
+          if ($env:RELEASE_TAG -ne "v$version") {
+            throw "Tag $env:RELEASE_TAG does not match repository version v$version"
+          }
+          $isDraft = (gh release view $env:RELEASE_TAG --json isDraft --jq '.isDraft').Trim()
+          if ($isDraft -ne "true") {
+            throw "Release $env:RELEASE_TAG must exist and remain a draft before assets are uploaded"
+          }
+      - name: Build release assets
+        shell: pwsh
+        run: ./scripts/build-release.ps1 -Version '${{ inputs.release_tag }}'
       - uses: actions/attest@v4
         with:
           subject-checksums: artifacts/SHA256SUMS
@@ -51,7 +61,10 @@ jobs:
         with:
           subject-checksums: artifacts/SHA256SUMS
           sbom-path: artifacts/SBOM.spdx.json
-      - name: Publish immutable release
+      - name: Attach assets to draft Release
+        shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }} artifacts/* --verify-tag --generate-notes
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $assets = @(Get-ChildItem artifacts -File | ForEach-Object FullName)
+          gh release upload $env:RELEASE_TAG @assets --clobber
