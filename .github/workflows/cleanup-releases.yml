@@ -18,10 +18,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 \
-            --json databaseId,tagName,isDraft,publishedAt \
-            --jq 'map(select(.isDraft == false and .publishedAt != null)) | sort_by(.publishedAt) | reverse | .[5:][] | [.databaseId, .tagName] | @tsv' |
+          # gh release list 不输出 REST id，改用 gh api 取数字 release id 用于 DELETE。
+          # 仅清理已发布（非 draft）的 Release；Git tag 保留。
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '[.[] | select(.draft == false and .published_at != null)] | sort_by(.published_at) | reverse | .[5:][] | [.id, .tag_name] | @tsv' |
           while IFS=$'\t' read -r release_id tag_name; do
+            [ -n "$release_id" ] || continue
             echo "Deleting old Release ${tag_name}; the git tag is retained."
             gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${release_id}"
           done

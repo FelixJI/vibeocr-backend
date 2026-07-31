@@ -36,10 +36,16 @@ jobs:
         run: |
           import json
           import os
+          import sys
           from pathlib import Path
 
-          current = json.loads(Path(".release-please-manifest.json").read_text())["."]
-          major, minor, patch = map(int, current.split("-", 1)[0].split("."))
+          current = json.loads(Path(".release-please-manifest.json").read_text(encoding="utf-8"))["."]
+          # 规范化：剥离预发布（-）与构建元数据（+）后，仅保留 release 段。
+          core = current.split("+", 1)[0].split("-", 1)[0]
+          try:
+              major, minor, patch = map(int, core.split("."))
+          except ValueError as exc:
+              sys.exit(f"Invalid manifest version {current!r}: expected MAJOR.MINOR.PATCH ({exc})")
           bump = os.environ["BUMP"]
           if bump == "major":
               version = f"{major + 1}.0.0"
