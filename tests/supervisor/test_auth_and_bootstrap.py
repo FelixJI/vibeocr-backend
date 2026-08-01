@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from vibeocr.backend.supervisor.auth import (
     check_bearer_token,
     check_loopback,

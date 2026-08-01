@@ -95,12 +95,8 @@ def test_interactive_always_outranks_background() -> None:
 
 def test_non_head_cannot_bypass_priority_queue() -> None:
     sched = DeviceScheduler(devices=["gpu:0"])
-    sched.enqueue(
-        job_id="bg", device="gpu:0", priority=JobPriority.BACKGROUND
-    )
-    sched.enqueue(
-        job_id="fg", device="gpu:0", priority=JobPriority.INTERACTIVE
-    )
+    sched.enqueue(job_id="bg", device="gpu:0", priority=JobPriority.BACKGROUND)
+    sched.enqueue(job_id="fg", device="gpu:0", priority=JobPriority.INTERACTIVE)
     assert sched.try_acquire("bg", "gpu:0") is None
     lease = sched.try_acquire("fg", "gpu:0")
     assert lease is not None
@@ -108,16 +104,10 @@ def test_non_head_cannot_bypass_priority_queue() -> None:
 
 def test_aging_is_recomputed_when_selecting_queue_head() -> None:
     t = [0.0]
-    sched = DeviceScheduler(
-        devices=["gpu:0"], clock=lambda: t[0], aging_interval=1.0
-    )
-    sched.enqueue(
-        job_id="old-bg", device="gpu:0", priority=JobPriority.BACKGROUND
-    )
+    sched = DeviceScheduler(devices=["gpu:0"], clock=lambda: t[0], aging_interval=1.0)
+    sched.enqueue(job_id="old-bg", device="gpu:0", priority=JobPriority.BACKGROUND)
     t[0] = 11.0
-    sched.enqueue(
-        job_id="fresh-fg", device="gpu:0", priority=JobPriority.INTERACTIVE
-    )
+    sched.enqueue(job_id="fresh-fg", device="gpu:0", priority=JobPriority.INTERACTIVE)
     assert sched.next_job_for("gpu:0") == "old-bg"
 
 
@@ -126,12 +116,24 @@ def test_aging_is_recomputed_when_selecting_queue_head() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _item(item_id: str, *, encoded: int = 1024, pixels: int = 1_000_000, pages: int = 1) -> InputItem:
-    return InputItem(item_id=item_id, encoded_bytes=encoded, decoded_pixels=pixels, estimated_pages=pages)
+def _item(
+    item_id: str, *, encoded: int = 1024, pixels: int = 1_000_000, pages: int = 1
+) -> InputItem:
+    return InputItem(
+        item_id=item_id,
+        encoded_bytes=encoded,
+        decoded_pixels=pixels,
+        estimated_pages=pages,
+    )
 
 
 def test_transport_plan_groups_under_all_caps() -> None:
-    planner = BudgetPlanner(max_file_count=4, max_encoded_bytes=4096, max_decoded_pixels=10_000_000, max_pages=10)
+    planner = BudgetPlanner(
+        max_file_count=4,
+        max_encoded_bytes=4096,
+        max_decoded_pixels=10_000_000,
+        max_pages=10,
+    )
     items = [_item(f"i{i}", encoded=1000, pixels=2_000_000, pages=2) for i in range(10)]
     batches = planner.plan_transport(items)
     # Each batch must respect every cap.
@@ -151,7 +153,11 @@ def test_transport_default_pixel_cap_is_64m() -> None:
 
 def test_transport_plan_isolates_oversized_item() -> None:
     planner = BudgetPlanner(max_encoded_bytes=4096)
-    items = [_item("small", encoded=100), _item("huge", encoded=999999), _item("small2", encoded=100)]
+    items = [
+        _item("small", encoded=100),
+        _item("huge", encoded=999999),
+        _item("small2", encoded=100),
+    ]
     batches = planner.plan_transport(items)
     assert len(batches) == 3
     assert batches[1].oversized is True
@@ -190,7 +196,9 @@ def test_compute_plan_real_batch_caps_at_capability() -> None:
 
 def test_compute_plan_falls_back_to_single_when_not_real_batch() -> None:
     planner = BudgetPlanner()
-    cap = AdapterCapability(name="PP-StructureV3", real_batch=False, max_compute_batch=8)
+    cap = AdapterCapability(
+        name="PP-StructureV3", real_batch=False, max_compute_batch=8
+    )
     items = [_item(f"i{i}") for i in range(3)]
     batches = planner.plan_compute(items, cap)
     assert len(batches) == 3
@@ -199,7 +207,9 @@ def test_compute_plan_falls_back_to_single_when_not_real_batch() -> None:
 
 def test_compute_plan_respects_vram() -> None:
     planner = BudgetPlanner(device_vram_mb=8000)
-    cap = AdapterCapability(name="OCR", real_batch=True, max_compute_batch=16, per_item_vram_mb=2000)
+    cap = AdapterCapability(
+        name="OCR", real_batch=True, max_compute_batch=16, per_item_vram_mb=2000
+    )
     items = [_item(f"i{i}") for i in range(10)]
     batches = planner.plan_compute(items, cap)
     # 8000/2000 = 4 max per batch even though capability says 16.
@@ -235,38 +245,58 @@ def test_oom_halves_microbatch_with_bounded_retries() -> None:
 
 def test_bad_input_uses_bisect_isolation() -> None:
     policy = RecoveryPolicy()
-    d = policy.next_action(failure=FailureClass.BAD_INPUT, current_batch_size=8, attempt=0)
+    d = policy.next_action(
+        failure=FailureClass.BAD_INPUT, current_batch_size=8, attempt=0
+    )
     assert d.action is RecoveryAction.BISECT_ISOLATE
     assert d.degraded is True
 
 
 def test_transient_uses_exponential_backoff_under_budget() -> None:
-    policy = RecoveryPolicy(max_transient_retries=3, transient_total_budget_seconds=10.0)
-    d1 = policy.next_action(failure=FailureClass.TRANSIENT, current_batch_size=4, attempt=0)
+    policy = RecoveryPolicy(
+        max_transient_retries=3, transient_total_budget_seconds=10.0
+    )
+    d1 = policy.next_action(
+        failure=FailureClass.TRANSIENT, current_batch_size=4, attempt=0
+    )
     assert d1.action is RecoveryAction.BACKOFF_RETRY
     assert d1.delay_seconds == 0.25
-    d2 = policy.next_action(failure=FailureClass.TRANSIENT, current_batch_size=4, attempt=1)
+    d2 = policy.next_action(
+        failure=FailureClass.TRANSIENT, current_batch_size=4, attempt=1
+    )
     assert d2.delay_seconds == 0.5
-    d3 = policy.next_action(failure=FailureClass.TRANSIENT, current_batch_size=4, attempt=2)
+    d3 = policy.next_action(
+        failure=FailureClass.TRANSIENT, current_batch_size=4, attempt=2
+    )
     assert d3.delay_seconds == 1.0
-    d4 = policy.next_action(failure=FailureClass.TRANSIENT, current_batch_size=4, attempt=3)
+    d4 = policy.next_action(
+        failure=FailureClass.TRANSIENT, current_batch_size=4, attempt=3
+    )
     assert d4.action is RecoveryAction.FAIL_FAST
 
 
 def test_cancelled_never_retries() -> None:
     policy = RecoveryPolicy()
-    d = policy.next_action(failure=FailureClass.CANCELLED, current_batch_size=4, attempt=0)
+    d = policy.next_action(
+        failure=FailureClass.CANCELLED, current_batch_size=4, attempt=0
+    )
     assert d.action is RecoveryAction.FAIL_FAST
 
 
 def test_config_and_deterministic_fail_fast() -> None:
     policy = RecoveryPolicy()
-    assert policy.next_action(
-        failure=FailureClass.CONFIG_ERROR, current_batch_size=4, attempt=0
-    ).action is RecoveryAction.FAIL_FAST
-    assert policy.next_action(
-        failure=FailureClass.DETERMINISTIC_MODEL, current_batch_size=4, attempt=0
-    ).action is RecoveryAction.FAIL_FAST
+    assert (
+        policy.next_action(
+            failure=FailureClass.CONFIG_ERROR, current_batch_size=4, attempt=0
+        ).action
+        is RecoveryAction.FAIL_FAST
+    )
+    assert (
+        policy.next_action(
+            failure=FailureClass.DETERMINISTIC_MODEL, current_batch_size=4, attempt=0
+        ).action
+        is RecoveryAction.FAIL_FAST
+    )
 
 
 def test_transient_budget_exhaustion_fails_fast() -> None:
@@ -279,7 +309,9 @@ def test_transient_budget_exhaustion_fails_fast() -> None:
         transient_total_budget_seconds=4.0,
         elapsed_seconds=0.0,
     )
-    d = policy.next_action(failure=FailureClass.TRANSIENT, current_batch_size=4, attempt=0)
+    d = policy.next_action(
+        failure=FailureClass.TRANSIENT, current_batch_size=4, attempt=0
+    )
     # First attempt with delay=10 > budget=5 -> fail fast.
     assert d.action is RecoveryAction.FAIL_FAST
     assert "budget" in d.reason

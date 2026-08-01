@@ -90,12 +90,10 @@ def ocr_result_to_payload(result: Any) -> dict[str, Any]:
         if b is not None
     ]
     text_with_scores = [
-        [t, float(s)]
-        for t, s in (getattr(result, "text_with_scores", []) or [])
+        [t, float(s)] for t, s in (getattr(result, "text_with_scores", []) or [])
     ]
     low_confidence_items = [
-        [t, float(s)]
-        for t, s in (getattr(result, "low_confidence_items", []) or [])
+        [t, float(s)] for t, s in (getattr(result, "low_confidence_items", []) or [])
     ]
 
     # images: do NOT inline raw bytes. Surface only structural information so
@@ -145,13 +143,9 @@ def ocr_result_from_payload(payload: dict[str, Any]) -> Any:
                 text=str(raw.get("text", "")),
                 score=float(raw.get("score", 0.0)),
                 bbox=tuple(bbox) if isinstance(bbox, list) else None,
-                polygon=(
-                    tuple(polygon) if isinstance(polygon, list) else None
-                ),
+                polygon=(tuple(polygon) if isinstance(polygon, list) else None),
                 page_idx=raw.get("page_idx"),
-                is_manually_edited=bool(
-                    raw.get("is_manually_edited", False)
-                ),
+                is_manually_edited=bool(raw.get("is_manually_edited", False)),
                 content_index=raw.get("content_index"),
                 content_id=(
                     str(raw["content_id"])

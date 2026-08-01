@@ -118,7 +118,9 @@ def bind_product_releases(
     protocol_wheel = backend_root / protocol_wheel_name
     if protocol_copy.read_bytes() != protocol_manifest_path.read_bytes():
         raise ValueError("Backend Protocol manifest copy differs from Protocol release")
-    source_protocol_wheel = protocol_release_dir.resolve(strict=True) / protocol_wheel_name
+    source_protocol_wheel = (
+        protocol_release_dir.resolve(strict=True) / protocol_wheel_name
+    )
     if protocol_wheel.read_bytes() != source_protocol_wheel.read_bytes():
         raise ValueError("Backend Protocol wheel differs from Protocol release")
     if runtime_manifest.get("protocol_manifest_sha256") != _sha256(protocol_copy):

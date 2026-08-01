@@ -203,13 +203,16 @@ class ExportService:
                     html = block.get("table_body", "") or block.get("html", "")
                     if block.get("table") or html:
                         written_table_htmls.add(html)
-                        table_written = ExportService._add_table_model_to_docx(
-                            doc,
-                            ExportService._table_model_from_block(
-                                block,
-                                fallback_table_id=f"table-{len(written_table_htmls)}",
-                            ),
-                        ) or table_written
+                        table_written = (
+                            ExportService._add_table_model_to_docx(
+                                doc,
+                                ExportService._table_model_from_block(
+                                    block,
+                                    fallback_table_id=f"table-{len(written_table_htmls)}",
+                                ),
+                            )
+                            or table_written
+                        )
                     table_footnotes = block.get("table_footnote") or []
                     for fn in table_footnotes:
                         if fn:
@@ -357,9 +360,7 @@ class ExportService:
                         if not has_text:
                             has_text = True
                             ws_text.title = "文本汇总"
-                        ws_text.append(
-                            [f"[表格脚注] {' '.join(table_footnotes)}"]
-                        )
+                        ws_text.append([f"[表格脚注] {' '.join(table_footnotes)}"])
 
                 elif block_type == "title" and text:
                     if not has_text:
@@ -446,9 +447,7 @@ class ExportService:
         return True
 
     @staticmethod
-    def _write_xlsx_table_sheet(
-        wb, table_model: TableModelV1, table_count: int
-    ) -> int:
+    def _write_xlsx_table_sheet(wb, table_model: TableModelV1, table_count: int) -> int:
         """把 canonical 表格写成一个「表格 N」工作表，返回新的 table_count。
 
         无有效行时计数不变（也不创建空工作表）。
@@ -471,9 +470,7 @@ class ExportService:
         return table_count
 
     @staticmethod
-    def _table_model_from_block(
-        block: dict, *, fallback_table_id: str
-    ) -> TableModelV1:
+    def _table_model_from_block(block: dict, *, fallback_table_id: str) -> TableModelV1:
         if isinstance(block.get("table"), dict):
             return table_model_from_block(
                 block,

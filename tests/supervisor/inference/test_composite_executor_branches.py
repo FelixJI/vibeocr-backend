@@ -99,9 +99,7 @@ def test_cancel_mode_returns_cooperative_when_no_child_matches() -> None:
     """A record whose kind matches no child returns the default COOPERATIVE
     (line 81)."""
     paddle = _StubExecutor()
-    comp = CompositeExecutor(
-        [(paddle, frozenset({JobKind.RECOGNITION}))]
-    )
+    comp = CompositeExecutor([(paddle, frozenset({JobKind.RECOGNITION}))])
     record = _FakeRecord(kind=JobKind.MINERU_PARSE)
     assert comp.cancel_mode_for(record) is CancelMode.COOPERATIVE
 
@@ -196,9 +194,7 @@ def test_residency_falls_back_to_empty_on_typeerror(monkeypatch) -> None:
 def test_unhandled_kind_skips_when_job_already_terminal() -> None:
     """An already-terminal job whose kind matches no child returns without
     appending the no_backend event (line 64->73)."""
-    comp = CompositeExecutor(
-        [(_StubExecutor(), frozenset({JobKind.RECOGNITION}))]
-    )
+    comp = CompositeExecutor([(_StubExecutor(), frozenset({JobKind.RECOGNITION}))])
     record = _FakeRecord(kind=JobKind.PDF_OCR)
     record.transition(JobState.FAILED)  # already terminal
     comp.execute(record, [])

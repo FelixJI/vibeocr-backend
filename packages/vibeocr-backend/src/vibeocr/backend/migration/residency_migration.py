@@ -65,7 +65,9 @@ def convert_legacy_pipeline_ttls(
         if ttl is None or ttl < 0:
             out.append({"name": name, "ttl_seconds": None, "pinned": False})
         elif ttl == 0:
-            if name in _LEGACY_ZERO_MEANS_PINNED:  # pragma: no cover - set is empty by design
+            if (
+                name in _LEGACY_ZERO_MEANS_PINNED
+            ):  # pragma: no cover - set is empty by design
                 out.append({"name": name, "ttl_seconds": None, "pinned": True})
             else:
                 out.append({"name": name, "ttl_seconds": None, "pinned": False})
@@ -98,7 +100,9 @@ def migrate_settings_file(
         return MigrationResult(
             migrated=False,
             backed_up_to=None,
-            default_ttl_seconds=int(residency.get("default_ttl_seconds", default_ttl_seconds)),
+            default_ttl_seconds=int(
+                residency.get("default_ttl_seconds", default_ttl_seconds)
+            ),
             pipelines=pipelines,
         )
 
@@ -107,7 +111,9 @@ def migrate_settings_file(
     if isinstance(legacy_ttls, dict):
         legacy_ttls_dict = {str(k): int(v) for k, v in legacy_ttls.items()}
 
-    pipelines = convert_legacy_pipeline_ttls(legacy_ttls_dict, default_ttl_seconds=default_ttl_seconds)
+    pipelines = convert_legacy_pipeline_ttls(
+        legacy_ttls_dict, default_ttl_seconds=default_ttl_seconds
+    )
 
     # Back up the original file before rewriting.
     backup_path = settings_path.with_suffix(settings_path.suffix + backup_suffix)
@@ -122,7 +128,9 @@ def migrate_settings_file(
     # Schema-version the file so future migrations can detect the baseline.
     data["schema_version"] = 2
 
-    settings_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    settings_path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     return MigrationResult(
         migrated=True,
         backed_up_to=backup_path,

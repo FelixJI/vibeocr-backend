@@ -148,9 +148,7 @@ class OCRService(metaclass=SingletonMeta):
 
             # Backend 不读取前端配置。并存上限与 TTL 由 Supervisor RPC 显式
             # 注入；未注入时按硬件自动分档。
-            self._cache_manager = PipelineCacheManager(
-                self, ttls={}, max_heavy=None
-            )
+            self._cache_manager = PipelineCacheManager(self, ttls={}, max_heavy=None)
         return self._cache_manager
 
     @classmethod

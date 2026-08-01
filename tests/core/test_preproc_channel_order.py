@@ -20,7 +20,6 @@ import io
 
 import numpy as np
 from PIL import Image
-
 from vibeocr.backend.core.pipelines.pipeline_ocr import _extract_preproc_info
 
 

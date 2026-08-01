@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from vibeocr.backend.supervisor.jobs.registry import JobNotFoundError, JobRegistry
 from vibeocr.runtime_contracts import (
     CancelMode,
@@ -22,7 +21,10 @@ def _make_registry() -> JobRegistry:
 
 
 def _items(n: int) -> list[JobItem]:
-    return [JobItem(item_id=f"it-{i}", display_name=f"f{i}.png", state=ItemState.QUEUED) for i in range(n)]
+    return [
+        JobItem(item_id=f"it-{i}", display_name=f"f{i}.png", state=ItemState.QUEUED)
+        for i in range(n)
+    ]
 
 
 def test_create_appends_accepted_event_and_id_is_unique() -> None:

@@ -18,6 +18,7 @@
 
 sidecar 是"尽力而为"：写入失败只记日志，不阻断 OCR 主流程。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -206,6 +207,5 @@ def restore_pending_pages(file_path: str) -> dict[int, int] | None:
     if data is None or data.get("completed"):
         return None
     return {
-        int(k): v.get("ocr_preproc_angle", 0)
-        for k, v in data.get("pages", {}).items()
+        int(k): v.get("ocr_preproc_angle", 0) for k, v in data.get("pages", {}).items()
     }

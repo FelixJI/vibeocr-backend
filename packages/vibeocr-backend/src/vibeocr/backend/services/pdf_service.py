@@ -82,9 +82,7 @@ class PdfService:
         pdf_document = PdfDocument(file_path=file_path)
         # 创建轻量占位页面(rotation=0),避免逐页读 doc[i] 解析页对象。
         # 详细的页面信息(rotation / 文字层 / is_scanned)由 PDF 后端 /load 路由逐页填充。
-        pdf_document.pages = [
-            PdfPageInfo(page_index=i) for i in range(doc.page_count)
-        ]
+        pdf_document.pages = [PdfPageInfo(page_index=i) for i in range(doc.page_count)]
         return doc, pdf_document
 
     @staticmethod
@@ -487,7 +485,9 @@ class PdfService:
     # ---- geometry helpers（避免调用方直接访问 fitz 对象）-------------
 
     @staticmethod
-    def page_rect(doc: fitz.Document, page_index: int) -> tuple[float, float, float, float]:
+    def page_rect(
+        doc: fitz.Document, page_index: int
+    ) -> tuple[float, float, float, float]:
         """返回页面 rect（x0, y0, x1, y1），单位 PDF point。
 
         供主进程预览 highlight 几何计算用——下沉子进程后主进程不再持 doc，
@@ -742,7 +742,9 @@ class PdfService:
         settings = pdf_settings if pdf_settings is not None else PdfGlobalSettings()
 
         # 预处理：反序列化、应用防重复守卫，收集实际要写的页
-        to_write: list[tuple[int, list, int]] = []  # (page_index, text_blocks, preproc_angle)
+        to_write: list[
+            tuple[int, list, int]
+        ] = []  # (page_index, text_blocks, preproc_angle)
         skipped_pages: list[int] = []  # 因已有文字层而跳过的页
         for item in pages_data:
             page_index = item["page"]
@@ -796,7 +798,11 @@ class PdfService:
                 logger.info("batch: 取消已请求，停止写后续页（已写页保留）")
                 break
             written, skipped = PdfService._write_blocks_to_page(
-                doc, page_index, text_blocks, preproc_angle, settings,
+                doc,
+                page_index,
+                text_blocks,
+                preproc_angle,
+                settings,
                 font_path=shared_font_path,
             )
             # 缓存 OCR 原始块（与单页 add_text_layer 一致）
@@ -898,8 +904,7 @@ class PdfService:
             """
             r = _derotate_to_mediabox(rect)
             if cb_ox != 0.0 or cb_oy != 0.0:
-                return fitz.Rect(r.x0 + cb_ox, r.y0 + cb_oy,
-                                 r.x1 + cb_ox, r.y1 + cb_oy)
+                return fitz.Rect(r.x0 + cb_ox, r.y0 + cb_oy, r.x1 + cb_ox, r.y1 + cb_oy)
             return r
 
         # 字形方向（rotate 参数）：页面 /Rotate=90/270 时，derotate 后的 mediabox
@@ -1030,7 +1035,9 @@ class PdfService:
             orient = PdfService._poly_orientation(poly_pts, text)
             if orient == "unknown":
                 # 无多边形兜底：保留长宽比启发式（多字符竖排误检检测）。
-                is_horizontal = len(text.strip()) <= 1 or disp_rect.width >= disp_rect.height
+                is_horizontal = (
+                    len(text.strip()) <= 1 or disp_rect.width >= disp_rect.height
+                )
             else:
                 is_horizontal = orient == "horizontal"
             use_insert_text = page_rotation in (0, 90) and is_horizontal
@@ -1045,8 +1052,10 @@ class PdfService:
                 # 经 _to_mediabox 同款变换（derotate + cropbox 平移）到 mediabox
                 dpt = _to_mediabox(
                     fitz.Rect(
-                        baseline_disp_x, baseline_disp_y,
-                        baseline_disp_x, baseline_disp_y,
+                        baseline_disp_x,
+                        baseline_disp_y,
+                        baseline_disp_x,
+                        baseline_disp_y,
                     )
                 )
                 baseline = fitz.Point(dpt.x0, dpt.y0)
@@ -1089,7 +1098,10 @@ class PdfService:
                     logger.warning(
                         "page %d block insert_text 失败，回退 insert_textbox: "
                         "rect=%s fs=%.1f err=%s",
-                        page_index, rect, fontsize, e,
+                        page_index,
+                        rect,
+                        fontsize,
+                        e,
                     )
                     # 落到下方 insert_textbox 路径
 
@@ -1101,9 +1113,7 @@ class PdfService:
             # 估算导致的字号偏大/文字溢出 bbox。
             natural_w = _natural_width(text, 1.0)  # 单位 fontsize 宽度
             width_based = rect.width / max(natural_w, 0.5)
-            fontsize = max(
-                min(height_based, width_based), settings.min_font_size
-            )
+            fontsize = max(min(height_based, width_based), settings.min_font_size)
 
             inserted = False
             last_fontsize = fontsize
@@ -1367,9 +1377,7 @@ class PdfService:
         return pts
 
     @staticmethod
-    def _poly_orientation(
-        polygon_pts: list[fitz.Point] | None, text: str
-    ) -> str:
+    def _poly_orientation(polygon_pts: list[fitz.Point] | None, text: str) -> str:
         """判断文本行方向（horizontal/vertical）。
 
         - 单字符：永远 horizontal（排版公理——竖排至少 2 字；单字符字形天生高瘦，
@@ -1410,8 +1418,12 @@ class PdfService:
             else page_rect
         )
         return bbox_to_pixel(
-            bbox, coordinates, render_dpi, source=source,
-            rotation=rotation, mediabox=mediabox,
+            bbox,
+            coordinates,
+            render_dpi,
+            source=source,
+            rotation=rotation,
+            mediabox=mediabox,
         )
 
     # ---- helpers ----------------------------------------------------

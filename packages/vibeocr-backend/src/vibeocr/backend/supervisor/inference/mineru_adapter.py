@@ -91,19 +91,13 @@ class MinerUProcessAdapter:
     # backing process). Production wiring injects a lifecycle over MinerUService.
     lifecycle: _MinerULifecycle | None = None
     _process_started: bool = False
-    _process_lock: threading.RLock = field(
-        default_factory=threading.RLock, repr=False
-    )
+    _process_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _settings: Any = None
     _active_leases: int = 0
     _last_used: float = field(default_factory=time.monotonic)
     _eviction_reason: EvictionReason = EvictionReason.NONE
-    _watch_stop: threading.Event = field(
-        default_factory=threading.Event, repr=False
-    )
-    _watch_wakeup: threading.Event = field(
-        default_factory=threading.Event, repr=False
-    )
+    _watch_stop: threading.Event = field(default_factory=threading.Event, repr=False)
+    _watch_wakeup: threading.Event = field(default_factory=threading.Event, repr=False)
     _watch_thread: threading.Thread | None = field(default=None, repr=False)
 
     def capabilities(self, options: Any | None = None) -> AdapterCapability:
@@ -298,9 +292,7 @@ class MinerUProcessAdapter:
         # fall back to a best-effort snapshot instead of waiting indefinitely.
         acquired = self._process_lock.acquire(timeout=0.05)
         try:
-            default_ttl = int(
-                getattr(self._settings, "default_ttl_seconds", 300)
-            )
+            default_ttl = int(getattr(self._settings, "default_ttl_seconds", 300))
             pinned, ttl = self._policy_locked()
             kind = (
                 ResidencyKind.PINNED

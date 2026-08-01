@@ -100,7 +100,8 @@ def migrate_config(config_path: str | Path) -> MigrationResult:
         return MigrationResult("already_migrated", str(path))
     if isinstance(existing_version, int) and existing_version > CURRENT_SCHEMA_VERSION:
         return MigrationResult(
-            "skipped", str(path),
+            "skipped",
+            str(path),
             message=f"schema_version {existing_version} is newer than migrator",
         )
 
@@ -110,11 +111,10 @@ def migrate_config(config_path: str | Path) -> MigrationResult:
     try:
         _atomic_write(path, data)
     except OSError as exc:
-        return MigrationResult(
-            "skipped", str(path), message=f"write failed: {exc}"
-        )
+        return MigrationResult("skipped", str(path), message=f"write failed: {exc}")
     return MigrationResult(
-        "migrated", str(path),
+        "migrated",
+        str(path),
         backup_path=str(backup) if backup else None,
         schema_version=CURRENT_SCHEMA_VERSION,
     )

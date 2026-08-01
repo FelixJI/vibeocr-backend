@@ -256,16 +256,12 @@ def _recognize_table(service: Any, image: Any, options: TableRecognitionOptions)
         # 已在 post-processing 中 clip 到原图范围）。表格整体外接框需从
         # cell_box_list 的并集推导，否则过滤条件永远为空，overall_ocr_res
         # 里整图文字（含表格内文字）会被原样再展示一遍。
-        table_match_regions: list[
-            tuple[tuple[float, float, float, float], str]
-        ] = []
+        table_match_regions: list[tuple[tuple[float, float, float, float], str]] = []
 
         # 先把 overall_ocr_res 解析为统一的 ocr_items（text + center + score +
         # bbox），供回填与去重共享。center 为文本框中心点（原图坐标），
         # None 表示无 poly（无法定位）。
-        overall_ocr_res = (
-            res.get("overall_ocr_res") if hasattr(res, "get") else None
-        )
+        overall_ocr_res = res.get("overall_ocr_res") if hasattr(res, "get") else None
         ocr_items: list[dict[str, Any]] = []
         if overall_ocr_res is not None:
             rec_texts = (
@@ -357,9 +353,7 @@ def _recognize_table(service: Any, image: Any, options: TableRecognitionOptions)
             cl_idx = len(content_list)
             table_id = f"table-recognition-table-{table_sequence}"
             table_sequence += 1
-            cell_mapping: dict[
-                int, tuple[tuple[float, float, float, float], int]
-            ] = {}
+            cell_mapping: dict[int, tuple[tuple[float, float, float, float], int]] = {}
             provider_warnings: list[str] = []
 
             # 空单元格回填（soft fallback）：PaddleX IoU 失配时输出空 <td></td>，
@@ -382,12 +376,9 @@ def _recognize_table(service: Any, image: Any, options: TableRecognitionOptions)
                 warning.endswith(":cell-box-count-mismatch")
                 for warning in provider_warnings
             ):
-                provider_warnings.append(
-                    f"{table_id}:cell-all:cell-mapping-unproven"
-                )
+                provider_warnings.append(f"{table_id}:cell-all:cell-mapping-unproven")
             consumed_ocr_indices.update(
-                available_ocr[local_index][0]
-                for local_index in consumed_local
+                available_ocr[local_index][0] for local_index in consumed_local
             )
 
             if current_bbox is not None:
@@ -396,9 +387,7 @@ def _recognize_table(service: Any, image: Any, options: TableRecognitionOptions)
                         current_bbox,
                         _normalize_match_text(
                             table_model_to_plain_text(
-                                table_model_from_html(
-                                    table_html, table_id=table_id
-                                )
+                                table_model_from_html(table_html, table_id=table_id)
                             )
                         ),
                     )
@@ -427,9 +416,7 @@ def _recognize_table(service: Any, image: Any, options: TableRecognitionOptions)
                 original_table_html, table_id=table_id
             )
             provider_table_id = (
-                table_res.get("table_region_id")
-                if hasattr(table_res, "get")
-                else None
+                table_res.get("table_region_id") if hasattr(table_res, "get") else None
             )
             enriched_cells = []
             for cell_index, cell in enumerate(table_model.cells):
@@ -465,9 +452,7 @@ def _recognize_table(service: Any, image: Any, options: TableRecognitionOptions)
                 table_model,
                 cells=tuple(enriched_cells),
                 coordinate_space=(
-                    CoordinateSpace.PIXEL
-                    if cell_mapping
-                    else CoordinateSpace.UNKNOWN
+                    CoordinateSpace.PIXEL if cell_mapping else CoordinateSpace.UNKNOWN
                 ),
                 provenance=TableProvenanceV1(
                     pipeline="TABLE_RECOGNITION",
@@ -569,9 +554,7 @@ def _recognize_table(service: Any, image: Any, options: TableRecognitionOptions)
     return result
 
 
-def _point_in_box(
-    cx: float, cy: float, box: tuple[float, float, float, float]
-) -> bool:
+def _point_in_box(cx: float, cy: float, box: tuple[float, float, float, float]) -> bool:
     """点是否落在矩形框内（含边界）。"""
     return box[0] <= cx <= box[2] and box[1] <= cy <= box[3]
 
@@ -584,8 +567,7 @@ def _parse_cell_box(raw_box: Any) -> tuple[float, float, float, float] | None:
         not isinstance(box, (list, tuple))
         or len(box) < 4
         or any(
-            isinstance(value, bool) or not isinstance(value, Real)
-            for value in box[:4]
+            isinstance(value, bool) or not isinstance(value, Real) for value in box[:4]
         )
     ):
         return None
@@ -615,10 +597,7 @@ def _backfill_empty_table_cells(
     ocr_items: list[dict[str, Any]],
     *,
     table_id: str = "table",
-    mapping_out: dict[
-        int, tuple[tuple[float, float, float, float], int]
-    ]
-    | None = None,
+    mapping_out: dict[int, tuple[tuple[float, float, float, float], int]] | None = None,
     warnings_out: list[str] | None = None,
 ) -> tuple[str, set[int]]:
     """把表内 OCR 吸收到对应单元格，并救回上游漏填的字。
@@ -655,9 +634,7 @@ def _backfill_empty_table_cells(
     # 的偏移；需加上 tr_match.start(1) 换算成 table_html 内的绝对偏移，否则
     # 注入会落到错误位置（如把字插进 <table> 标签中间）。
     try:
-        source_layout = parse_table_source_layout(
-            table_html, table_id=table_id
-        )
+        source_layout = parse_table_source_layout(table_html, table_id=table_id)
     except ValueError as error:
         detail = str(error).casefold()
         warning_kind = (
@@ -672,8 +649,7 @@ def _backfill_empty_table_cells(
         return table_html, set()
     layout = source_layout.model
     all_cell_spans = [
-        (cell.content_start, cell.content_end)
-        for cell in source_layout.cells
+        (cell.content_start, cell.content_end) for cell in source_layout.cells
     ]
     all_cell_texts = [cell.text.strip() for cell in layout.cells]
     if not source_layout.cells:
@@ -689,17 +665,14 @@ def _backfill_empty_table_cells(
         return table_html, set()
 
     logical_cells = [
-        (cell.row, cell.column, cell.rowspan, cell.colspan)
-        for cell in layout.cells
+        (cell.row, cell.column, cell.rowspan, cell.colspan) for cell in layout.cells
     ]
     logical_column_count = layout.column_count
     logical_row_count = layout.row_count
 
     # PaddleX 未承诺 cell_box_list 的序列顺序；先过滤退化框，再按可验证的
     # 视觉坐标（上→下、左→右）排序后对应 HTML 的 row-major 单元格。
-    valid_boxes: list[
-        tuple[int, tuple[float, float, float, float]]
-    ] = []
+    valid_boxes: list[tuple[int, tuple[float, float, float, float]]] = []
     for source_index, raw_box in enumerate(cell_box_list):
         parsed = _parse_cell_box(raw_box)
         if parsed is not None:
@@ -724,7 +697,10 @@ def _backfill_empty_table_cells(
         tolerance = max(grid_step * 0.15, 1e-6)
         clusters: list[list[float]] = []
         for value in ordered:
-            if clusters and abs(value - sum(clusters[-1]) / len(clusters[-1])) <= tolerance:
+            if (
+                clusters
+                and abs(value - sum(clusters[-1]) / len(clusters[-1])) <= tolerance
+            ):
                 clusters[-1].append(value)
             else:
                 clusters.append([value])
@@ -775,9 +751,7 @@ def _backfill_empty_table_cells(
         top, left, bottom, right = boundary_span
         matches = [
             cell_index
-            for cell_index, (row, column, rowspan, colspan) in enumerate(
-                logical_cells
-            )
+            for cell_index, (row, column, rowspan, colspan) in enumerate(logical_cells)
             if (top, left, bottom, right)
             == (row, column, row + rowspan, column + colspan)
         ]
@@ -785,9 +759,7 @@ def _backfill_empty_table_cells(
             warning = f"{table_id}:cell-{matches[0] if matches else 'unknown'}:mapping-ambiguous"
             if warnings_out is not None:
                 warnings_out.append(warning)
-            _logger.warning(
-                "[表格回填] %s：cell_box 无法唯一映射", warning
-            )
+            _logger.warning("[表格回填] %s：cell_box 无法唯一映射", warning)
             continue
         candidate_boxes[matches[0]] = box
         if mapping_out is not None:

@@ -2,7 +2,6 @@
 """管道集成测试"""
 
 import pytest
-
 from vibeocr.backend.core.pipelines import (
     OCRPipeline,
     get_all_pipelines,

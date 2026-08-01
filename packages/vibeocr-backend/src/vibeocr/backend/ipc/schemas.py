@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 # ---- 基础镜像类型 ------------------------------------------------------
 
+
 class TextLayerInfoMirror(BaseModel):
     """单个文字层信息(对应 models.pdf_document.TextLayerInfo)。"""
 
@@ -39,7 +40,9 @@ class TextBlockMirror(BaseModel):
     text: str
     score: float
     bbox: tuple[float, float, float, float] | None = None
-    polygon: tuple[float, ...] | None = None  # 4 点检测多边形 [x,y,...]，归一化 [0,1000]
+    polygon: tuple[float, ...] | None = (
+        None  # 4 点检测多边形 [x,y,...]，归一化 [0,1000]
+    )
     page_idx: int | None = None
     is_manually_edited: bool = False
     label: str = "text"
@@ -76,6 +79,7 @@ class PdfDocumentMirror(BaseModel):
 
 # ---- Model 增量 --------------------------------------------------------
 
+
 class ModelDiff(BaseModel):
     """变更操作的回包增量。
 
@@ -96,6 +100,7 @@ class ModelDiff(BaseModel):
 
 
 # ---- 进度事件 ----------------------------------------------------------
+
 
 class ProgressPhase(StrEnum):
     """长操作阶段标识,供主进程切换文案/确定 vs 不确定进度条。"""
@@ -125,6 +130,7 @@ class ProgressEvent(BaseModel):
 
 
 # ---- 请求体 ------------------------------------------------------------
+
 
 class OpenRequest(BaseModel):
     path: str
@@ -239,6 +245,7 @@ class DetectTextLayersRequest(BaseModel):
 
 
 # ---- 响应体 ------------------------------------------------------------
+
 
 class OpenResponse(BaseModel):
     session_id: str

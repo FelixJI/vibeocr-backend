@@ -17,9 +17,7 @@ _RE_TABLE = _re.compile(r"(<table\b.*?</table>)", _re.DOTALL | _re.IGNORECASE)
 _RE_TR = _re.compile(r"<tr[^>]*>(.*?)</tr>", _re.DOTALL | _re.IGNORECASE)
 _RE_TD = _re.compile(r"<t[dh][^>]*>(.*?)</t[dh]>", _re.DOTALL | _re.IGNORECASE)
 # 单格匹配：捕获标签名（td/th）以区分表头、属性段（含 colspan/rowspan）、单元格内容
-_RE_CELL = _re.compile(
-    r"<(td|th)([^>]*)>(.*?)</\1>", _re.DOTALL | _re.IGNORECASE
-)
+_RE_CELL = _re.compile(r"<(td|th)([^>]*)>(.*?)</\1>", _re.DOTALL | _re.IGNORECASE)
 
 
 def extract_table_html(html_str: str) -> str:
@@ -67,9 +65,7 @@ def _cell_text(inner: str) -> str:
 
 
 def _span_value(attrs: str, name: str) -> int:
-    match = _re.search(
-        rf"\b{name}\s*=\s*['\"]?([1-9]\d*)", attrs, flags=_re.IGNORECASE
-    )
+    match = _re.search(rf"\b{name}\s*=\s*['\"]?([1-9]\d*)", attrs, flags=_re.IGNORECASE)
     return min(int(match.group(1)), 1000) if match else 1
 
 

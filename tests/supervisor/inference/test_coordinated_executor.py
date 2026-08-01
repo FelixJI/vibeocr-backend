@@ -125,7 +125,9 @@ def test_shared_scheduler_serializes_two_executor_threads(tmp_path: Path) -> Non
     first = _record(registry, "first", ["a"])
     second = _record(registry, "second", ["b"])
     threads = [
-        threading.Thread(target=executor.execute, args=(first, _staged(first, tmp_path))),
+        threading.Thread(
+            target=executor.execute, args=(first, _staged(first, tmp_path))
+        ),
         threading.Thread(
             target=executor.execute, args=(second, _staged(second, tmp_path))
         ),

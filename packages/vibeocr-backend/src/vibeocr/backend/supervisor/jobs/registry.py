@@ -96,11 +96,15 @@ class JobRecord:
     # Event log
     # ------------------------------------------------------------------
 
-    def append_event(self, stage: str, *, item_id: str | None = None, detail: dict | None = None) -> StageEvent:
+    def append_event(
+        self, stage: str, *, item_id: str | None = None, detail: dict | None = None
+    ) -> StageEvent:
         with self._lock:
             seq = self._next_seq
             self._next_seq += 1
-            event = StageEvent(sequence=seq, stage=stage, item_id=item_id, detail=detail)
+            event = StageEvent(
+                sequence=seq, stage=stage, item_id=item_id, detail=detail
+            )
             self.events.append(event)
             return event
 
@@ -131,7 +135,9 @@ class JobRecord:
                 self._terminal_at = ts
             self._retention_hook(self)
 
-    def transition_item(self, item_id: str, target: ItemState, *, error: str | None = None) -> None:
+    def transition_item(
+        self, item_id: str, target: ItemState, *, error: str | None = None
+    ) -> None:
         with self._lock:
             item = self._require_item(item_id)
             assert_item_transition(item.state, target)
@@ -148,7 +154,9 @@ class JobRecord:
                 source_item_id=item.source_item_id,
             )
             if target in TERMINAL_ITEM_STATES:
-                self.progress_current = min(self.progress_current + 1, self.progress_total)
+                self.progress_current = min(
+                    self.progress_current + 1, self.progress_total
+                )
 
     def set_item_result(self, item_id: str, payload: dict) -> None:
         with self._lock:
@@ -173,7 +181,9 @@ class JobRecord:
     ) -> ItemOutcome:
         """Atomically commit a validated successful outcome."""
         if not payload_type or not isinstance(payload, dict) or not payload:
-            raise ContractError("successful item outcome requires a non-empty typed payload")
+            raise ContractError(
+                "successful item outcome requires a non-empty typed payload"
+            )
         with self._lock:
             item = self._require_item(item_id)
             if item.state is ItemState.QUEUED:
@@ -302,7 +312,10 @@ class JobRecord:
             failed = sum(1 for it in self.items if it.state is ItemState.FAILED)
             cancelled = sum(1 for it in self.items if it.state is ItemState.CANCELLED)
             summary = JobSummary(
-                succeeded=succeeded, failed=failed, cancelled=cancelled, total=len(self.items)
+                succeeded=succeeded,
+                failed=failed,
+                cancelled=cancelled,
+                total=len(self.items),
             )
             result_available = bool(self.results) or any(
                 it.state in TERMINAL_ITEM_STATES for it in self.items
@@ -430,7 +443,9 @@ class JobRegistry:
     # Cancel / retry
     # ------------------------------------------------------------------
 
-    def request_cancel(self, job_id: str, *, mode: CancelMode = CancelMode.COOPERATIVE) -> CancelMode:
+    def request_cancel(
+        self, job_id: str, *, mode: CancelMode = CancelMode.COOPERATIVE
+    ) -> CancelMode:
         """Mark a cancel request following the contract state machine.
 
         For ``QUEUED_ONLY`` (the job has not started running) we transition

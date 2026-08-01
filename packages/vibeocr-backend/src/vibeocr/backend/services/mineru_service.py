@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
-
 from vibeocr.backend.core.constants import Constants
 from vibeocr.backend.core.pipelines.pipeline_mineru import (
     MINERU_BACKEND_CHAIN,
@@ -72,7 +71,9 @@ class MinerUService(metaclass=SingletonMeta):
     def __init__(self):
         if not self._initialized:
             with self._lock:
-                if not self._initialized:  # pragma: no cover - DCL inner recheck, only races under concurrency
+                if (
+                    not self._initialized
+                ):  # pragma: no cover - DCL inner recheck, only races under concurrency
                     self._ensure_api_running()
                     self._initialized = True
 
@@ -529,10 +530,7 @@ class MinerUService(metaclass=SingletonMeta):
                     continue
                 block.setdefault(
                     "block_id",
-                    (
-                        f"mineru-{stem}-page-{inferred_page_idx}-"
-                        f"block-{block_index}"
-                    ),
+                    (f"mineru-{stem}-page-{inferred_page_idx}-block-{block_index}"),
                 )
                 if block.get("type") != "table":
                     continue
@@ -545,9 +543,7 @@ class MinerUService(metaclass=SingletonMeta):
                         or content.get("html")
                         or ""
                     )
-                if nested_html and not (
-                    block.get("table_body") or block.get("html")
-                ):
+                if nested_html and not (block.get("table_body") or block.get("html")):
                     block["table_body"] = nested_html
                 if not (
                     isinstance(block.get("table"), dict)
@@ -564,28 +560,19 @@ class MinerUService(metaclass=SingletonMeta):
                     block["text"] = " ".join(
                         str(item.get("content") or "")
                         for item in (
-                            table_content
-                            if isinstance(table_content, list)
-                            else []
+                            table_content if isinstance(table_content, list) else []
                         )
-                        if isinstance(item, dict)
-                        and item.get("content")
+                        if isinstance(item, dict) and item.get("content")
                     )
                     block["projection_warnings"] = [
-                        (
-                            f"{block['block_id']}:"
-                            "structured-table-unsupported"
-                        )
+                        (f"{block['block_id']}:structured-table-unsupported")
                     ]
                     continue
                 page_idx = block.get("page_idx", inferred_page_idx)
                 table_id = str(
                     block.get("block_id")
                     or block.get("table_id")
-                    or (
-                        f"mineru-{stem}-page-{page_idx}-"
-                        f"table-{table_sequence}"
-                    )
+                    or (f"mineru-{stem}-page-{page_idx}-table-{table_sequence}")
                 )
                 source_html = str(block.get("table_body") or block.get("html") or "")
                 canonical_input = dict(block)
@@ -619,16 +606,13 @@ class MinerUService(metaclass=SingletonMeta):
             if normalized_block.get("type") != "table":
                 continue
             raw_block = normalized_block.get("raw")
-            if isinstance(raw_block, dict) and isinstance(
-                raw_block.get("table"), dict
-            ):
+            if isinstance(raw_block, dict) and isinstance(raw_block.get("table"), dict):
                 table_model = table_model_from_block(raw_block)
                 normalized_block["text"] = table_model_to_plain_text(table_model)
 
         flat_content_list: list[dict[str, Any]] = []
         is_v2_content = bool(
-            content_list_parsed
-            and isinstance(content_list_parsed[0], list)
+            content_list_parsed and isinstance(content_list_parsed[0], list)
         )
         for normalized_block in normalized:
             raw_block = normalized_block.get("raw")
@@ -642,9 +626,8 @@ class MinerUService(metaclass=SingletonMeta):
                     "type", flat_block.get("type")
                 )
                 flat_block["text"] = normalized_block.get("text", "")
-            elif (
-                flat_block.get("type") == "text"
-                and isinstance(flat_block.get("text_level"), int)
+            elif flat_block.get("type") == "text" and isinstance(
+                flat_block.get("text_level"), int
             ):
                 # MinerU legacy 标题以 text + text_level 表示。
                 flat_block["type"] = "title"

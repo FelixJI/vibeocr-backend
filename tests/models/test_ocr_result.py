@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from vibeocr.backend.models.ocr_result import (
     OCRResult,
     normalize_bbox,

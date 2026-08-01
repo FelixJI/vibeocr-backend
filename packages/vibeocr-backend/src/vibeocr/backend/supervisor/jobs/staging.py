@@ -89,7 +89,9 @@ class InputStager:
     ) -> list[StagedInput]:
         """Stage ``uploads`` for ``job_id`` preserving input order."""
         with self._lock:
-            staged, _items = self._stage_job_locked(job_id, uploads, per_item_errors=False)
+            staged, _items = self._stage_job_locked(
+                job_id, uploads, per_item_errors=False
+            )
             return staged
 
     def stage_job_with_item_errors(
@@ -157,7 +159,11 @@ class InputStager:
             )
             if per_item_errors:
                 items.append(
-                    JobItem(item_id=item_id, display_name=display_name or stem, state=ItemState.QUEUED)
+                    JobItem(
+                        item_id=item_id,
+                        display_name=display_name or stem,
+                        state=ItemState.QUEUED,
+                    )
                 )
         self._staged_by_job[job_id] = {entry.item_id: entry for entry in staged}
         return staged, items
@@ -256,7 +262,9 @@ class InputStager:
     # Internals
     # ------------------------------------------------------------------
 
-    def _safe_rmtree(self, path: Path, *, attempts: int = 5, delay: float = 0.05) -> None:
+    def _safe_rmtree(
+        self, path: Path, *, attempts: int = 5, delay: float = 0.05
+    ) -> None:
         """Remove a directory tree with bounded retry for Windows locks."""
         if not path.exists():
             return

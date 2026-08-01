@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from PIL import Image
-
 from vibeocr.backend.models.ocr_result import OCRResult
 from vibeocr.backend.services.ocr_service import OCROptions, OCRPipeline, OCRService
 

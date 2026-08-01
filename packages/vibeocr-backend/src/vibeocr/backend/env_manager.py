@@ -242,7 +242,9 @@ def _load_locked_versions() -> dict[str, str]:
             _locked_versions_cache = {}
             return {}
         raw = data.get("dep_locked_versions", {})
-        versions = {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+        versions = (
+            {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+        )
         _locked_versions_cache = versions
         return versions
 
@@ -618,16 +620,20 @@ def download_artifact_multi_source(
     """
     use_sha = bool(sha_candidates) and sha_dest_path is not None
     if use_sha and len(sha_candidates) != len(url_candidates):  # type: ignore[arg-type]
-        raise ValueError(
-            "sha_candidates 长度必须与 url_candidates 一致（同源配对）"
-        )
+        raise ValueError("sha_candidates 长度必须与 url_candidates 一致（同源配对）")
 
     last_reason = DOWNLOAD_REASON_HTTP_ERROR
     sha_list = sha_candidates if use_sha else None
 
     for idx, url in enumerate(url_candidates):
         source_name = _source_label(url)
-        logger.info("[%s] 尝试下载源 %d/%d: %s", description, idx + 1, len(url_candidates), source_name)
+        logger.info(
+            "[%s] 尝试下载源 %d/%d: %s",
+            description,
+            idx + 1,
+            len(url_candidates),
+            source_name,
+        )
         try:
             ok = download_file_with_progress(
                 url, dest_path, description=description, max_retries=max_retries
@@ -644,11 +650,16 @@ def download_artifact_multi_source(
             if use_sha:
                 sha_url = sha_list[idx]  # type: ignore[index]
                 sha_ok = download_file_with_progress(
-                    sha_url, sha_dest_path, description=f"{description}校验", max_retries=max_retries  # type: ignore[arg-type]
+                    sha_url,
+                    sha_dest_path,
+                    description=f"{description}校验",
+                    max_retries=max_retries,  # type: ignore[arg-type]
                 )
                 if not sha_ok:
                     last_reason = DOWNLOAD_REASON_SHA_MISSING
-                    logger.warning("[%s] 校验文件下载失败，换源: %s", description, sha_url)
+                    logger.warning(
+                        "[%s] 校验文件下载失败，换源: %s", description, sha_url
+                    )
                     dest_path.unlink(missing_ok=True)
                     sha_dest_path.unlink(missing_ok=True)  # type: ignore[union-attr]
                     if source_switch_fn:
@@ -758,7 +769,9 @@ def install_embedded_python(
                 f"解压 {PYTHON_BUILD_STANDALONE_ASSET} 内的 python/ 到: {python_dir}",
             )
 
-        logger.info("[环境安装] 下载完成，正在解压 %s...", PYTHON_BUILD_STANDALONE_ASSET)
+        logger.info(
+            "[环境安装] 下载完成，正在解压 %s...", PYTHON_BUILD_STANDALONE_ASSET
+        )
         try:
             python_dir.mkdir(parents=True, exist_ok=True)
             # tar.gz 内顶层为 install_only/python/，需 flatten 到 project_root/python/
@@ -1060,7 +1073,9 @@ def _module_name_matches(missing_module: str, module: str) -> bool:
     return a == b
 
 
-def _probe_module(python_exe: Path, module: str, pkg: str) -> tuple[bool, bool, str | None]:
+def _probe_module(
+    python_exe: Path, module: str, pkg: str
+) -> tuple[bool, bool, str | None]:
     """双层检测一个 OCR 模块：发行版是否存在 + 是否可导入
 
     解决"装了发行版但 import 失败"被误判为"未安装"的问题（典型场景：
@@ -1786,7 +1801,9 @@ def _install_paddle_stack(
                 default_gpu_tag = "cu126"
                 paddle_cuda_tag = cuda_version or default_gpu_tag
                 torch_cuda_tag = TORCH_CUDA_MAP.get(paddle_cuda_tag, "cu126")
-                pytorch_mirror_name = "nju" if network_type == "domestic" else "official"
+                pytorch_mirror_name = (
+                    "nju" if network_type == "domestic" else "official"
+                )
                 torch_index = get_pytorch_mirror(pytorch_mirror_name, torch_cuda_tag)
                 requirements.append(
                     (
@@ -1831,12 +1848,12 @@ def _install_paddle_stack(
             # 普通补装会因残留 .dist-info 报 already satisfied 跳过，永远修不好；
             # --force-reinstall 强制重写文件，--no-deps 避免重装整个依赖树
             # （fonttools 这类纯 Python 包无 deps，且 GPU 包有独立重试/回退逻辑不应加 --no-deps）。
-            is_force_reinstall = _pkg_in_force_reinstall_set(
-                name, force_reinstall_pkgs
-            )
+            is_force_reinstall = _pkg_in_force_reinstall_set(name, force_reinstall_pkgs)
             if is_force_reinstall:
                 report_fn("依赖安装", f"{name} 检测为残缺安装，强制重写文件")
-            reinstall_flags = ["--force-reinstall", "--no-deps"] if is_force_reinstall else []
+            reinstall_flags = (
+                ["--force-reinstall", "--no-deps"] if is_force_reinstall else []
+            )
 
             # 首次安装走指定镜像源；带 --retries/--timeout 提升大文件（torch ~2.6GB）韧性
             result = _run_pip(
@@ -1861,10 +1878,9 @@ def _install_paddle_stack(
 
             if result.returncode != 0:
                 error_msg = result.stderr or result.stdout or "未知错误"
-                is_version_not_found = (
-                    "Could not find a version" in str(error_msg)
-                    or "No matching distribution" in str(error_msg)
-                )
+                is_version_not_found = "Could not find a version" in str(
+                    error_msg
+                ) or "No matching distribution" in str(error_msg)
 
                 if _is_gpu_requirement(name):
                     # GPU 专用包（paddlepaddle-gpu / torch+cu126）：PyPI 只有 CPU 版，
@@ -1899,9 +1915,7 @@ def _install_paddle_stack(
                             gpu_retried = True
                             break
                     if not gpu_retried:
-                        error_msg = (
-                            result.stderr or result.stdout or "未知错误"
-                        )
+                        error_msg = result.stderr or result.stdout or "未知错误"
                         logger.error(
                             "%s 安装失败（GPU 包不回退 PyPI），完整输出:\n%s",
                             name,
@@ -1923,9 +1937,7 @@ def _install_paddle_stack(
                         continue
                 elif is_version_not_found:
                     # 非 GPU 包且镜像源确无此版本：回退官方 PyPI
-                    report_fn(
-                        "依赖安装", f"{name} 安装失败，尝试使用官方PyPI源..."
-                    )
+                    report_fn("依赖安装", f"{name} 安装失败，尝试使用官方PyPI源...")
                     result = _run_pip(
                         [
                             str(python_exe),
@@ -1947,9 +1959,7 @@ def _install_paddle_stack(
                     if result.returncode != 0:
                         error_msg = result.stderr or result.stdout or "未知错误"
                         # 完整 stderr 落盘（UI 只显示截断版），便于排查
-                        logger.error(
-                            "%s 安装失败，完整输出:\n%s", name, error_msg
-                        )
+                        logger.error("%s 安装失败，完整输出:\n%s", name, error_msg)
                         failed.append((name, f"{name} 安装失败:\n{error_msg[:500]}"))
                         report_fn(
                             "依赖安装",
@@ -1958,9 +1968,7 @@ def _install_paddle_stack(
                         continue
                 else:
                     # 非 GPU 包但非版本问题（如网络中断）：直接失败，不回退
-                    logger.error(
-                        "%s 安装失败，完整输出:\n%s", name, error_msg
-                    )
+                    logger.error("%s 安装失败，完整输出:\n%s", name, error_msg)
                     failed.append((name, f"{name} 安装失败:\n{error_msg[:500]}"))
                     report_fn(
                         "依赖安装",
@@ -2716,7 +2724,9 @@ def uninstall_removed_deps(
                 if "not installed" in out.lower() or "skip" in out.lower():
                     report("依赖清理", f"{pkg} 未安装，跳过")
                 else:
-                    report("依赖清理", f"{pkg} 卸载返回非零（可能部分残留）: {out[:100]}")
+                    report(
+                        "依赖清理", f"{pkg} 卸载返回非零（可能部分残留）: {out[:100]}"
+                    )
                     logger.warning("[依赖清理] %s 卸载异常: %s", pkg, out[:200])
         except InstallCancelled:
             return False, "用户已取消卸载"
@@ -2787,9 +2797,7 @@ def detect_cuda_version(
             # 旧版/其他平台仍为 "CUDA Version: X.Y"。
             import re
 
-            match = re.search(
-                r"CUDA(?:\s+UMD)?\s+Version:\s*(\d+\.\d+)", result.stdout
-            )
+            match = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*(\d+\.\d+)", result.stdout)
             if match:
                 cuda_version = match.group(1)
                 logger.info("[硬件检测] CUDA版本 (nvidia-smi): %s", cuda_version)
@@ -2797,9 +2805,7 @@ def detect_cuda_version(
                 major_minor = ".".join(cuda_version.split(".")[:2])
                 paddle_cuda = find_best_match(major_minor)
                 if paddle_cuda:
-                    logger.info(
-                        "[硬件检测] 对应PaddlePaddle CUDA版本: %s", paddle_cuda
-                    )
+                    logger.info("[硬件检测] 对应PaddlePaddle CUDA版本: %s", paddle_cuda)
                     return paddle_cuda
 
     except InstallCancelled:
@@ -2808,9 +2814,7 @@ def detect_cuda_version(
         # nvidia-smi 不在 PATH（非 NVIDIA 机器 / 打包态 PATH 裁剪）→ 静默，属正常
         logger.debug("[硬件检测] nvidia-smi 不在 PATH，跳过该方法")
     except subprocess.TimeoutExpired:
-        logger.warning(
-            "[硬件检测] nvidia-smi 10s 超时（驱动卡死或冷启动），跳过该方法"
-        )
+        logger.warning("[硬件检测] nvidia-smi 10s 超时（驱动卡死或冷启动），跳过该方法")
     except Exception as e:
         logger.warning("[硬件检测] nvidia-smi 检测失败: %s: %s", type(e).__name__, e)
 
@@ -2832,9 +2836,7 @@ def detect_cuda_version(
 
                 paddle_cuda = find_best_match(cuda_version)
                 if paddle_cuda:
-                    logger.info(
-                        "[硬件检测] 对应PaddlePaddle CUDA版本: %s", paddle_cuda
-                    )
+                    logger.info("[硬件检测] 对应PaddlePaddle CUDA版本: %s", paddle_cuda)
                     return paddle_cuda
 
     except InstallCancelled:
@@ -3326,7 +3328,9 @@ def ensure_mineru_models(
             except Exception:
                 pass
 
-        reader = threading.Thread(target=_read_output, daemon=True, name="MinerUModelDl")
+        reader = threading.Thread(
+            target=_read_output, daemon=True, name="MinerUModelDl"
+        )
         reader.start()
         proc.wait(timeout=timeout)
         reader.join(timeout=5)

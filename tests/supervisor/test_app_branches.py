@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 from fastapi.exceptions import ResponseValidationError
-
 from vibeocr.backend.supervisor.app import create_app
 from vibeocr.backend.supervisor.bootstrap import new_instance_id
 from vibeocr.backend.supervisor.module import SupervisorModule, SupervisorOptions
@@ -496,9 +495,7 @@ async def test_put_settings_rejects_negative_ttl(
     assert resp.status_code == 400
 
 
-async def test_put_settings_rejects_string_ttl(
-    pdf_app, supervisor_token: str
-) -> None:
+async def test_put_settings_rejects_string_ttl(pdf_app, supervisor_token: str) -> None:
     """Nested JSON Schema integer fields are validated without coercion."""
     async with _http(supervisor_token, pdf_app) as http:
         resp = await http.put(
@@ -1188,9 +1185,7 @@ async def test_pdf_body_rejects_non_object_json(pdf_app, supervisor_token: str) 
     assert "JSON object" in body["detail"]["reason"]
 
 
-async def test_pdf_body_rejects_numeric_strings(
-    pdf_app, supervisor_token: str
-) -> None:
+async def test_pdf_body_rejects_numeric_strings(pdf_app, supervisor_token: str) -> None:
     """Wire integer fields cannot rely on Pydantic's coercion."""
     async with _http(supervisor_token, pdf_app) as http:
         resp = await http.post(

@@ -9,7 +9,6 @@ from pathlib import Path
 import fitz
 import numpy as np
 import pytest
-
 from vibeocr.backend.models.ocr_result import OCRResult, TextBlock
 from vibeocr.backend.services.pdf_service import PdfService, SaveResult
 
@@ -152,9 +151,7 @@ class TestSaveWithRewriteEdgeCases:
         finally:
             doc.close()
 
-    def test_save_with_rewrite_incremental_when_no_structural_change(
-        self, tmp_path
-    ):
+    def test_save_with_rewrite_incremental_when_no_structural_change(self, tmp_path):
         """无结构改动且 compress_on_save=False → 走增量路径（lines 306-311）。
 
         用 rotate（不改结构）保持 has_structural_change=False，且 rotate 后
@@ -172,7 +169,10 @@ class TestSaveWithRewriteEdgeCases:
             assert bool(doc.can_save_incrementally())
             settings = PdfGlobalSettings(compress_on_save=False)
             res = PdfService.save_with_rewrite(
-                doc, pdf_doc, path=None, pdf_settings=settings,
+                doc,
+                pdf_doc,
+                path=None,
+                pdf_settings=settings,
                 rewrite_text_layers=False,
             )
             # 增量成功 → new_doc=None
@@ -206,7 +206,9 @@ class TestSaveWithRewriteEdgeCases:
 
 
 class TestSaveIncrementalErrors:
-    def test_save_incremental_returns_false_when_not_supported(self, tmp_path, monkeypatch):
+    def test_save_incremental_returns_false_when_not_supported(
+        self, tmp_path, monkeypatch
+    ):
         """can_save_incrementally=False → 记日志返回 False（lines 345-353）。"""
         path = tmp_path / "ni.pdf"
         _create_test_pdf(path, num_pages=1)
@@ -493,7 +495,9 @@ class TestAddTextLayerBatchOverwrite:
             r1 = OCRResult(
                 raw_text="first",
                 text_blocks=[
-                    TextBlock(text="first", score=0.9, bbox=(50, 50, 200, 100), page_idx=0)
+                    TextBlock(
+                        text="first", score=0.9, bbox=(50, 50, 200, 100), page_idx=0
+                    )
                 ],
             )
             PdfService.add_text_layer(doc, pdf_doc, 0, r1)
@@ -534,7 +538,9 @@ class TestAddTextLayerBatchOverwrite:
             r1 = OCRResult(
                 raw_text="keep",
                 text_blocks=[
-                    TextBlock(text="keep", score=0.9, bbox=(50, 50, 200, 100), page_idx=0)
+                    TextBlock(
+                        text="keep", score=0.9, bbox=(50, 50, 200, 100), page_idx=0
+                    )
                 ],
             )
             PdfService.add_text_layer(doc, pdf_doc, 0, r1)
@@ -655,7 +661,9 @@ class TestWriteBlocksEdges:
         try:
             # bbox 使 disp_rect.width <= 0（x1 <= x0）
             block = TextBlock(text="x", score=0.9, bbox=(200, 50, 200, 100), page_idx=0)
-            with caplog.at_level(logging.WARNING, logger="vibeocr.backend.services.pdf_service"):
+            with caplog.at_level(
+                logging.WARNING, logger="vibeocr.backend.services.pdf_service"
+            ):
                 w, s = PdfService._write_blocks_to_page(
                     doc, 0, [block], 0, PdfGlobalSettings()
                 )
@@ -699,9 +707,7 @@ class TestWriteBlocksEdges:
             # 强制 _CJK_RESOLVER.resolve 返回 None → china-s 回退
             import vibeocr.backend.services.pdf_service as psm
 
-            monkeypatch.setattr(
-                psm._CJK_RESOLVER, "resolve", lambda chars: None
-            )
+            monkeypatch.setattr(psm._CJK_RESOLVER, "resolve", lambda chars: None)
             block = TextBlock(
                 text="abc123",  # 拉丁/数字 → 走 0.5 启发式
                 score=0.9,
@@ -819,14 +825,18 @@ class TestPolygonUnrotate:
         """有 4 点多边形时按顶边/左边长度判方向（lines 1388-1392）。"""
         # 横排：TL(0,0), TR(100,0), BR(100,10), BL(0,10) → 顶边 100 > 左边 10
         horiz = [
-            fitz.Point(0, 0), fitz.Point(100, 0),
-            fitz.Point(100, 10), fitz.Point(0, 10),
+            fitz.Point(0, 0),
+            fitz.Point(100, 0),
+            fitz.Point(100, 10),
+            fitz.Point(0, 10),
         ]
         assert PdfService._poly_orientation(horiz, "hello") == "horizontal"
         # 竖排：TL(0,0), TR(10,0), BR(10,100), BL(0,100) → 顶边 10 < 左边 100
         vert = [
-            fitz.Point(0, 0), fitz.Point(10, 0),
-            fitz.Point(10, 100), fitz.Point(0, 100),
+            fitz.Point(0, 0),
+            fitz.Point(10, 0),
+            fitz.Point(10, 100),
+            fitz.Point(0, 100),
         ]
         assert PdfService._poly_orientation(vert, "hello") == "vertical"
 
@@ -841,7 +851,9 @@ class TestInvalidateThumbnails:
         try:
             # 设一个 thumbnail，再 invalidate 越界+合法
             pdf_doc.pages[0].thumbnail = "x"
-            PdfService.invalidate_thumbnails(pdf_document=pdf_doc, page_indices=[0, 999])
+            PdfService.invalidate_thumbnails(
+                pdf_document=pdf_doc, page_indices=[0, 999]
+            )
             assert pdf_doc.pages[0].thumbnail is None
         finally:
             doc.close()
@@ -857,7 +869,11 @@ class TestRemainingBranches:
         _create_test_pdf(path, num_pages=1)
         doc, _ = PdfService.open_doc(str(path))
         # 让 close 抛异常
-        monkeypatch.setattr(fitz.Document, "close", lambda self: (_ for _ in ()).throw(RuntimeError("close boom")))
+        monkeypatch.setattr(
+            fitz.Document,
+            "close",
+            lambda self: (_ for _ in ()).throw(RuntimeError("close boom")),
+        )
         original_save = fitz.Document.save
 
         def _fail(self, *args, **kwargs):
@@ -938,7 +954,9 @@ class TestRemainingBranches:
         _create_scanned_pdf(path)
         doc, _pdf_doc = PdfService.open_doc(str(path))
         try:
-            block = TextBlock(text="   ", score=0.9, bbox=(50, 50, 200, 100), page_idx=0)
+            block = TextBlock(
+                text="   ", score=0.9, bbox=(50, 50, 200, 100), page_idx=0
+            )
             w, s = PdfService._write_blocks_to_page(
                 doc, 0, [block], 0, PdfGlobalSettings()
             )
@@ -989,9 +1007,7 @@ class TestRemainingBranches:
             )
             settings = PdfGlobalSettings()
             settings.font_size_retry_count = 0
-            w, _s = PdfService._write_blocks_to_page(
-                doc, 0, [block], 0, settings
-            )
+            w, _s = PdfService._write_blocks_to_page(doc, 0, [block], 0, settings)
             # retry=0 → 直接走兜底 insert_text
             assert w == 1
         finally:

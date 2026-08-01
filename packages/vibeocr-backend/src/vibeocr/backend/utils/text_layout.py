@@ -71,9 +71,7 @@ class TextBlockProcessor:
             return "\n".join(b.text for b in blocks)
 
         if mode == LINE_MODE_MERGE:
-            text = TextBlockProcessor._join_segment(
-                blocks, options.block_join_space
-            )
+            text = TextBlockProcessor._join_segment(blocks, options.block_join_space)
             if options.chinese_indent:
                 text = _CJK_INDENT + text
             return text
@@ -128,9 +126,7 @@ class TextBlockProcessor:
         """_sort_blocks 的索引保留变体。"""
         has_order = any(b.order != -1 for _, b in indexed)
         if has_order:
-            return sorted(
-                indexed, key=lambda ib: (ib[1].order, _bbox_sort_key(ib[1]))
-            )
+            return sorted(indexed, key=lambda ib: (ib[1].order, _bbox_sort_key(ib[1])))
         return sorted(indexed, key=lambda ib: _bbox_sort_key(ib[1]))
 
     @staticmethod

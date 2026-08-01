@@ -142,6 +142,7 @@ def build_asset_url_pairs(
         for p in _ordered_download_prefixes(network_type)
     ]
 
+
 # PyTorch CUDA 镜像源
 PYTORCH_MIRROR_SOURCES = {
     "nju": "https://mirrors.nju.edu.cn/pytorch/whl",
@@ -227,7 +228,9 @@ OCR_CHECK_LEAF_MODULES: dict[str, str] = {
 # 这些 leaf 全部由 paddleocr[doc-parser] → paddlex[ocr] 的传递依赖拉入，
 # 故承载顶层包统一是 paddleocr。leaf 缺失时，补装应重装承载顶层包以重新解析
 # 整条传递树（而非逐个 leaf 单装，后者无法覆盖 leaf 自身的传递依赖）。
-LEAF_TO_TOPLEVEL: dict[str, str] = dict.fromkeys(OCR_CHECK_LEAF_MODULES.values(), "paddleocr")
+LEAF_TO_TOPLEVEL: dict[str, str] = dict.fromkeys(
+    OCR_CHECK_LEAF_MODULES.values(), "paddleocr"
+)
 
 # 各模块 import 检测的 timeout（秒）。
 # paddle 首次导入需初始化 CUDA 上下文，显著慢于其他模块。
@@ -300,9 +303,7 @@ def validate_dep_check_consistency(project_root: Path) -> list[str]:
         - OCR_CHECK_MODULES 覆盖的包在 pyproject 找不到声明
     """
     warnings: list[str] = []
-    workspace_backend = (
-        project_root / "packages" / "vibeocr-backend" / "pyproject.toml"
-    )
+    workspace_backend = project_root / "packages" / "vibeocr-backend" / "pyproject.toml"
     pyproject = (
         workspace_backend
         if workspace_backend.exists()

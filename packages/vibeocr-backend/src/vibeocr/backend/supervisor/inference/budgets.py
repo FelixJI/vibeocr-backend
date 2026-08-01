@@ -80,9 +80,7 @@ class BudgetPlanner:
         }
         invalid = [name for name, value in positive.items() if value <= 0]
         if invalid:
-            raise ValueError(
-                "budget limits must be positive: " + ", ".join(invalid)
-            )
+            raise ValueError("budget limits must be positive: " + ", ".join(invalid))
         if self.device_vram_mb < 0:
             raise ValueError("device_vram_mb must be >= 0")
 
@@ -155,9 +153,13 @@ class BudgetPlanner:
         cap = max(1, capability.max_compute_batch)
         # Further constrain by VRAM if known.
         if capability.per_item_vram_mb and self.device_vram_mb:
-            vram_cap = max(1, self.device_vram_mb // max(1, capability.per_item_vram_mb))
+            vram_cap = max(
+                1, self.device_vram_mb // max(1, capability.per_item_vram_mb)
+            )
             cap = min(cap, vram_cap)
-        return [ComputeBatch(tuple(items[i : i + cap])) for i in range(0, len(items), cap)]
+        return [
+            ComputeBatch(tuple(items[i : i + cap])) for i in range(0, len(items), cap)
+        ]
 
 
 __all__ = [

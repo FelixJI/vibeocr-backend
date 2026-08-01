@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from PIL import Image
-
 from vibeocr.backend.models.ocr_result import OCRResult, TextBlock
 from vibeocr.backend.supervisor.inference.budgets import InputItem
 from vibeocr.backend.supervisor.inference.paddle_adapter import PaddlePipelineAdapter
@@ -40,21 +39,27 @@ class _FakeOCRService:
         self.preload_calls: list[list[object]] = []
         self.cache_manager: Any | None = None
 
-    def recognize_batch(self, images: list[np.ndarray], options=None) -> list[OCRResult]:
+    def recognize_batch(
+        self, images: list[np.ndarray], options=None
+    ) -> list[OCRResult]:
         self.predict_calls += 1
         self.calls.append(len(images))
         return [
             OCRResult(
                 raw_text=f"text-{i}",
                 pipeline_type="OCR",
-                text_blocks=[TextBlock(text=f"text-{i}", score=0.9, bbox=(0.0, 0.0, 1.0, 1.0))],
+                text_blocks=[
+                    TextBlock(text=f"text-{i}", score=0.9, bbox=(0.0, 0.0, 1.0, 1.0))
+                ],
             )
             for i in range(len(images))
         ]
 
     def preload_pipelines_sequential(self, pipelines: list[object]) -> dict[str, bool]:
         self.preload_calls.append(pipelines)
-        return {getattr(pipeline, "value", str(pipeline)): True for pipeline in pipelines}
+        return {
+            getattr(pipeline, "value", str(pipeline)): True for pipeline in pipelines
+        }
 
 
 def _raw_items(*labels: str) -> list[InputItem]:
@@ -79,7 +84,9 @@ def _raw_items(*labels: str) -> list[InputItem]:
 
 
 def test_capability_reports_not_real_batch_without_registry() -> None:
-    adapter = PaddlePipelineAdapter(service=_FakeOCRService(), pipeline_name="PP-StructureV3")
+    adapter = PaddlePipelineAdapter(
+        service=_FakeOCRService(), pipeline_name="PP-StructureV3"
+    )
     cap = adapter.capabilities()
     # Without the real pipeline registry (not importable in unit tests) we
     # conservatively report not-real-batch.
@@ -160,7 +167,9 @@ def test_recognize_many_logs_pipeline_items_result_and_elapsed(
 def test_recognize_many_raises_on_missing_raw_bytes() -> None:
     adapter = PaddlePipelineAdapter(service=_FakeOCRService(), pipeline_name="OCR")
     # Plain InputItem has no .data attribute.
-    plain = InputItem(item_id="x", encoded_bytes=10, decoded_pixels=10, estimated_pages=1)
+    plain = InputItem(
+        item_id="x", encoded_bytes=10, decoded_pixels=10, estimated_pages=1
+    )
     with pytest.raises(ValueError, match="no raw bytes"):
         adapter.recognize_many([plain])
 
@@ -229,8 +238,7 @@ def test_preload_missing_result_is_reported_as_failure(
         adapter.preload(("OCR",))
 
     assert any(
-        "pipeline=OCR" in record.getMessage()
-        and "result=failed" in record.getMessage()
+        "pipeline=OCR" in record.getMessage() and "result=failed" in record.getMessage()
         for record in caplog.records
     )
 

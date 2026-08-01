@@ -67,7 +67,9 @@ class TestResetAndInit:
 class TestParseApiLogLevel:
     def test_no_match_returns_debug(self):
         """日志行无级别词 → DEBUG（lines 95-97）。"""
-        assert MinerUService._parse_api_log_level("random text no level") == logging.DEBUG
+        assert (
+            MinerUService._parse_api_log_level("random text no level") == logging.DEBUG
+        )
 
     def test_match_returns_level(self):
         assert MinerUService._parse_api_log_level("ERROR something") == logging.ERROR
@@ -161,9 +163,7 @@ class TestResolvePythonExecutable:
         import vibeocr.backend.env_manager as env_mod
 
         monkeypatch.setattr(env_mod, "get_project_root", lambda: Path("/fake"))
-        monkeypatch.setattr(
-            env_mod, "get_embedded_python", lambda root: fake_path
-        )
+        monkeypatch.setattr(env_mod, "get_embedded_python", lambda root: fake_path)
         monkeypatch.setattr(Path, "exists", lambda self: True)
         result = s._resolve_python_executable()
         assert result == fake_path
@@ -193,7 +193,9 @@ class TestStartApi:
     def test_no_python_raises(self, monkeypatch):
         """_resolve_python_executable 返回 None → 抛 RuntimeError（line 182）。"""
         s = _make_service()
-        monkeypatch.setattr(MinerUService, "_resolve_python_executable", lambda self: None)
+        monkeypatch.setattr(
+            MinerUService, "_resolve_python_executable", lambda self: None
+        )
         with pytest.raises(RuntimeError, match="找不到 Python"):
             s._start_api()
 
@@ -206,8 +208,15 @@ class TestStartApi:
         mock_proc.returncode = 1
 
         with (
-            patch.object(MinerUService, "_resolve_python_executable", return_value=Path("/fake/python.exe")),
-            patch("vibeocr.backend.services.mineru_service.subprocess.Popen", return_value=mock_proc),
+            patch.object(
+                MinerUService,
+                "_resolve_python_executable",
+                return_value=Path("/fake/python.exe"),
+            ),
+            patch(
+                "vibeocr.backend.services.mineru_service.subprocess.Popen",
+                return_value=mock_proc,
+            ),
             patch("vibeocr.backend.services.mineru_service.httpx"),
             patch("vibeocr.backend.services.mineru_service.socket"),
             patch("vibeocr.backend.services.mineru_service.JobObjectGuard"),
@@ -227,11 +236,20 @@ class TestStartApi:
         monkeypatch.setattr(
             "vibeocr.backend.core.constants.Constants.Timeout.MINERU_API_START", 0.01
         )
-        monkeypatch.setattr("vibeocr.backend.services.mineru_service.time.sleep", lambda *_: None)
+        monkeypatch.setattr(
+            "vibeocr.backend.services.mineru_service.time.sleep", lambda *_: None
+        )
 
         with (
-            patch.object(MinerUService, "_resolve_python_executable", return_value=Path("/fake/python.exe")),
-            patch("vibeocr.backend.services.mineru_service.subprocess.Popen", return_value=mock_proc),
+            patch.object(
+                MinerUService,
+                "_resolve_python_executable",
+                return_value=Path("/fake/python.exe"),
+            ),
+            patch(
+                "vibeocr.backend.services.mineru_service.subprocess.Popen",
+                return_value=mock_proc,
+            ),
             patch("vibeocr.backend.services.mineru_service.httpx"),
             patch("vibeocr.backend.services.mineru_service.socket"),
             patch("vibeocr.backend.services.mineru_service.JobObjectGuard"),
@@ -254,7 +272,6 @@ class TestStartApi:
             def __init__(self, root):
                 self.mineru_source = "modelscope"
 
-
         def _capture_popen(cmd, **kwargs):
             captured_env.update(kwargs.get("env", {}))
             return mock_proc
@@ -262,8 +279,15 @@ class TestStartApi:
         monkeypatch.delenv("MINERU_MODEL_SOURCE", raising=False)
 
         with (
-            patch.object(MinerUService, "_resolve_python_executable", return_value=Path("/fake/python.exe")),
-            patch("vibeocr.backend.services.mineru_service.subprocess.Popen", side_effect=_capture_popen),
+            patch.object(
+                MinerUService,
+                "_resolve_python_executable",
+                return_value=Path("/fake/python.exe"),
+            ),
+            patch(
+                "vibeocr.backend.services.mineru_service.subprocess.Popen",
+                side_effect=_capture_popen,
+            ),
             patch("vibeocr.backend.services.mineru_service.httpx"),
             patch("vibeocr.backend.services.mineru_service.socket"),
             patch("vibeocr.backend.services.mineru_service.JobObjectGuard"),
@@ -340,7 +364,9 @@ class TestCallApiErrors:
 
         monkeypatch.setattr(mod.httpx, "post", lambda *a, **k: resp)
         with patch.object(s, "_ensure_api_running"):
-            s._call_api(b"", "multi.bin", files=[("a.pdf", b"data1"), ("b.pdf", b"data2")])
+            s._call_api(
+                b"", "multi.bin", files=[("a.pdf", b"data1"), ("b.pdf", b"data2")]
+            )
 
     def test_backend_not_in_chain(self, monkeypatch):
         """backend 不在 MINERU_BACKEND_CHAIN → backends_to_try=[backend]（line 343）。"""
@@ -486,7 +512,9 @@ class TestFileParse:
     def test_file_parse_with_backend_override(self, monkeypatch):
         """backend 参数透传到 options（lines 454-463）。"""
         s = _make_service()
-        api_result = {"results": {"x": {"md_content": "# X", "content_list": json.dumps([])}}}
+        api_result = {
+            "results": {"x": {"md_content": "# X", "content_list": json.dumps([])}}
+        }
         resp = MagicMock()
         resp.status_code = 200
         resp.json.return_value = api_result
@@ -543,7 +571,10 @@ class TestBuildOcrResultEdges:
         ]
         api_resp = {
             "results": {
-                "input": {"md_content": "keep", "content_list": json.dumps(content_list)}
+                "input": {
+                    "md_content": "keep",
+                    "content_list": json.dumps(content_list),
+                }
             }
         }
         result = s._build_ocr_result(api_resp, "input.pdf", data=None)
@@ -636,7 +667,9 @@ class TestRemainingBranches:
         # 外层 check 失败、锁内 check 成功 → 直接返回不 start
         check_results = iter([False, True])
         with (
-            patch.object(s, "_check_api_running", side_effect=lambda *a: next(check_results)),
+            patch.object(
+                s, "_check_api_running", side_effect=lambda *a: next(check_results)
+            ),
             patch.object(s, "_start_api") as start_mock,
         ):
             s._ensure_api_running()
@@ -645,7 +678,9 @@ class TestRemainingBranches:
     def test_file_parse_backend_with_existing_options(self, monkeypatch):
         """file_parse 传 backend 且 options 非 None → 设 backend（branch 456->460）。"""
         s = _make_service()
-        api_result = {"results": {"x": {"md_content": "# X", "content_list": json.dumps([])}}}
+        api_result = {
+            "results": {"x": {"md_content": "# X", "content_list": json.dumps([])}}
+        }
         resp = MagicMock()
         resp.status_code = 200
         resp.json.return_value = api_result
@@ -674,12 +709,8 @@ class TestRemainingBranches:
         fake_normalized = [
             {"type": "text", "text": "ok", "raw": None, "page_idx": 0},
         ]
-        monkeypatch.setattr(
-            mod, "normalize_content_list", lambda cl: fake_normalized
-        )
-        api_resp = {
-            "results": {"input": {"md_content": "ok", "content_list": "[]"}}
-        }
+        monkeypatch.setattr(mod, "normalize_content_list", lambda cl: fake_normalized)
+        api_resp = {"results": {"input": {"md_content": "ok", "content_list": "[]"}}}
         # raw=None → 跳过 flat_content_list / text_blocks
         result = s._build_ocr_result(api_resp, "input.pdf", data=None)
         assert len(result.text_blocks) == 0
@@ -699,12 +730,8 @@ class TestRemainingBranches:
         fake_normalized = [
             {"type": "table", "text": "", "raw": None, "page_idx": 0},
         ]
-        monkeypatch.setattr(
-            mod, "normalize_content_list", lambda cl: fake_normalized
-        )
-        api_resp = {
-            "results": {"input": {"md_content": "", "content_list": "[]"}}
-        }
+        monkeypatch.setattr(mod, "normalize_content_list", lambda cl: fake_normalized)
+        api_resp = {"results": {"input": {"md_content": "", "content_list": "[]"}}}
         result = s._build_ocr_result(api_resp, "input.pdf", data=None)
         # table 块 raw=None → 不生成 text_block（无 text/bbox）
         assert len(result.text_blocks) == 0

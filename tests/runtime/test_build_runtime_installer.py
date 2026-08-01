@@ -26,7 +26,5 @@ def test_runtime_installer_zip_is_deterministic_and_has_expected_layout(
     )
     assert first.read_bytes() == second.read_bytes()
     with zipfile.ZipFile(first) as archive:
-        assert archive.namelist() == [
-            "runtime-installer/vibeocr-runtime-installer.exe"
-        ]
+        assert archive.namelist() == ["runtime-installer/vibeocr-runtime-installer.exe"]
         assert archive.read(archive.namelist()[0]) == b"installer"

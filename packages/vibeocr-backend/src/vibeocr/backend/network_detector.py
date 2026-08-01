@@ -122,7 +122,9 @@ class NetworkDetector:
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
-                req = Request(url, method="HEAD", headers={"User-Agent": "VibeOCR-Downloader/1.0"})
+                req = Request(
+                    url, method="HEAD", headers={"User-Agent": "VibeOCR-Downloader/1.0"}
+                )
                 with urlopen(req, timeout=5, context=ctx) as resp:
                     if resp.status == 200:
                         with lock:

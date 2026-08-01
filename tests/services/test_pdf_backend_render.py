@@ -19,7 +19,6 @@ from unittest.mock import MagicMock
 
 import fitz
 import pytest
-
 from vibeocr.backend.services.pdf_backend_client import PdfBackendClient
 
 

@@ -17,7 +17,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from vibeocr.backend.services.ocr_service import OCRService
 
 

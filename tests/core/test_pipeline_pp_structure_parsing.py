@@ -11,7 +11,6 @@ import gc
 from types import SimpleNamespace
 
 import pytest
-
 from vibeocr.backend.core.pipelines.pipeline_pp_structure import (
     PPStructureV3Options,
     _build_ocr_result,
@@ -26,7 +25,7 @@ class TestExtractTableHtml:
     """_extract_table_html：从 HTML 提取第一个 <table>。"""
 
     def test_extracts_table_from_wrapper(self):
-        html = '<div><table><tr><td>A</td></tr></table></div>'
+        html = "<div><table><tr><td>A</td></tr></table></div>"
         result = _extract_table_html(html)
         assert result == "<table><tr><td>A</td></tr></table>"
 
@@ -36,7 +35,7 @@ class TestExtractTableHtml:
         assert _extract_table_html(html) == html
 
     def test_case_insensitive(self):
-        html = '<TABLE><TR><TD>X</TD></TR></TABLE>'
+        html = "<TABLE><TR><TD>X</TD></TR></TABLE>"
         result = _extract_table_html(f"<p>{html}</p>")
         assert "<TABLE>" in result
 
@@ -97,9 +96,7 @@ class TestBuildOcrResult:
         assert result.avg_score == 0.0
 
     def test_with_scores_and_low_confidence(self):
-        result = _build_ocr_result(
-            "t", text_with_scores=[("ok", 0.9), ("low", 0.3)]
-        )
+        result = _build_ocr_result("t", text_with_scores=[("ok", 0.9), ("low", 0.3)])
         assert result.avg_score == pytest.approx(0.6)
         assert len(result.low_confidence_items) == 1
 
@@ -319,14 +316,16 @@ class TestRecognizePpStructureBlockTypes:
     def test_preproc_info_extraction(self):
         """doc_preprocessor_res.output_img 被提取（line 169-184）。"""
         import numpy as np
-
         from vibeocr.backend.core.pipelines.pipeline_pp_structure import (
             PPStructureV3Options,
             _recognize_pp_structure,
         )
 
         arr = np.zeros((2, 3, 3), dtype=np.uint8)
-        res = {"parsing_res_list": [], "doc_preprocessor_res": {"angle": 90, "output_img": arr}}
+        res = {
+            "parsing_res_list": [],
+            "doc_preprocessor_res": {"angle": 90, "output_img": arr},
+        }
 
         class _Pipeline:
             def predict(self, input, **kwargs):  # noqa: A002

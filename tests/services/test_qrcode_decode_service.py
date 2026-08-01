@@ -5,7 +5,6 @@ import pytest
 pytest.importorskip("pyzbar")  # pyzbar 缺失时整个文件跳过
 
 from PIL import Image
-
 from vibeocr.backend.services.qrcode_decode_service import (
     DecodedItem,
     QrcodeDecodeService,

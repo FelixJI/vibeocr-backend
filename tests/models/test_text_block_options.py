@@ -66,8 +66,6 @@ class TestFromDictDefaults:
         assert opts.line_mode == LINE_MODE_MERGE
 
     def test_non_bool_coerced_to_bool(self):
-        opts = TextBlockOptions.from_dict(
-            {"block_join_space": 0, "chinese_indent": 1}
-        )
+        opts = TextBlockOptions.from_dict({"block_join_space": 0, "chinese_indent": 1})
         assert opts.block_join_space is False
         assert opts.chinese_indent is True

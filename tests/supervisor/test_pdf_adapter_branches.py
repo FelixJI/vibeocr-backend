@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-
 from vibeocr.backend.ipc.schemas import (
     DetectTextLayersResponse,
     ModelDiff,
@@ -71,7 +70,9 @@ class _FullPdfChild:
         self._record("render_preview", (session_id, page), {"dpi": dpi})
         return b"\x89PNGpreview"
 
-    def detect_text_layers(self, session_id: str, page: int) -> DetectTextLayersResponse:
+    def detect_text_layers(
+        self, session_id: str, page: int
+    ) -> DetectTextLayersResponse:
         self._record("detect_text_layers", (session_id, page), {})
         return DetectTextLayersResponse(text_layers=[])
 
@@ -83,15 +84,29 @@ class _FullPdfChild:
         self._record("delete_pages", (session_id, pages), {})
         return MutateResponse(diff=ModelDiff())
 
-    def insert_blank(self, session_id: str, after_index: int, width: float = 612.0, height: float = 792.0) -> MutateResponse:
-        self._record("insert_blank", (session_id, after_index), {"width": width, "height": height})
+    def insert_blank(
+        self,
+        session_id: str,
+        after_index: int,
+        width: float = 612.0,
+        height: float = 792.0,
+    ) -> MutateResponse:
+        self._record(
+            "insert_blank",
+            (session_id, after_index),
+            {"width": width, "height": height},
+        )
         return MutateResponse(diff=ModelDiff())
 
-    def insert_from(self, session_id: str, source_path: str, after_index: int) -> MutateResponse:
+    def insert_from(
+        self, session_id: str, source_path: str, after_index: int
+    ) -> MutateResponse:
         self._record("insert_from", (session_id, source_path, after_index), {})
         return MutateResponse(diff=ModelDiff())
 
-    def move_page(self, session_id: str, from_index: int, to_index: int) -> MutateResponse:
+    def move_page(
+        self, session_id: str, from_index: int, to_index: int
+    ) -> MutateResponse:
         self._record("move_page", (session_id, from_index, to_index), {})
         return MutateResponse(diff=ModelDiff())
 
@@ -99,19 +114,54 @@ class _FullPdfChild:
         self._record("reorder", (session_id, new_order), {})
         return MutateResponse(diff=ModelDiff())
 
-    def add_text_layer(self, session_id: str, page: int, ocr_result: dict, pdf_settings=None, overwrite=False) -> MutateResponse:
-        self._record("add_text_layer", (session_id, page, ocr_result), {"pdf_settings": pdf_settings, "overwrite": overwrite})
+    def add_text_layer(
+        self,
+        session_id: str,
+        page: int,
+        ocr_result: dict,
+        pdf_settings=None,
+        overwrite=False,
+    ) -> MutateResponse:
+        self._record(
+            "add_text_layer",
+            (session_id, page, ocr_result),
+            {"pdf_settings": pdf_settings, "overwrite": overwrite},
+        )
         return MutateResponse(diff=ModelDiff())
 
-    def add_text_layer_batch(self, session_id: str, pages_data: list, pdf_settings=None, overwrite=False, save=False) -> MutateResponse:
-        self._record("add_text_layer_batch", (session_id, pages_data), {"pdf_settings": pdf_settings, "overwrite": overwrite, "save": save})
+    def add_text_layer_batch(
+        self,
+        session_id: str,
+        pages_data: list,
+        pdf_settings=None,
+        overwrite=False,
+        save=False,
+    ) -> MutateResponse:
+        self._record(
+            "add_text_layer_batch",
+            (session_id, pages_data),
+            {"pdf_settings": pdf_settings, "overwrite": overwrite, "save": save},
+        )
         return MutateResponse(diff=ModelDiff())
 
-    def rewrite_text_layer(self, session_id: str, page: int, text_blocks: list, preproc_angle: int = 0, pdf_settings=None) -> MutateResponse:
-        self._record("rewrite_text_layer", (session_id, page, text_blocks), {"preproc_angle": preproc_angle, "pdf_settings": pdf_settings})
+    def rewrite_text_layer(
+        self,
+        session_id: str,
+        page: int,
+        text_blocks: list,
+        preproc_angle: int = 0,
+        pdf_settings=None,
+    ) -> MutateResponse:
+        self._record(
+            "rewrite_text_layer",
+            (session_id, page, text_blocks),
+            {"preproc_angle": preproc_angle, "pdf_settings": pdf_settings},
+        )
         return MutateResponse(diff=ModelDiff())
 
-    def update_block_text(self, session_id: str, page: int, block_index: int, new_text: str) -> MutateResponse:
+    def update_block_text(
+        self, session_id: str, page: int, block_index: int, new_text: str
+    ) -> MutateResponse:
         self._record("update_block_text", (session_id, page, block_index, new_text), {})
         return MutateResponse(diff=ModelDiff())
 
@@ -119,8 +169,14 @@ class _FullPdfChild:
         self._record("delete_text_layers_stream", (session_id, pages), {})
         yield ProgressEvent(phase=ProgressPhase.DELETE, current=1, total=1)
 
-    def save(self, session_id: str, path=None, pdf_settings=None, *, rewrite_text_layers=True):  # type: ignore[no-untyped-def]
-        self._record("save", (session_id, path, pdf_settings), {"rewrite_text_layers": rewrite_text_layers})
+    def save(
+        self, session_id: str, path=None, pdf_settings=None, *, rewrite_text_layers=True
+    ):  # type: ignore[no-untyped-def]
+        self._record(
+            "save",
+            (session_id, path, pdf_settings),
+            {"rewrite_text_layers": rewrite_text_layers},
+        )
         if self._fail_save or self._fail_unlink:
             raise RuntimeError("save failed")
         if path is not None:

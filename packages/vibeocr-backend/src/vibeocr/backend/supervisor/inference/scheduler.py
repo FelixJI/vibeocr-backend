@@ -173,7 +173,11 @@ class DeviceScheduler:
         with self._lock:
             if device is None:
                 return len(self._enqueued_at)
-            return sum(1 for e in self._queue if e.device == device and e.job_id not in self._cancelled)
+            return sum(
+                1
+                for e in self._queue
+                if e.device == device and e.job_id not in self._cancelled
+            )
 
     # ------------------------------------------------------------------
     # Aging
@@ -196,13 +200,20 @@ class DeviceScheduler:
         # a long starvation window.
         return max(0.0, base - age / self._aging_interval * 0.1)
 
-    def _new_entry(self, job_id: str, device: str, priority: JobPriority) -> _QueueEntry:
+    def _new_entry(
+        self, job_id: str, device: str, priority: JobPriority
+    ) -> _QueueEntry:
         eff = self.effective_priority(job_id, priority)
         seq = next(_COUNTER)
         # Lower sort_key = higher priority. Age bonus is encoded so an older
         # background job sorts before a newer one with the same base.
         age_seq = seq  # tiebreaker
-        return _QueueEntry(sort_key=(eff, age_seq, seq), job_id=job_id, device=device, priority=priority)
+        return _QueueEntry(
+            sort_key=(eff, age_seq, seq),
+            job_id=job_id,
+            device=device,
+            priority=priority,
+        )
 
     def _current_key(self, entry: _QueueEntry) -> tuple[float, int, int]:
         """Recompute the priority component so aging is not frozen at enqueue."""

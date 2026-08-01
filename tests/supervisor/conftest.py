@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import pytest
-
 from vibeocr.backend.ipc.schemas import (
     DetectTextLayersResponse,
     ModelDiff,
@@ -73,7 +72,9 @@ class FakePdfAdapter:
         self._record("render_preview", (session_id, page), {"dpi": dpi})
         return b"\x89PNG\r\npreview"
 
-    def detect_text_layers(self, session_id: str, page: int) -> DetectTextLayersResponse:
+    def detect_text_layers(
+        self, session_id: str, page: int
+    ) -> DetectTextLayersResponse:
         self._record("detect_text_layers", (session_id, page), {})
         return DetectTextLayersResponse(text_layers=[])
 
@@ -93,7 +94,9 @@ class FakePdfAdapter:
         height: float = 792.0,
     ) -> MutateResponse:
         self._record(
-            "insert_blank", (session_id, after_index), {"width": width, "height": height}
+            "insert_blank",
+            (session_id, after_index),
+            {"width": width, "height": height},
         )
         return MutateResponse(diff=ModelDiff(structural_change=True))
 
@@ -161,9 +164,7 @@ class FakePdfAdapter:
     def update_block_text(
         self, session_id: str, page: int, block_index: int, new_text: str
     ) -> MutateResponse:
-        self._record(
-            "update_block_text", (session_id, page, block_index, new_text), {}
-        )
+        self._record("update_block_text", (session_id, page, block_index, new_text), {})
         return MutateResponse(diff=ModelDiff())
 
     def delete_text_layers_stream(
@@ -216,7 +217,11 @@ class NullExecutor:
     def execute(self, record, staged) -> None:  # type: ignore[no-untyped-def]
         from vibeocr.runtime_contracts import JobState
 
-        if record.state not in (JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED):
+        if record.state not in (
+            JobState.COMPLETED,
+            JobState.FAILED,
+            JobState.CANCELLED,
+        ):
             record.transition(JobState.FAILED)
 
     def cancel_mode_for(self, record) -> CancelMode:  # type: ignore[no-untyped-def]
@@ -306,9 +311,7 @@ def _stop_mineru_watchers_after_test(
         if self not in created:
             created.append(self)
 
-    monkeypatch.setattr(
-        _ma.MinerUProcessAdapter, "_ensure_watcher_locked", _tracking
-    )
+    monkeypatch.setattr(_ma.MinerUProcessAdapter, "_ensure_watcher_locked", _tracking)
     yield
     for adapter in created:
         try:

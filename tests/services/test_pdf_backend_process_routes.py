@@ -197,9 +197,7 @@ class TestRenderRoutes:
         )
         assert resp.status_code == 400
 
-    def test_render_thumbnail_internal_error_500(
-        self, opened_session, monkeypatch
-    ):
+    def test_render_thumbnail_internal_error_500(self, opened_session, monkeypatch):
         client, backend, sid, _ = opened_session
 
         def _boom(file_path, page_index, dpi):
@@ -237,25 +235,19 @@ class TestRenderRoutes:
 class TestDetectRoute:
     def test_detect_text_layers(self, opened_session):
         client, _, sid, _ = opened_session
-        resp = client.post(
-            f"/session/{sid}/detect_text_layers", json={"page": 0}
-        )
+        resp = client.post(f"/session/{sid}/detect_text_layers", json={"page": 0})
         assert resp.status_code == 200
         body = resp.json()
         assert "text_layers" in body
 
-    def test_detect_text_layers_internal_error_500(
-        self, opened_session, monkeypatch
-    ):
+    def test_detect_text_layers_internal_error_500(self, opened_session, monkeypatch):
         client, backend, sid, _ = opened_session
 
         def _boom(doc, page):
             raise RuntimeError("detect boom")
 
         monkeypatch.setattr(backend.PdfService, "detect_text_layers", _boom)
-        resp = client.post(
-            f"/session/{sid}/detect_text_layers", json={"page": 0}
-        )
+        resp = client.post(f"/session/{sid}/detect_text_layers", json={"page": 0})
         assert resp.status_code == 500
 
 
@@ -265,9 +257,7 @@ class TestDetectRoute:
 class TestMutateRoutes:
     def test_rotate(self, opened_session):
         client, _, sid, _ = opened_session
-        resp = client.post(
-            f"/session/{sid}/rotate", json={"pages": [0], "angle": 90}
-        )
+        resp = client.post(f"/session/{sid}/rotate", json={"pages": [0], "angle": 90})
         assert resp.status_code == 200
         diff = resp.json()["diff"]
         assert "replaced_pages" in diff
@@ -279,16 +269,12 @@ class TestMutateRoutes:
             raise RuntimeError("rot boom")
 
         monkeypatch.setattr(backend.PdfService, "rotate_pages", _boom)
-        resp = client.post(
-            f"/session/{sid}/rotate", json={"pages": [0], "angle": 90}
-        )
+        resp = client.post(f"/session/{sid}/rotate", json={"pages": [0], "angle": 90})
         assert resp.status_code == 500
 
     def test_delete_pages(self, opened_session):
         client, _, sid, _ = opened_session
-        resp = client.post(
-            f"/session/{sid}/delete_pages", json={"pages": [1]}
-        )
+        resp = client.post(f"/session/{sid}/delete_pages", json={"pages": [1]})
         assert resp.status_code == 200
         assert resp.json()["diff"]["structural_change"] is True
 
@@ -318,15 +304,15 @@ class TestMutateRoutes:
 
     def test_reorder(self, opened_session):
         client, _, sid, _ = opened_session
-        resp = client.post(
-            f"/session/{sid}/reorder", json={"new_order": [2, 1, 0]}
-        )
+        resp = client.post(f"/session/{sid}/reorder", json={"new_order": [2, 1, 0]})
         assert resp.status_code == 200
 
     def test_insert_blank_internal_error_500(self, opened_session, monkeypatch):
         client, backend, sid, _ = opened_session
         monkeypatch.setattr(
-            backend.PdfService, "insert_blank_page", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))
+            backend.PdfService,
+            "insert_blank_page",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")),
         )
         resp = client.post(
             f"/session/{sid}/insert_blank",
@@ -337,7 +323,9 @@ class TestMutateRoutes:
     def test_insert_from_internal_error_500(self, opened_session, monkeypatch):
         client, backend, sid, _ = opened_session
         monkeypatch.setattr(
-            backend.PdfService, "insert_pages_from", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))
+            backend.PdfService,
+            "insert_pages_from",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")),
         )
         resp = client.post(
             f"/session/{sid}/insert_from",
@@ -348,7 +336,9 @@ class TestMutateRoutes:
     def test_move_page_internal_error_500(self, opened_session, monkeypatch):
         client, backend, sid, _ = opened_session
         monkeypatch.setattr(
-            backend.PdfService, "move_page", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))
+            backend.PdfService,
+            "move_page",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")),
         )
         resp = client.post(
             f"/session/{sid}/move_page", json={"from_index": 0, "to_index": 1}
@@ -358,21 +348,21 @@ class TestMutateRoutes:
     def test_reorder_internal_error_500(self, opened_session, monkeypatch):
         client, backend, sid, _ = opened_session
         monkeypatch.setattr(
-            backend.PdfService, "reorder_pages", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))
+            backend.PdfService,
+            "reorder_pages",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")),
         )
-        resp = client.post(
-            f"/session/{sid}/reorder", json={"new_order": [0, 1, 2]}
-        )
+        resp = client.post(f"/session/{sid}/reorder", json={"new_order": [0, 1, 2]})
         assert resp.status_code == 500
 
     def test_delete_pages_internal_error_500(self, opened_session, monkeypatch):
         client, backend, sid, _ = opened_session
         monkeypatch.setattr(
-            backend.PdfService, "delete_pages", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))
+            backend.PdfService,
+            "delete_pages",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")),
         )
-        resp = client.post(
-            f"/session/{sid}/delete_pages", json={"pages": [0]}
-        )
+        resp = client.post(f"/session/{sid}/delete_pages", json={"pages": [0]})
         assert resp.status_code == 500
 
 
@@ -412,7 +402,9 @@ class TestTextLayerRoutes:
     def test_add_text_layer_internal_error_500(self, opened_session, monkeypatch):
         client, backend, sid, _ = opened_session
         monkeypatch.setattr(
-            backend.PdfService, "add_text_layer", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))
+            backend.PdfService,
+            "add_text_layer",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")),
         )
         resp = client.post(
             f"/session/{sid}/add_text_layer",
@@ -451,9 +443,7 @@ class TestTextLayerRoutes:
         body = resp.json()
         assert body["extra"]["saved"] is True
 
-    def test_add_text_layer_batch_internal_error_500(
-        self, opened_session, monkeypatch
-    ):
+    def test_add_text_layer_batch_internal_error_500(self, opened_session, monkeypatch):
         client, backend, sid, _ = opened_session
         monkeypatch.setattr(
             backend.PdfService,
@@ -481,7 +471,9 @@ class TestTextLayerRoutes:
         sid = resp.json()["session_id"]
 
         # save_incremental 返回 False → 走 _compress_in_place
-        monkeypatch.setattr(backend.PdfService, "save_incremental", lambda *a, **k: False)
+        monkeypatch.setattr(
+            backend.PdfService, "save_incremental", lambda *a, **k: False
+        )
         # 不 mock _compress_in_place，让它真正跑（单页扫描件可成功）
 
         resp = client.post(
@@ -506,7 +498,9 @@ class TestTextLayerRoutes:
         resp = client.post("/session/open", json={"path": str(path)})
         sid = resp.json()["session_id"]
 
-        monkeypatch.setattr(backend.PdfService, "save_incremental", lambda *a, **k: False)
+        monkeypatch.setattr(
+            backend.PdfService, "save_incremental", lambda *a, **k: False
+        )
 
         def _compress_fail(doc, save_path, clean=False):
             # 模拟 _compress_in_place 失败：close doc + 抛异常
@@ -555,12 +549,12 @@ class TestTextLayerRoutes:
         )
         assert resp.status_code == 200
 
-    def test_rewrite_text_layer_internal_error_500(
-        self, opened_session, monkeypatch
-    ):
+    def test_rewrite_text_layer_internal_error_500(self, opened_session, monkeypatch):
         client, backend, sid, _ = opened_session
         monkeypatch.setattr(
-            backend.PdfService, "rewrite_text_layer", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))
+            backend.PdfService,
+            "rewrite_text_layer",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")),
         )
         resp = client.post(
             f"/session/{sid}/rewrite_text_layer",
@@ -589,9 +583,7 @@ class TestTextLayerRoutes:
         )
         assert resp.status_code == 200
 
-    def test_update_block_text_internal_error_500(
-        self, opened_session, monkeypatch
-    ):
+    def test_update_block_text_internal_error_500(self, opened_session, monkeypatch):
         client, backend, sid, _ = opened_session
         # 让 pages[req.page] 访问抛异常
         session = backend._get_registry().get(sid)
@@ -634,9 +626,7 @@ class TestDeleteLayersStream:
                 },
             },
         )
-        resp = client.post(
-            f"/session/{sid}/delete_text_layers", json={"pages": [0]}
-        )
+        resp = client.post(f"/session/{sid}/delete_text_layers", json={"pages": [0]})
         assert resp.status_code == 200
         lines = [line for line in resp.text.strip().split("\n") if line]
         assert len(lines) >= 2
@@ -646,9 +636,7 @@ class TestDeleteLayersStream:
     def test_delete_text_layers_no_text_page(self, opened_session):
         """无文字页删除应正常返回（payload=(0,0,False)）。"""
         client, _, sid, _ = opened_session
-        resp = client.post(
-            f"/session/{sid}/delete_text_layers", json={"pages": [0]}
-        )
+        resp = client.post(f"/session/{sid}/delete_text_layers", json={"pages": [0]})
         assert resp.status_code == 200
 
     def test_delete_text_layers_page_error_continues(self, opened_session, monkeypatch):
@@ -661,11 +649,11 @@ class TestDeleteLayersStream:
         monkeypatch.setattr(backend.PdfService, "delete_text_layers", _boom)
         # page_has_text 也抛，使异常在锁内发生
         monkeypatch.setattr(
-            backend.PdfService, "page_has_text", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("ph boom"))
+            backend.PdfService,
+            "page_has_text",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("ph boom")),
         )
-        resp = client.post(
-            f"/session/{sid}/delete_text_layers", json={"pages": [0]}
-        )
+        resp = client.post(f"/session/{sid}/delete_text_layers", json={"pages": [0]})
         assert resp.status_code == 200
         lines = [line for line in resp.text.strip().split("\n") if line]
         # 第一行 payload 应为 None（异常路径）
@@ -702,7 +690,9 @@ class TestSaveRoute:
     def test_save_internal_error_500(self, opened_session, monkeypatch):
         client, backend, sid, _ = opened_session
         monkeypatch.setattr(
-            backend.PdfService, "save_with_rewrite", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))
+            backend.PdfService,
+            "save_with_rewrite",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")),
         )
         resp = client.post(
             f"/session/{sid}/save",
@@ -741,7 +731,9 @@ class TestMirrorBuilders:
         from vibeocr.backend.models.pdf_document import TextLayerInfo
         from vibeocr.backend.services.pdf_backend_process import _text_layer_to_mirror
 
-        tl = TextLayerInfo(index=0, text_preview="hi", char_count=2, bbox=(1, 2, 3, 4), color_id=0)
+        tl = TextLayerInfo(
+            index=0, text_preview="hi", char_count=2, bbox=(1, 2, 3, 4), color_id=0
+        )
         m = _text_layer_to_mirror(tl)
         assert m.text_preview == "hi"
         assert m.char_count == 2
@@ -813,7 +805,6 @@ class TestMirrorBuilders:
 class TestRegistryEdges:
     def test_get_unknown_raises_404(self):
         from fastapi import HTTPException
-
         from vibeocr.backend.services.pdf_backend_process import SessionRegistry
 
         reg = SessionRegistry()
@@ -830,7 +821,6 @@ class TestRegistryEdges:
     def test_fitz_op_rejects_closing_session(self):
         """_fitz_op 对非 OPEN 状态抛 409（lines 285-286）。"""
         from fastapi import HTTPException
-
         from vibeocr.backend.services.pdf_backend_process import (
             BackendSession,
             _fitz_op,
@@ -1025,7 +1015,9 @@ class TestBatchSaveEdgeCases:
         resp = client.post("/session/open", json={"path": str(path)})
         sid = resp.json()["session_id"]
 
-        monkeypatch.setattr(backend.PdfService, "save_incremental", lambda *a, **k: False)
+        monkeypatch.setattr(
+            backend.PdfService, "save_incremental", lambda *a, **k: False
+        )
 
         def _compress_fail(doc, save_path, clean=False):
             try:
@@ -1036,7 +1028,11 @@ class TestBatchSaveEdgeCases:
 
         monkeypatch.setattr(backend.PdfService, "_compress_in_place", _compress_fail)
         # 重开也失败
-        monkeypatch.setattr(fitz, "open", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("reopen boom")))
+        monkeypatch.setattr(
+            fitz,
+            "open",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("reopen boom")),
+        )
         resp = client.post(
             f"/session/{sid}/add_text_layer_batch",
             json={
@@ -1064,15 +1060,15 @@ class TestDeleteLayersCancelAndPayloads:
         client, backend, sid, _ = opened_session
         session = backend._get_registry().get(sid)
         session.cancel_event.set()
-        resp = client.post(
-            f"/session/{sid}/delete_text_layers", json={"pages": [0, 1]}
-        )
+        resp = client.post(f"/session/{sid}/delete_text_layers", json={"pages": [0, 1]})
         assert resp.status_code == 200
         lines = [line for line in resp.text.strip().split("\n") if line]
         # 立即 break → 只有 done 哨兵
         assert len(lines) == 1
 
-    def test_delete_text_layers_residual_page_recorded(self, opened_session, monkeypatch):
+    def test_delete_text_layers_residual_page_recorded(
+        self, opened_session, monkeypatch
+    ):
         """有残留的页应被记录到 residual_pages（line 778）。"""
         client, backend, sid, _ = opened_session
         # 先加文字层
@@ -1094,9 +1090,7 @@ class TestDeleteLayersCancelAndPayloads:
             "delete_text_layers",
             lambda doc, pdf_doc, page: (5, 1, True),
         )
-        resp = client.post(
-            f"/session/{sid}/delete_text_layers", json={"pages": [0]}
-        )
+        resp = client.post(f"/session/{sid}/delete_text_layers", json={"pages": [0]})
         assert resp.status_code == 200
         lines = [line for line in resp.text.strip().split("\n") if line]
         last = __import__("json").loads(lines[-1])
@@ -1111,9 +1105,7 @@ class TestDeleteLayersCancelAndPayloads:
         path = _create_scanned_pdf(tmp_path / "notext.pdf")
         resp = client.post("/session/open", json={"path": str(path)})
         sid = resp.json()["session_id"]
-        resp = client.post(
-            f"/session/{sid}/delete_text_layers", json={"pages": [0]}
-        )
+        resp = client.post(f"/session/{sid}/delete_text_layers", json={"pages": [0]})
         assert resp.status_code == 200
         lines = [line for line in resp.text.strip().split("\n") if line]
         first = __import__("json").loads(lines[0])
@@ -1157,7 +1149,9 @@ class TestMainEntry:
             called["log_level"] = log_level
 
         monkeypatch.setattr(backend.uvicorn, "run", _fake_run)
-        monkeypatch.setattr(sys, "argv", ["prog", "--port", "9999", "--host", "0.0.0.0"])
+        monkeypatch.setattr(
+            sys, "argv", ["prog", "--port", "9999", "--host", "0.0.0.0"]
+        )
         backend.main()
         captured = capsys.readouterr()
         assert "VIBEOCR_PDF_BACKEND_PORT=9999" in captured.out
@@ -1187,10 +1181,10 @@ class TestRemainingBranches:
         """detect_text_layers route 页越界但无异常 → 跳过 model 更新（branch 477->480）。"""
         client, backend, sid, _ = opened_session
         # 让 PdfService.detect_text_layers 对越界页返回空（不抛）
-        monkeypatch.setattr(backend.PdfService, "detect_text_layers", lambda doc, page: [])
-        resp = client.post(
-            f"/session/{sid}/detect_text_layers", json={"page": 999}
+        monkeypatch.setattr(
+            backend.PdfService, "detect_text_layers", lambda doc, page: []
         )
+        resp = client.post(f"/session/{sid}/detect_text_layers", json={"page": 999})
         assert resp.status_code == 200
         # 仍返回空 layers
         assert resp.json()["text_layers"] == []

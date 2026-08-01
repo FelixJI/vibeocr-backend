@@ -55,9 +55,7 @@ def _bbox_key(block: dict[str, Any]) -> tuple[float, float, float, float] | None
     )
 
 
-def _canonicalize_vl_table(
-    block: dict[str, Any], *, table_id: str
-) -> dict[str, Any]:
+def _canonicalize_vl_table(block: dict[str, Any], *, table_id: str) -> dict[str, Any]:
     canonical_block = canonicalize_table_block(
         block,
         table_id=table_id,
@@ -369,9 +367,7 @@ def _recognize_paddlocr_vl(
                             or _bbox_key(content_list[index]) == candidate_bbox
                         )
                     ]
-                    cl_idx = (
-                        matching_indices[0] if len(matching_indices) == 1 else -1
-                    )
+                    cl_idx = matching_indices[0] if len(matching_indices) == 1 else -1
                     if cl_idx < 0:
                         cl_idx = len(content_list)
                         content_list.append(candidate)
@@ -428,9 +424,7 @@ def _recognize_paddlocr_vl(
             block_id = str(source_block["block_id"])
             if source_block.get("type") != "table":
                 projected_text = str(
-                    source_block.get("text")
-                    or source_block.get("content")
-                    or ""
+                    source_block.get("text") or source_block.get("content") or ""
                 )
                 if not projected_text:
                     continue
@@ -478,9 +472,7 @@ def _recognize_paddlocr_vl(
             if index not in reading_indices
         )
         if reading_indices:
-            original_slice = {
-                index: content_list[index] for index in reading_indices
-            }
+            original_slice = {index: content_list[index] for index in reading_indices}
             content_list[result_content_start:] = [
                 original_slice[index] for index in reading_indices
             ]
@@ -492,8 +484,10 @@ def _recognize_paddlocr_vl(
                 if text_block.content_index in remapped:
                     text_block.content_index = remapped[text_block.content_index]
 
-        if not parsing_res_list and hasattr(res, "rec_texts") and hasattr(
-            res, "rec_scores"
+        if (
+            not parsing_res_list
+            and hasattr(res, "rec_texts")
+            and hasattr(res, "rec_scores")
         ):
             # Fallback: legacy output format
             rec_boxes = getattr(res, "rec_boxes", None)
@@ -531,9 +525,7 @@ def _recognize_paddlocr_vl(
     raw_text = "\n".join(b.text for b in text_blocks)
     if table_markdown_parts:
         markdown_text = "\n\n".join(
-            part
-            for part in (markdown_text, *table_markdown_parts)
-            if part
+            part for part in (markdown_text, *table_markdown_parts) if part
         )
     if not raw_text and markdown_text:
         raw_text = markdown_text

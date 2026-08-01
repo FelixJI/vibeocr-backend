@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 
 import pytest
-
 from vibeocr.backend.core.pipelines.pipeline_ocr import (
     _isolate_unused_modelscope_import,
 )

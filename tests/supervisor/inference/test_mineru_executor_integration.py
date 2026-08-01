@@ -22,7 +22,6 @@ import time
 from typing import TYPE_CHECKING
 
 import pytest
-
 from vibeocr.backend.supervisor.composition import build_supervisor
 from vibeocr.runtime_contracts import TERMINAL_JOB_STATES, JobKind, JobPriority
 
@@ -74,7 +73,9 @@ def _wait_for_terminal(module, job_id: str, *, timeout: float = 600.0) -> None:
 
 
 def test_submit_mineru_parse_returns_structured_payload(tmp_path: Path) -> None:
-    module, _handle = build_supervisor(use_mineru=True, stager_root=tmp_path / "staging")
+    module, _handle = build_supervisor(
+        use_mineru=True, stager_root=tmp_path / "staging"
+    )
     pdf_bytes = _minimal_pdf_bytes("Hello MinerU")
 
     ref = module.submit(

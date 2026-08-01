@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 from PIL import Image
-
 from vibeocr.backend.supervisor.inference.budgets import InputItem
 from vibeocr.backend.supervisor.inference.paddle_adapter import PaddlePipelineAdapter
 from vibeocr.runtime_contracts import PipelineSpec, SettingsSnapshot
@@ -112,7 +111,11 @@ def test_capability_real_batch_detection_returns_true_when_registry_has_batch(
 
     adapter = PaddlePipelineAdapter(service=_FakeService(), pipeline_name="OCR")
     # The cache must be bypassed: use a fresh pipeline name.
-    cap = adapter.capabilities(__import__("vibeocr.runtime_contracts", fromlist=["PipelineSelection"]).PipelineSelection("OCR"))
+    cap = adapter.capabilities(
+        __import__(
+            "vibeocr.runtime_contracts", fromlist=["PipelineSelection"]
+        ).PipelineSelection("OCR")
+    )
     assert cap.real_batch is True
 
 
@@ -183,8 +186,13 @@ def test_release_idle_calls_release_when_manager_present_no_pipeline() -> None:
             released.append({"release_one": pipeline})
 
         def status(self):  # type: ignore[no-untyped-def]
-            return {"loaded_pipelines": [], "pipeline_ttls": {}, "active_counts": {},
-                    "pinned_pipelines": [], "last_used_unix_ms": {}}
+            return {
+                "loaded_pipelines": [],
+                "pipeline_ttls": {},
+                "active_counts": {},
+                "pinned_pipelines": [],
+                "last_used_unix_ms": {},
+            }
 
         def shutdown(self) -> None:
             return
@@ -207,8 +215,13 @@ def test_release_idle_calls_release_one_when_pipeline_given() -> None:
             released.append(f"release_one:{pipeline}")
 
         def status(self):  # type: ignore[no-untyped-def]
-            return {"loaded_pipelines": [], "pipeline_ttls": {}, "active_counts": {},
-                    "pinned_pipelines": [], "last_used_unix_ms": {}}
+            return {
+                "loaded_pipelines": [],
+                "pipeline_ttls": {},
+                "active_counts": {},
+                "pinned_pipelines": [],
+                "last_used_unix_ms": {},
+            }
 
         def shutdown(self) -> None:
             return
@@ -285,6 +298,7 @@ def test_recognize_many_converts_non_rgb_image_to_rgb() -> None:
 
 def test_residency_status_marks_pinned_and_soft_ttl_entries() -> None:
     """A full status dict yields PINNED + SOFT_TTL entries with remaining TTL."""
+
     class _Manager:
         def status(self):  # type: ignore[no-untyped-def]
             return {

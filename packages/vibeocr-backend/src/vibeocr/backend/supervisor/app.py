@@ -20,7 +20,6 @@ from fastapi.routing import APIRoute
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import TypeAdapter, ValidationError
-
 from vibeocr.backend.ipc.schemas import ProgressEvent, ProgressPhase
 from vibeocr.runtime_contracts.generated import (
     ALL_CAPABILITIES,

@@ -84,7 +84,6 @@ def test_recognize_formula_extracts_from_dict_result():
     assert "$$" in result.markdown_text
 
 
-
 def test_recognize_formula_with_preprocessed_output_img():
     """doc_preprocessor_res 含 output_img 时提取预处理图与角度（line 92-103）。"""
     import numpy as np

@@ -205,17 +205,41 @@ class TestExtractV2TextBranches:
     """覆盖 _extract_v2_text 的 math_content / list_items / code_body / text 回退分支。"""
 
     def test_v2_math_content_string(self):
-        raw = [[{"type": "equation_interline", "content": {"math_content": "a^2+b^2"}, "bbox": [0, 0, 10, 10]}]]
+        raw = [
+            [
+                {
+                    "type": "equation_interline",
+                    "content": {"math_content": "a^2+b^2"},
+                    "bbox": [0, 0, 10, 10],
+                }
+            ]
+        ]
         result = normalize_content_list(raw)
         assert result[0]["text"] == "a^2+b^2"
 
     def test_v2_list_items(self):
-        raw = [[{"type": "list", "content": {"list_items": ["one", "two"]}, "bbox": [0, 0, 10, 10]}]]
+        raw = [
+            [
+                {
+                    "type": "list",
+                    "content": {"list_items": ["one", "two"]},
+                    "bbox": [0, 0, 10, 10],
+                }
+            ]
+        ]
         result = normalize_content_list(raw)
         assert result[0]["text"] == "one two"
 
     def test_v2_code_body(self):
-        raw = [[{"type": "code", "content": {"code_body": "print(1)"}, "bbox": [0, 0, 10, 10]}]]
+        raw = [
+            [
+                {
+                    "type": "code",
+                    "content": {"code_body": "print(1)"},
+                    "bbox": [0, 0, 10, 10],
+                }
+            ]
+        ]
         result = normalize_content_list(raw)
         assert result[0]["text"] == "print(1)"
 
@@ -257,7 +281,13 @@ class TestExtractLegacyTextBranches:
         assert len(result[0]["text"]) == 200
 
     def test_legacy_table_caption_and_body(self):
-        raw = [{"type": "table", "table_caption": ["T1"], "table_body": "<table><tr><td>A</td></tr></table>"}]
+        raw = [
+            {
+                "type": "table",
+                "table_caption": ["T1"],
+                "table_body": "<table><tr><td>A</td></tr></table>",
+            }
+        ]
         result = normalize_content_list(raw)
         assert result[0]["text"].startswith("T1")
         assert "A" in result[0]["text"]
@@ -265,10 +295,16 @@ class TestExtractLegacyTextBranches:
 
 def test_v2_content_list_with_non_dict_item_is_skipped():
     """title_content list 含非 dict 元素时跳过该元素（line 124->123 partial）。"""
-    raw = [[{
-        "type": "title",
-        "content": {"title_content": ["str-item", {"type": "text", "content": "Valid"}]},
-        "bbox": [0, 0, 10, 10],
-    }]]
+    raw = [
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": ["str-item", {"type": "text", "content": "Valid"}]
+                },
+                "bbox": [0, 0, 10, 10],
+            }
+        ]
+    ]
     result = normalize_content_list(raw)
     assert result[0]["text"] == "Valid"

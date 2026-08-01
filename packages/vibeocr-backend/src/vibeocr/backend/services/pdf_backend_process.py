@@ -32,7 +32,6 @@ import fitz
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-
 from vibeocr.backend.ipc.schemas import (
     AddTextLayerRequest,
     BatchAddTextLayerRequest,
@@ -85,6 +84,7 @@ def _get_registry() -> SessionRegistry:
 
 
 # ---- 镜像 / diff 构造 ---------------------------------------------------
+
 
 def _text_layer_to_mirror(tl: TextLayerInfo) -> TextLayerInfoMirror:
     return TextLayerInfoMirror(
@@ -148,7 +148,11 @@ def _diff_pages(
 ) -> ModelDiff:
     """增量页 diff(内容变更:旋转/加文字层/摆正/编辑块)。"""
     return ModelDiff(
-        replaced_pages=[_page_to_mirror(doc_model.pages[p]) for p in pages if 0 <= p < len(doc_model.pages)],
+        replaced_pages=[
+            _page_to_mirror(doc_model.pages[p])
+            for p in pages
+            if 0 <= p < len(doc_model.pages)
+        ],
         invalidated_thumbnails=invalidate_thumbnails or [],
         modified_flag=modified,
     )
@@ -163,7 +167,9 @@ def _diff_pages(
 _RENDER_SEMAPHORE = threading.Semaphore(8)
 
 
-def _render_page_pixels(file_path: str, page_index: int, dpi: float) -> tuple[bytes, int, int]:
+def _render_page_pixels(
+    file_path: str, page_index: int, dpi: float
+) -> tuple[bytes, int, int]:
     """打开独立 fitz.Document 栅格化单页，返回 (samples, width, height)。
 
     PyMuPDF 同一 Document 实例并发访问会段错误；不同 Document 实例（各自
@@ -200,6 +206,7 @@ def _render_page_pixels(file_path: str, page_index: int, dpi: float) -> tuple[by
 
 # ---- Session 注册表 -----------------------------------------------------
 
+
 @dataclass
 class BackendSession:
     session_id: str
@@ -231,7 +238,9 @@ class SessionRegistry:
         sid = uuid.uuid4().hex[:16]
         # fitz.open + 占位 PdfDocument(轻量,不逐页读)
         doc, pdf_document = PdfService.open_doc(file_path)
-        session = BackendSession(session_id=sid, file_path=file_path, doc=doc, pdf_document=pdf_document)
+        session = BackendSession(
+            session_id=sid, file_path=file_path, doc=doc, pdf_document=pdf_document
+        )
         with self._lock:
             self._sessions[sid] = session
         return session
@@ -240,7 +249,9 @@ class SessionRegistry:
         with self._lock:
             s = self._sessions.get(session_id)
         if s is None:
-            raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
+            raise HTTPException(
+                status_code=404, detail=f"session not found: {session_id}"
+            )
         # CLOSING/CLOSED 状态拒绝新操作，避免 close 与新请求并发
         if s.state != "OPEN":
             raise HTTPException(
@@ -296,6 +307,7 @@ def _fitz_op(session: BackendSession):
 
 # ---- FastAPI 应用 -------------------------------------------------------
 
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     logger.info("[pdf-backend] 服务启动")
@@ -313,7 +325,10 @@ app = FastAPI(title="VibeOCR PDF Backend", lifespan=_lifespan)
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     import os
-    return HealthResponse(status="ok", sessions=_get_registry().count(), pid=os.getpid())
+
+    return HealthResponse(
+        status="ok", sessions=_get_registry().count(), pid=os.getpid()
+    )
 
 
 @app.post("/session/open", response_model=OpenResponse)
@@ -325,7 +340,9 @@ def session_open(req: OpenRequest) -> OpenResponse:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"打开失败: {e}") from e
-    return OpenResponse(session_id=session.session_id, model=_doc_to_mirror(session.pdf_document))
+    return OpenResponse(
+        session_id=session.session_id, model=_doc_to_mirror(session.pdf_document)
+    )
 
 
 @app.post("/session/{sid}/close", response_model=EmptyOk)
@@ -343,15 +360,14 @@ def session_model(sid: str) -> PdfDocumentMirror:
 
 # ---- 后台逐页文字层检测(打开后流式)----------------------------------
 
+
 def _detect_one_page(session: BackendSession, i: int) -> PdfPageInfo:
     """检测单页文字层/扫描/几何,写入 session model 并返回 info。"""
     with session.fitz_lock:
         rotation = PdfService.page_rotation(session.doc, i)
         page_rect = PdfService.page_rect(session.doc, i)
         has_text_layer = bool(session.doc[i].get_text("text").strip())
-        is_scanned = (
-            not has_text_layer and PdfService.is_page_scanned(session.doc, i)
-        )
+        is_scanned = not has_text_layer and PdfService.is_page_scanned(session.doc, i)
     info = PdfPageInfo(
         page_index=i,
         rotation=rotation,
@@ -409,6 +425,7 @@ def session_load(sid: str) -> StreamingResponse:
 
 # ---- 渲染 ---------------------------------------------------------------
 
+
 @app.post("/session/{sid}/render_thumbnail")
 def render_thumbnail(sid: str, req: RenderThumbnailRequest) -> StreamingResponse:
     """渲染缩略图,返回 PNG 字节流。
@@ -427,6 +444,7 @@ def render_thumbnail(sid: str, req: RenderThumbnailRequest) -> StreamingResponse
             )
         # 锁外:PIL 缩放 + PNG 编码(CPU 密集,无 fitz 调用,可并行)
         from PIL import Image
+
         img = Image.frombytes("RGB", (width, height), samples)
         img.thumbnail((req.size, req.size), Image.LANCZOS)
         buf = io.BytesIO()
@@ -452,11 +470,10 @@ def render_preview(sid: str, req: RenderPreviewRequest) -> StreamingResponse:
     s = _get_registry().get(sid)
     try:
         with _fitz_op(s):
-            samples, width, height = _render_page_pixels(
-                s.file_path, req.page, req.dpi
-            )
+            samples, width, height = _render_page_pixels(s.file_path, req.page, req.dpi)
         # 锁外:PIL 转 PNG(CPU 密集,无 fitz 调用,可并行)
         from PIL import Image
+
         img = Image.frombytes("RGB", (width, height), samples)
         buf = io.BytesIO()
         img.save(buf, "PNG")
@@ -468,7 +485,9 @@ def render_preview(sid: str, req: RenderPreviewRequest) -> StreamingResponse:
 
 
 @app.post("/session/{sid}/detect_text_layers", response_model=DetectTextLayersResponse)
-def detect_text_layers(sid: str, req: DetectTextLayersRequest) -> DetectTextLayersResponse:
+def detect_text_layers(
+    sid: str, req: DetectTextLayersRequest
+) -> DetectTextLayersResponse:
     s = _get_registry().get(sid)
     try:
         with s.fitz_lock:
@@ -486,15 +505,21 @@ def detect_text_layers(sid: str, req: DetectTextLayersRequest) -> DetectTextLaye
 
 # ---- 变更操作 -----------------------------------------------------------
 
+
 @app.post("/session/{sid}/rotate", response_model=MutateResponse)
 def rotate_pages(sid: str, req: RotateRequest) -> MutateResponse:
     s = _get_registry().get(sid)
     try:
         with s.fitz_lock:
             PdfService.rotate_pages(s.doc, s.pdf_document, req.pages, req.angle)
-        return MutateResponse(diff=_diff_pages(
-            s.pdf_document, req.pages, invalidate_thumbnails=req.pages, modified=True
-        ))
+        return MutateResponse(
+            diff=_diff_pages(
+                s.pdf_document,
+                req.pages,
+                invalidate_thumbnails=req.pages,
+                modified=True,
+            )
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"旋转失败: {e}") from e
 
@@ -515,7 +540,9 @@ def insert_blank(sid: str, req: InsertBlankRequest) -> MutateResponse:
     s = _get_registry().get(sid)
     try:
         with s.fitz_lock:
-            PdfService.insert_blank_page(s.doc, s.pdf_document, req.after_index, req.width, req.height)
+            PdfService.insert_blank_page(
+                s.doc, s.pdf_document, req.after_index, req.width, req.height
+            )
         return MutateResponse(diff=_diff_full(s.pdf_document))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"插入空白页失败: {e}") from e
@@ -526,7 +553,9 @@ def insert_from(sid: str, req: InsertFromRequest) -> MutateResponse:
     s = _get_registry().get(sid)
     try:
         with s.fitz_lock:
-            PdfService.insert_pages_from(s.doc, s.pdf_document, req.source_path, req.after_index)
+            PdfService.insert_pages_from(
+                s.doc, s.pdf_document, req.source_path, req.after_index
+            )
         return MutateResponse(diff=_diff_full(s.pdf_document))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"插入页失败: {e}") from e
@@ -584,21 +613,27 @@ def add_text_layer(sid: str, req: AddTextLayerRequest) -> MutateResponse:
         )
         with s.fitz_lock:
             PdfService.add_text_layer(
-                s.doc, s.pdf_document, req.page, ocr_result,
+                s.doc,
+                s.pdf_document,
+                req.page,
+                ocr_result,
                 pdf_settings=_settings_from_dict(req.pdf_settings),
                 overwrite=req.overwrite,
             )
-        return MutateResponse(diff=_diff_pages(
-            s.pdf_document, [req.page], invalidate_thumbnails=[req.page], modified=True
-        ))
+        return MutateResponse(
+            diff=_diff_pages(
+                s.pdf_document,
+                [req.page],
+                invalidate_thumbnails=[req.page],
+                modified=True,
+            )
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"加文字层失败: {e}") from e
 
 
 @app.post("/session/{sid}/add_text_layer_batch", response_model=MutateResponse)
-def add_text_layer_batch(
-    sid: str, req: BatchAddTextLayerRequest
-) -> MutateResponse:
+def add_text_layer_batch(sid: str, req: BatchAddTextLayerRequest) -> MutateResponse:
     """批量写 OCR 文字层，一批页共享单一聚合子集字体。
 
     与逐页 add_text_layer 的区别：把本批所有页字符聚合一次解析子集字体，
@@ -609,16 +644,16 @@ def add_text_layer_batch(
     （崩溃只丢最后一批）。extra.saved 标记是否成功落盘（False=回滚，调用方不写 sidecar）。
     """
     s = _get_registry().get(sid)
-    pages_data = [
-        {"page": p.page, "ocr_result": p.ocr_result} for p in req.pages
-    ]
+    pages_data = [{"page": p.page, "ocr_result": p.ocr_result} for p in req.pages]
     # 写层与落盘分离：写层成功后，落盘失败（文件占用/磁盘满/备份失败）不应
     # 导致整批 500（文字层已在内存 doc 中，用户可手动保存）。落盘失败仅记
     # 日志并返回 extra.saved=False，调用方不写 sidecar。
     try:
         with s.fitz_lock:
             results = PdfService.add_text_layer_batch(
-                s.doc, s.pdf_document, pages_data,
+                s.doc,
+                s.pdf_document,
+                pages_data,
                 pdf_settings=_settings_from_dict(req.pdf_settings),
                 overwrite=req.overwrite,
                 cancel_check=s.cancel_event.is_set,
@@ -650,9 +685,7 @@ def add_text_layer_batch(
                 # _compress_in_place 失败会 close 原 doc（无法恢复原对象），
                 # 需从备份回滚后的文件重新打开以保证 s.doc 始终可用。
                 try:
-                    s.doc = PdfService._compress_in_place(
-                        s.doc, save_path, clean=False
-                    )
+                    s.doc = PdfService._compress_in_place(s.doc, save_path, clean=False)
                     saved = True
                 except Exception as e2:
                     logger.error(
@@ -675,7 +708,8 @@ def add_text_layer_batch(
             s.pdf_document.is_modified = False
     return MutateResponse(
         diff=_diff_pages(
-            s.pdf_document, written_pages,
+            s.pdf_document,
+            written_pages,
             invalidate_thumbnails=written_pages,
             modified=not (req.save and saved),
         ),
@@ -689,20 +723,29 @@ def rewrite_text_layer(sid: str, req: RewriteTextLayerRequest) -> MutateResponse
     try:
         blocks = [
             TextBlock(
-                text=b.text, score=b.score, bbox=b.bbox, polygon=b.polygon,
-                page_idx=b.page_idx, is_manually_edited=b.is_manually_edited,
-                label=b.label, order=b.order,
+                text=b.text,
+                score=b.score,
+                bbox=b.bbox,
+                polygon=b.polygon,
+                page_idx=b.page_idx,
+                is_manually_edited=b.is_manually_edited,
+                label=b.label,
+                order=b.order,
             )
             for b in req.text_blocks
         ]
         with s.fitz_lock:
             PdfService.rewrite_text_layer(
-                s.doc, s.pdf_document, req.page, blocks, req.preproc_angle,
+                s.doc,
+                s.pdf_document,
+                req.page,
+                blocks,
+                req.preproc_angle,
                 pdf_settings=_settings_from_dict(req.pdf_settings),
             )
-        return MutateResponse(diff=_diff_pages(
-            s.pdf_document, [req.page], modified=True
-        ))
+        return MutateResponse(
+            diff=_diff_pages(s.pdf_document, [req.page], modified=True)
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"重写文字层失败: {e}") from e
 
@@ -719,12 +762,15 @@ def update_block_text(sid: str, req: UpdateBlockTextRequest) -> MutateResponse:
                 b.text = req.new_text
                 b.is_manually_edited = True
                 s.pdf_document.is_modified = True
-        return MutateResponse(diff=_diff_pages(s.pdf_document, [req.page], modified=True))
+        return MutateResponse(
+            diff=_diff_pages(s.pdf_document, [req.page], modified=True)
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新块文字失败: {e}") from e
 
 
 # ---- 流式进度操作 -------------------------------------------------------
+
 
 def _stream_generator(gen: Iterator[ProgressEvent]) -> StreamingResponse:
     """把 ProgressEvent 生成器逐条序列化为一行一 JSON（真流式模式）。
@@ -777,17 +823,26 @@ def delete_text_layers(sid: str, req: PageListRequest) -> StreamingResponse:
                 if has_text and residual:
                     residual_pages.append(page)
                 yield ProgressEvent(
-                    phase=ProgressPhase.DELETE, current=n + 1, total=total,
-                    page_index=page, page_payload=payload,
+                    phase=ProgressPhase.DELETE,
+                    current=n + 1,
+                    total=total,
+                    page_index=page,
+                    page_payload=payload,
                 )
             except Exception as e:
                 logger.error("[pdf-backend] delete layer page %d: %s", page, e)
                 yield ProgressEvent(
-                    phase=ProgressPhase.DELETE, current=n + 1, total=total,
-                    page_index=page, page_payload=None,
+                    phase=ProgressPhase.DELETE,
+                    current=n + 1,
+                    total=total,
+                    page_index=page,
+                    page_payload=None,
                 )
         yield ProgressEvent(
-            phase=ProgressPhase.DELETE, current=total, total=total, message="done",
+            phase=ProgressPhase.DELETE,
+            current=total,
+            total=total,
+            message="done",
             page_payload={"residual_pages": residual_pages},
         )
 
@@ -801,7 +856,9 @@ def save(sid: str, req: SaveRequest) -> SaveResponse:
     try:
         with s.fitz_lock:
             result = PdfService.save_with_rewrite(
-                s.doc, s.pdf_document, path=req.path,
+                s.doc,
+                s.pdf_document,
+                path=req.path,
                 pdf_settings=_settings_from_dict(req.pdf_settings),
                 rewrite_text_layers=req.rewrite_text_layers,
             )
@@ -832,7 +889,9 @@ def deskew(sid: str, req: PageListRequest) -> MutateResponse:
     主进程 → /render_preview 取图 → OCR 识别得 angle → /rotate 纠正。
     本路由保留供未来后端内部跑 OCR 时扩展。
     """
-    raise HTTPException(status_code=501, detail="deskew 由主进程编排(渲染+OCR+旋转三步)")
+    raise HTTPException(
+        status_code=501, detail="deskew 由主进程编排(渲染+OCR+旋转三步)"
+    )
 
 
 @app.post("/session/{sid}/cancel", response_model=EmptyOk)
@@ -851,17 +910,20 @@ def reset_cancel(sid: str) -> EmptyOk:
 
 # ---- 辅助 ---------------------------------------------------------------
 
+
 def _settings_from_dict(d: dict | None):
     """dict → PdfGlobalSettings。"""
     if d is None:
         return None
     from vibeocr.backend.models.pdf_ocr_options import PdfGlobalSettings
+
     if hasattr(PdfGlobalSettings, "from_dict"):
         return PdfGlobalSettings.from_dict(d)
     return PdfGlobalSettings(**d)
 
 
 # ---- 入口 ---------------------------------------------------------------
+
 
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -890,5 +952,7 @@ def main() -> None:
     uvicorn.run(app, host=args.host, port=port, log_level=args.log_level)
 
 
-if __name__ == "__main__":  # pragma: no cover - 入口守卫，仅脚本直接执行时触发，单元测试无法覆盖
+if (
+    __name__ == "__main__"
+):  # pragma: no cover - 入口守卫，仅脚本直接执行时触发，单元测试无法覆盖
     main()

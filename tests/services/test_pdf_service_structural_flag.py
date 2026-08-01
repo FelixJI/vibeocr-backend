@@ -1,7 +1,6 @@
 """结构性操作应置 has_structural_change=True，纯文字层/旋转操作不置。"""
 
 import fitz
-
 from vibeocr.backend.models.pdf_document import PdfDocument, PdfPageInfo
 from vibeocr.backend.services.pdf_service import PdfService
 

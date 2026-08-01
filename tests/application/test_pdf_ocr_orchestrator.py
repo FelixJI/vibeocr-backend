@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from vibeocr.backend.application.pdf_ocr_orchestrator import (
     BatchOutcome,
     LayerSource,
@@ -49,7 +48,9 @@ class FakeBackend:
         self.reset_cancel_calls.append(session_id)
         self._cancelled_session = None
 
-    def render_pages(self, session_id: str, page_indices: list[int], cancel_check: Any) -> list[bytes]:
+    def render_pages(
+        self, session_id: str, page_indices: list[int], cancel_check: Any
+    ) -> list[bytes]:
         self.render_calls.append(list(page_indices))
         return [b"\x89PNG" for _ in page_indices]
 
@@ -79,7 +80,9 @@ class FakeBackend:
         page_indices = [idx for idx, _ in pages]
         self.write_calls.append(page_indices)
         if self._cancelled_session == session_id:
-            return BatchOutcome(saved_pages=(), failed_pages=tuple(page_indices), saved=False)
+            return BatchOutcome(
+                saved_pages=(), failed_pages=tuple(page_indices), saved=False
+            )
         if not self._save_batches:
             return BatchOutcome(
                 saved_pages=(),
@@ -90,7 +93,9 @@ class FakeBackend:
         saved = tuple(idx for idx in page_indices if idx not in self._fail_pages)
         failed = tuple(idx for idx in page_indices if idx in self._fail_pages)
         errors: tuple[str, ...] = ("disk full",) if failed else ()
-        return BatchOutcome(saved_pages=saved, failed_pages=failed, saved=save, write_errors=errors)
+        return BatchOutcome(
+            saved_pages=saved, failed_pages=failed, saved=save, write_errors=errors
+        )
 
     def compress(self, session_id: str, cancel_check: Any) -> bool:
         self.compress_calls += 1
@@ -118,11 +123,21 @@ def isolated_sidecar(tmp_path, monkeypatch):
 
 
 def test_project_layer_source_precedence():
-    assert project_layer_source(had_native_layer=False, ocr_saved=False) == LayerSource.NONE
-    assert project_layer_source(had_native_layer=True, ocr_saved=False) == LayerSource.NATIVE
-    assert project_layer_source(had_native_layer=False, ocr_saved=True) == LayerSource.OCR
+    assert (
+        project_layer_source(had_native_layer=False, ocr_saved=False)
+        == LayerSource.NONE
+    )
+    assert (
+        project_layer_source(had_native_layer=True, ocr_saved=False)
+        == LayerSource.NATIVE
+    )
+    assert (
+        project_layer_source(had_native_layer=False, ocr_saved=True) == LayerSource.OCR
+    )
     # OCR-saved takes precedence over native.
-    assert project_layer_source(had_native_layer=True, ocr_saved=True) == LayerSource.OCR
+    assert (
+        project_layer_source(had_native_layer=True, ocr_saved=True) == LayerSource.OCR
+    )
 
 
 def test_run_ocr_writes_all_pages_and_compresses(isolated_sidecar):
@@ -203,7 +218,9 @@ def test_save_failure_keeps_pages_resumable(isolated_sidecar):
     assert result.failed == 2
     assert result.completed == 0
     # No pages should have been checkpointed (save failed).
-    assert sidecar_mod.restore_pending_pages(file_path) is None or not sidecar_mod.restore_pending_pages(file_path)
+    assert sidecar_mod.restore_pending_pages(
+        file_path
+    ) is None or not sidecar_mod.restore_pending_pages(file_path)
 
 
 def test_failed_pages_aggregate_write_errors_deduplicated(isolated_sidecar):
@@ -246,7 +263,9 @@ def test_cancel_at_page_boundary_keeps_prior_batches(isolated_sidecar):
                 failed_pages=tuple(idx for idx, _ in pages),
                 saved=False,
             )
-        return original_write(session_id, pages, overwrite=overwrite, save=save, cancel_check=cancel_check)
+        return original_write(
+            session_id, pages, overwrite=overwrite, save=save, cancel_check=cancel_check
+        )
 
     backend.write_batch = cancelling_write  # type: ignore[assignment]
     result = orch.run_ocr(

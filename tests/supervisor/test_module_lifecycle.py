@@ -11,7 +11,6 @@ import time
 from typing import TYPE_CHECKING
 
 import pytest
-
 from vibeocr.backend.supervisor.module import (
     ShutdownRequested,
     SupervisorModule,
@@ -101,10 +100,14 @@ class FakeExecutor:
 @pytest.fixture()
 def module(tmp_path: Path) -> SupervisorModule:
     opts = SupervisorOptions(instance_id="sup-test")
-    return SupervisorModule(options=opts, stager_root=tmp_path / "staging", executor=FakeExecutor())
+    return SupervisorModule(
+        options=opts, stager_root=tmp_path / "staging", executor=FakeExecutor()
+    )
 
 
-def _wait_for_terminal(module: SupervisorModule, job_id: str, timeout: float = 2.0) -> None:
+def _wait_for_terminal(
+    module: SupervisorModule, job_id: str, timeout: float = 2.0
+) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
         snap = module.status(job_id)
@@ -143,7 +146,11 @@ def test_result_preserves_input_order(module: SupervisorModule) -> None:
     ref = module.submit(
         kind=JobKind.RECOGNITION,
         priority=JobPriority.INTERACTIVE,
-        uploads=[("first.png", None, b"1"), ("second.png", None, b"2"), ("third.png", None, b"3")],
+        uploads=[
+            ("first.png", None, b"1"),
+            ("second.png", None, b"2"),
+            ("third.png", None, b"3"),
+        ],
     )
     _wait_for_terminal(module, ref.job_id)
     results = module.result(ref.job_id)
@@ -199,7 +206,11 @@ def test_cancel_request_returns_mode_and_eventually_cancells(tmp_path: Path) -> 
                     if record.state is JobState.CANCEL_REQUESTED:
                         record.transition(JobState.CANCELLED)
                 else:
-                    if record.state not in (JobState.COMPLETED, JobState.CANCELLED, JobState.FAILED):
+                    if record.state not in (
+                        JobState.COMPLETED,
+                        JobState.CANCELLED,
+                        JobState.FAILED,
+                    ):
                         record.transition(JobState.COMPLETED)
                 record.append_event("done")
             except Exception as exc:  # pragma: no cover - debug aid
@@ -208,7 +219,9 @@ def test_cancel_request_returns_mode_and_eventually_cancells(tmp_path: Path) -> 
 
     opts = SupervisorOptions(instance_id="sup-test")
     hanging = HangingExecutor()
-    mod = SupervisorModule(options=opts, stager_root=tmp_path / "staging", executor=hanging)
+    mod = SupervisorModule(
+        options=opts, stager_root=tmp_path / "staging", executor=hanging
+    )
     ref = mod.submit(
         kind=JobKind.RECOGNITION,
         priority=JobPriority.INTERACTIVE,
@@ -240,7 +253,9 @@ def test_retry_creates_new_job_for_failed_items(tmp_path: Path) -> None:
             record.append_event("done")
 
     opts = SupervisorOptions(instance_id="sup-test")
-    mod = SupervisorModule(options=opts, stager_root=tmp_path / "staging", executor=FailingExecutor())
+    mod = SupervisorModule(
+        options=opts, stager_root=tmp_path / "staging", executor=FailingExecutor()
+    )
     ref = mod.submit(
         kind=JobKind.RECOGNITION,
         priority=JobPriority.INTERACTIVE,
@@ -314,7 +329,9 @@ def test_delete_rejects_non_terminal(tmp_path: Path) -> None:
             # deliberately do not finish
 
     opts = SupervisorOptions(instance_id="sup-test")
-    mod = SupervisorModule(options=opts, stager_root=tmp_path / "staging", executor=StuckExecutor())
+    mod = SupervisorModule(
+        options=opts, stager_root=tmp_path / "staging", executor=StuckExecutor()
+    )
     ref = mod.submit(
         kind=JobKind.RECOGNITION,
         priority=JobPriority.INTERACTIVE,
@@ -356,7 +373,9 @@ def test_shutdown_releases_all_staging(module: SupervisorModule) -> None:
     module.shutdown_now()
     assert module.shutdown is True
     # staging root should be empty after release_all
-    assert not any(module.stager.root.iterdir()) if module.stager.root.exists() else True
+    assert (
+        not any(module.stager.root.iterdir()) if module.stager.root.exists() else True
+    )
 
 
 # ---------------------------------------------------------------------------

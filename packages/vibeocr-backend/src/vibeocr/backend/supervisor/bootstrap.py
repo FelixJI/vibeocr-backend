@@ -29,6 +29,7 @@ from vibeocr.runtime_contracts.generated import (
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+
 def generate_session_token() -> str:
     """Generate a 256-bit URL-safe session token."""
     return secrets.token_urlsafe(32)

@@ -1,7 +1,6 @@
 # tests/services/test_text_block_processor.py
 """TextBlockProcessor 单元测试（纯函数，无 Qt 依赖）"""
 
-
 from vibeocr.backend.models.ocr_result import TextBlock
 from vibeocr.backend.models.text_block_options import (
     LINE_MODE_KEEP,
@@ -48,9 +47,7 @@ class TestMergeMode:
 
     def test_merge_chinese_indent(self):
         blocks = [_block("第一"), _block("第二")]
-        opts = TextBlockOptions(
-            line_mode=LINE_MODE_MERGE, chinese_indent=True
-        )
+        opts = TextBlockOptions(line_mode=LINE_MODE_MERGE, chinese_indent=True)
         result = TextBlockProcessor.process(blocks, opts)
         assert result.startswith("\u3000\u3000")
         assert result == "\u3000\u3000第一第二"
@@ -66,10 +63,10 @@ class TestSmartMode:
         前块行高 = 100（y:100→200），后段首块 gap = 200 > 1.5*100=150 → 断段。
         """
         return [
-            _block("段1行1", bbox=(0, 100, 100, 200)),   # 行高100
-            _block("段1行2", bbox=(0, 210, 100, 310)),   # gap=10 ≤ 150 同段
-            _block("段2行1", bbox=(0, 511, 100, 611)),   # gap=201 > 150 新段
-            _block("段2行2", bbox=(0, 621, 100, 721)),   # gap=10 同段
+            _block("段1行1", bbox=(0, 100, 100, 200)),  # 行高100
+            _block("段1行2", bbox=(0, 210, 100, 310)),  # gap=10 ≤ 150 同段
+            _block("段2行1", bbox=(0, 511, 100, 611)),  # gap=201 > 150 新段
+            _block("段2行2", bbox=(0, 621, 100, 721)),  # gap=10 同段
         ]
 
     def test_smart_segments_split_by_gap(self):
@@ -132,16 +129,12 @@ class TestEdgeCases:
 
     def test_drop_blank_blocks(self):
         blocks = [_block("甲"), _block("   "), _block(""), _block("乙")]
-        opts = TextBlockOptions(
-            line_mode=LINE_MODE_MERGE, drop_blank_blocks=True
-        )
+        opts = TextBlockOptions(line_mode=LINE_MODE_MERGE, drop_blank_blocks=True)
         assert TextBlockProcessor.process(blocks, opts) == "甲乙"
 
     def test_keep_blank_blocks_when_disabled(self):
         blocks = [_block("甲"), _block("   "), _block("乙")]
-        opts = TextBlockOptions(
-            line_mode=LINE_MODE_KEEP, drop_blank_blocks=False
-        )
+        opts = TextBlockOptions(line_mode=LINE_MODE_KEEP, drop_blank_blocks=False)
         # 空白块保留，按原样 join
         assert TextBlockProcessor.process(blocks, opts) == "甲\n   \n乙"
 

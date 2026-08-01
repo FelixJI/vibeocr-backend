@@ -7,7 +7,6 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-
 from vibeocr.backend.services.pipeline_cache_manager import (
     FALLBACK_MAX_HEAVY,
     VRAM_TIER_8GB,
@@ -246,9 +245,7 @@ def test_release_one_missing_is_idempotent():
 
 
 def test_configured_pin_blocks_ttl_and_explicit_release() -> None:
-    mgr = _make_legacy_manager(
-        max_heavy=2, ttls={"PP-StructureV3": 1}
-    )
+    mgr = _make_legacy_manager(max_heavy=2, ttls={"PP-StructureV3": 1})
     mgr._service._pipelines = {"PP-StructureV3": object()}
     mgr._last_used = {"PP-StructureV3": 0.0}
     mgr.configure_residency(
@@ -369,9 +366,7 @@ def test_persistent_pipeline_never_evicted_by_ttl() -> None:
 
 def test_ttl_evicts_after_expiry() -> None:
     """ttl=300 的管道超时后被回收。"""
-    mgr, svc = _make_manager(
-        {"PP-StructureV3": object()}, {"PP-StructureV3": 300}
-    )
+    mgr, svc = _make_manager({"PP-StructureV3": object()}, {"PP-StructureV3": 300})
     mgr.touch("PP-StructureV3", now=1000.0)
     assert mgr.evict_idle(now=1000.0 + 100) == []
     assert mgr.evict_idle(now=1000.0 + 301) == ["PP-StructureV3"]

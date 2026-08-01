@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-
 from vibeocr.backend.supervisor.jobs.staging import (
     InputStager,
     StagedInput,
@@ -92,7 +91,11 @@ def test_release_all_removes_everything(stager: InputStager) -> None:
     stager.stage_job("job-2", _uploads(10))
     removed = stager.release_all()
     assert removed == 2
-    assert not any(p.is_dir() for p in stager.root.iterdir()) if stager.root.exists() else True
+    assert (
+        not any(p.is_dir() for p in stager.root.iterdir())
+        if stager.root.exists()
+        else True
+    )
 
 
 def test_cleanup_stale_leaves_known_dirs(stager: InputStager) -> None:

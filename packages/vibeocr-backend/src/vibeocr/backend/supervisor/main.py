@@ -79,7 +79,9 @@ def _build_uvicorn_config(
     )
 
 
-def run_supervisor(argv: list[str] | None = None) -> int:  # pragma: no cover - entry point
+def run_supervisor(
+    argv: list[str] | None = None,
+) -> int:  # pragma: no cover - entry point
     """Run the supervisor until interrupted. Returns process exit code."""
     instance_id = new_instance_id()
     token = token_from_environment()
