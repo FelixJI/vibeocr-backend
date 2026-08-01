@@ -11,6 +11,25 @@ from typing import Any
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _PROFILES = frozenset({"win-x64-cpu", "win-x64-cu126"})
 
+# 物理 runtime 目录名 / runtime_id 仅取 manifest 哈希前 6 位，避免安装命中
+# Windows MAX_PATH（完整 64 位哈希会让 onnxruntime 等深路径超出 260 字符）。
+# 完整哈希仍保留在 component-lock 的 runtime_manifest_sha256 字段做密码学校验，
+# 与本标识彻底解耦。前缀在单产品 store 内足以避免内容寻址冲突（16^6 ≈ 16M）。
+_RUNTIME_PREFIX_LEN = 6
+_RUNTIME_PREFIX_RE = re.compile(r"^[0-9a-f]{%d}$" % _RUNTIME_PREFIX_LEN)
+
+
+def runtime_id_prefix(manifest_sha256: str) -> str:
+    """runtime 标识前缀 = manifest 哈希前 6 位。
+
+    用于物理目录名与 ``runtime_id``（日志、lock 文件名、GC 寻址）。完整 64 位
+    哈希仅留在 component-lock 的 ``runtime_manifest_sha256`` 字段做密码学完整性
+    校验，与本标识解耦。
+    """
+    if not _SHA256_RE.fullmatch(manifest_sha256):
+        raise LayoutError("manifest_sha256 must be lowercase SHA-256")
+    return manifest_sha256[:_RUNTIME_PREFIX_LEN]
+
 
 class LayoutError(ValueError):
     """Raised when a portable layout could escape or is ambiguous."""
@@ -104,6 +123,7 @@ def resolve_runtime_store(
     path and registered product id are supplied and validate.
     """
     product = Path(product_root).resolve()
+    # 校验完整哈希（防篡改），但物理目录用 6 位前缀（见 runtime_id_prefix）。
     if not _SHA256_RE.fullmatch(manifest_sha256):
         raise LayoutError("manifest_sha256 must be lowercase SHA-256")
     if profile not in _PROFILES:
@@ -127,7 +147,7 @@ def resolve_runtime_store(
     models = store / "models"
     locks = store / "locks"
     state = store / "state"
-    runtime = runtimes / manifest_sha256 / profile
+    runtime = runtimes / runtime_id_prefix(manifest_sha256) / profile
     model = models
     return RuntimeStorePaths(
         product_root=product,
@@ -169,4 +189,5 @@ __all__ = [
     "RuntimeStorePaths",
     "resolve_model_path",
     "resolve_runtime_store",
+    "runtime_id_prefix",
 ]
