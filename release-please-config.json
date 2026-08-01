@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "include-v-in-tag": true,
+  "include-component-in-tag": false,
+  "pull-request-title-pattern": "chore(main): release ${version}",
+  "draft": true,
+  "force-tag-creation": true,
+  "packages": {
+    ".": {
+      "package-name": "vibeocr-backend",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "packages/vibeocr-backend/pyproject.toml",
+          "jsonpath": "$.project.version"
+        },
+        {
+          "type": "generic",
+          "path": "packages/vibeocr-backend/src/vibeocr/backend/__init__.py"
+        },
+        {
+          "type": "json",
+          "path": "repository.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    }
+  }
+}

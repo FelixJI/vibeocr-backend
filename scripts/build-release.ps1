@@ -1,7 +1,21 @@
 [CmdletBinding()]
-param()
+param(
+    [string]$Version
+)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$projectFile = Join-Path $root 'packages/vibeocr-backend/pyproject.toml'
+$projectVersion = (
+    python -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path(r'$projectFile').read_text(encoding='utf-8'))['project']['version'])"
+).Trim()
+if (-not $Version) {
+    $Version = $projectVersion
+} else {
+    $Version = $Version.TrimStart('v')
+}
+if ($Version -ne $projectVersion) {
+    throw "Release version '$Version' does not match project version '$projectVersion'"
+}
 $artifacts = Join-Path $root 'artifacts'
 $build = Join-Path $root '.release-build'
 $inputs = Join-Path $root '.release-input'
@@ -50,13 +64,13 @@ python -m build --wheel --no-isolation (Join-Path $root 'packages/vibeocr-backen
 if ($LASTEXITCODE -ne 0) { throw 'Backend wheel build failed' }
 python (Join-Path $root 'scripts/build_runtime_installer.py') `
   --output-dir $build --work-dir (Join-Path $build 'installer-work') `
-  --backend-version 0.7.0
+  --backend-version $Version
 if ($LASTEXITCODE -ne 0) { throw 'Runtime installer build failed' }
-$backendWheel = Get-ChildItem -LiteralPath $build -Filter 'vibeocr_backend-0.7.0-*.whl' |
+$backendWheel = Get-ChildItem -LiteralPath $build -Filter "vibeocr_backend-$Version-*.whl" |
   Select-Object -First 1
 $protocolWheel = Get-ChildItem -LiteralPath $protocol -Filter 'vibeocr_runtime_contracts-2.0.0-*.whl' |
   Select-Object -First 1
-$installerArchive = Get-ChildItem -LiteralPath $build -Filter 'vibeocr-runtime-installer-0.7.0.zip' |
+$installerArchive = Get-ChildItem -LiteralPath $build -Filter "vibeocr-runtime-installer-$Version.zip" |
   Select-Object -First 1
 python (Join-Path $root 'scripts/build_runtime_manifest.py') `
   --backend-wheel $backendWheel.FullName `
@@ -66,14 +80,14 @@ python (Join-Path $root 'scripts/build_runtime_manifest.py') `
   --cu126-lock (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-cu126/requirements-win-x64-cu126.lock') `
   --python-archive $pythonArchive --python-version $runtimeLock.version `
   --python-source-url $runtimeLock.source_url `
-  --installer-archive $installerArchive.FullName --backend-version 0.7.0 `
+  --installer-archive $installerArchive.FullName --backend-version $Version `
   --source-commit (git -C $root rev-parse HEAD).Trim() `
   --build-workflow 'github.com/FelixJI/vibeocr-backend/.github/workflows/release.yml' `
   --output-dir $artifacts
 if ($LASTEXITCODE -ne 0) { throw 'Runtime manifest build failed' }
 Remove-Item -LiteralPath (Join-Path $artifacts 'SHA256SUMS') -Force
 python (Join-Path $root 'scripts/build_spdx_sbom.py') --artifacts-dir $artifacts `
-  --repository-name FelixJI/vibeocr-backend --version 0.7.0
+  --repository-name FelixJI/vibeocr-backend --version $Version
 if ($LASTEXITCODE -ne 0) { throw 'SBOM build failed' }
 python (Join-Path $root 'scripts/build_release_checksums.py') $artifacts
 if ($LASTEXITCODE -ne 0) { throw 'checksum build failed' }
