@@ -1,8 +1,8 @@
 """Backend-owned portable runtime installer.
 
 The public surface is intentionally small: ``inspect``, ``ensure``, ``repair``
-and ``gc``.  Frontends receive paths and integrity state, never dependency
-names, index URLs or pip arguments.
+and a compatibility ``gc`` no-op.  Frontends receive paths and integrity state,
+never dependency names, index URLs or pip arguments.
 """
 
 from __future__ import annotations
@@ -14,14 +14,12 @@ import re
 import shutil
 import subprocess
 import tarfile
-import time
-import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from vibeocr.backend.runtime_layout import resolve_runtime_store, runtime_id_prefix
+from vibeocr.backend.runtime_layout import resolve_runtime_store
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_manifest import (
     ManifestError,
@@ -147,7 +145,7 @@ def _default_install_runner(
         raise RuntimeInstallError("Python archive has no python.exe")
     lock = manifest.profiles[profile].lock_path
     portable_env = os.environ.copy()
-    cache = partial_root.parent.parent.parent / "state" / "installer-cache"
+    cache = partial_root.parent.parent / "state" / "installer-cache"
     portable_env.update(
         {
             "PIP_CACHE_DIR": str(cache / "pip"),
@@ -295,8 +293,7 @@ class RuntimeInstaller:
 
     @property
     def runtime_id(self) -> str:
-        # 用 6 位前缀而非完整哈希，与物理目录名一致（见 runtime_id_prefix）。
-        return f"{runtime_id_prefix(self.manifest.sha256)}/{self.profile}"
+        return self.profile
 
     def _validate_binding(self) -> None:
         protocol = self.component_lock["protocol"]
@@ -386,7 +383,11 @@ class RuntimeInstaller:
     def _install_locked(self) -> None:
         final = self.paths.runtime_root
         final.parent.mkdir(parents=True, exist_ok=True)
-        partial = final.with_name(f"{final.name}.partial-{uuid.uuid4().hex}")
+        partial = self.paths.runtimes_root / ".installing"
+        if partial.exists():
+            shutil.rmtree(partial)
+        if final.exists():
+            shutil.rmtree(final)
         partial.mkdir(parents=True)
         try:
             python = self._install_runner(partial, self.manifest, self.profile)
@@ -408,11 +409,6 @@ class RuntimeInstaller:
                 json.dumps(marker, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-            if final.exists():
-                if self._integrity_ok():
-                    shutil.rmtree(partial)
-                    return
-                raise RuntimeInstallError("invalid runtime already occupies final path")
             partial.replace(final)
         except Exception:
             shutil.rmtree(partial, ignore_errors=True)
@@ -424,13 +420,7 @@ class RuntimeInstaller:
             timeout=self._lock_timeout,
         )
         with lock:
-            if self.paths.runtime_root.exists() and not self._integrity_ok():
-                quarantine = self.paths.runtime_root.with_name(
-                    f"{self.paths.runtime_root.name}.invalid-{uuid.uuid4().hex}"
-                )
-                self.paths.runtime_root.replace(quarantine)
-            if not self._integrity_ok():
-                self._install_locked()
+            self._install_locked()
         return self._launch()
 
     def _launch(self) -> RuntimeLaunch:
@@ -452,9 +442,8 @@ class RuntimeInstaller:
         )
 
     def acquire_lease(self, *, timeout: float = 0.0) -> RuntimeStoreLock:
-        name = self.runtime_id.replace("/", "-")
         lease = RuntimeStoreLock(
-            self.paths.locks_root / "leases" / f"{name}.lock",
+            self.paths.locks_root / "leases" / f"{self.runtime_id}.lock",
             timeout=timeout,
         )
         lease.acquire()
@@ -463,66 +452,12 @@ class RuntimeInstaller:
     def gc(
         self,
         *,
-        component_locks: Iterable[str | Path],
-        grace_seconds: float = 7 * 86400,
+        component_locks: Iterable[str | Path] = (),
+        grace_seconds: float = 0,
     ) -> list[str]:
-        """Remove unreferenced runtimes, failing closed on any bad lock."""
-        referenced: set[str] = set()
-        try:
-            all_locks = {
-                self.component_lock_path,
-                *(Path(item).resolve() for item in component_locks),
-            }
-            for lock_path in all_locks:
-                value = _load_component_lock(Path(lock_path))
-                # lock 存的是完整 64 位哈希（密码学校验用），GC 比对时取同样的
-                # 6 位前缀，与物理目录名 / runtime_id 保持一致。
-                digest = runtime_id_prefix(value["backend"]["runtime_manifest_sha256"])
-                profile = value["backend"].get("profile")
-                if profile is None:
-                    referenced.update(
-                        f"{digest}/{item}" for item in self.manifest.profiles
-                    )
-                elif profile in self.manifest.profiles:
-                    referenced.add(f"{digest}/{profile}")
-                else:
-                    raise RuntimeInstallError("component lock profile is invalid")
-        except RuntimeInstallError:
-            return []
-
-        removed: list[str] = []
-        now = time.time()
-        with RuntimeStoreLock(
-            self.paths.locks_root / "runtime-store.lock",
-            timeout=self._lock_timeout,
-        ):
-            if not self.paths.runtimes_root.is_dir():
-                return []
-            for digest_root in self.paths.runtimes_root.iterdir():
-                if not digest_root.is_dir() or not digest_root.name.isalnum():
-                    continue
-                for profile_root in digest_root.iterdir():
-                    runtime_id = f"{digest_root.name}/{profile_root.name}"
-                    if runtime_id in referenced or not profile_root.is_dir():
-                        continue
-                    if now - profile_root.stat().st_mtime < grace_seconds:
-                        continue
-                    lease = RuntimeStoreLock(
-                        self.paths.locks_root
-                        / "leases"
-                        / f"{runtime_id.replace('/', '-')}.lock",
-                        timeout=0,
-                    )
-                    try:
-                        lease.acquire()
-                    except RuntimeLockTimeout:
-                        continue
-                    try:
-                        shutil.rmtree(profile_root)
-                        removed.append(runtime_id)
-                    finally:
-                        lease.release()
-        return removed
+        """Keep older frontends compatible; fixed profile paths need no GC."""
+        del component_locks, grace_seconds
+        return []
 
 
 def _emit(value: object) -> None:
@@ -542,18 +477,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--layout-manifest")
     parser.add_argument("--product-id")
-    parser.add_argument(
-        "--component-locks",
-        nargs="*",
-        help="registered component locks used by fail-closed garbage collection",
-    )
+    parser.add_argument("--component-locks", nargs="*")
     parser.add_argument(
         "--referenced-component-lock",
         action="append",
         dest="referenced_component_locks",
-        help="repeatable cross-language alias for one registered component lock",
     )
-    parser.add_argument("--grace-seconds", type=float, default=7 * 86400)
+    parser.add_argument("--grace-seconds", type=float, default=0)
     parser.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
@@ -566,13 +496,12 @@ def main(argv: list[str] | None = None) -> int:
             product_id=args.product_id,
         )
         if args.operation == "gc":
-            locks = (
-                args.referenced_component_locks
-                or args.component_locks
-                or [args.component_lock]
-            )
             result = installer.gc(
-                component_locks=locks,
+                component_locks=(
+                    args.referenced_component_locks
+                    or args.component_locks
+                    or [args.component_lock]
+                ),
                 grace_seconds=args.grace_seconds,
             )
         else:
@@ -581,7 +510,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"error": type(exc).__name__, "message": str(exc)}))
         return 1
     if isinstance(result, list):
-        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        print(json.dumps(result))
     else:
         _emit(result)
     return 0
