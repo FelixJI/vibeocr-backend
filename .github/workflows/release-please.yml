@@ -56,13 +56,20 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"next={version}\n")
       - name: Create or update Release PR
-        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
-        with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-          release-as: ${{ steps.version.outputs.next }}
-          skip-github-release: true
+        # release-please-action v5 silently drops its release-as input when it
+        # loads a manifest config. The matching CLI forwards --release-as to
+        # Manifest.fromManifest, preserving the selected bump and extra-files.
+        shell: bash
+        env:
+          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          npx --yes release-please@17.6.0 release-pr \
+            --token="$RELEASE_PLEASE_TOKEN" \
+            --repo-url="$GITHUB_REPOSITORY" \
+            --target-branch=main \
+            --config-file=release-please-config.json \
+            --manifest-file=.release-please-manifest.json \
+            --release-as="${{ steps.version.outputs.next }}"
 
   draft-release:
     if: github.event_name == 'push'

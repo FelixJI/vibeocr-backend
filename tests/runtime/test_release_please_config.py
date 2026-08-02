@@ -26,3 +26,16 @@ def test_release_please_uses_the_shared_changelog_filter() -> None:
     )
 
     assert config["changelog-sections"] == EXPECTED_CHANGELOG_SECTIONS
+
+
+def test_manual_release_passes_requested_version_to_manifest_cli() -> None:
+    workflow = (ROOT / ".github/workflows/release-please.yml").read_text(
+        encoding="utf-8"
+    )
+    manual_job = workflow.split("  draft-release:", maxsplit=1)[0]
+
+    assert "release-please@17.6.0 release-pr" in manual_job
+    assert '--release-as="${{ steps.version.outputs.next }}"' in manual_job
+    assert "--config-file=release-please-config.json" in manual_job
+    assert "--manifest-file=.release-please-manifest.json" in manual_job
+    assert "googleapis/release-please-action" not in manual_job
