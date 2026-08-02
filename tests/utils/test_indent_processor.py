@@ -1,0 +1,99 @@
+"""indent_processor 中文判定与 Markdown 缩进处理的边缘用例测试。"""
+
+from __future__ import annotations
+
+import pytest
+from vibeocr.backend.utils.indent_processor import IndentConfig, IndentProcessor
+
+
+@pytest.fixture
+def processor() -> IndentProcessor:
+    """默认配置的处理器。"""
+    return IndentProcessor()
+
+
+class TestIsChineseText:
+    """is_chinese_text 边缘用例。"""
+
+    def test_empty_string_false(self, processor: IndentProcessor):
+        """空串返回 False。"""
+        assert processor.is_chinese_text("") is False
+
+    def test_whitespace_only_false(self, processor: IndentProcessor):
+        """纯空白返回 False。"""
+        assert processor.is_chinese_text("   \n\t  ") is False
+
+    def test_pure_english_false(self, processor: IndentProcessor):
+        """纯英文返回 False。"""
+        assert processor.is_chinese_text("This is English text") is False
+
+    def test_pure_chinese_true(self, processor: IndentProcessor):
+        """纯中文返回 True。"""
+        assert processor.is_chinese_text("这是一段中文") is True
+
+    def test_threshold_boundary(self):
+        """阈值边界：刚好等于 chinese_threshold 视为中文。"""
+        proc = IndentProcessor(IndentConfig(chinese_threshold=0.5))
+        # 2 个中文字符 / 4 总字符 = 0.5，命中阈值
+        assert proc.is_chinese_text("中中aa") is True
+        # 1 / 4 = 0.25 低于阈值
+        assert proc.is_chinese_text("中aaa") is False
+
+    def test_mixed_meets_threshold(self, processor: IndentProcessor):
+        """中英混合且中文占比达标视为中文。"""
+        assert processor.is_chinese_text("中文内容 mixed words") is True
+
+
+class TestProcessMarkdown:
+    """process_markdown 边缘用例。"""
+
+    def test_empty_returns_empty(self, processor: IndentProcessor):
+        """空输入返回空串。"""
+        assert processor.process_markdown("") == ""
+
+    def test_chinese_paragraph_wrapped(self, processor: IndentProcessor):
+        """中文段落被包进 zh-paragraph div。"""
+        result = processor.process_markdown("这是一段中文")
+        assert '<div class="zh-paragraph">这是一段中文</div>' in result
+
+    def test_english_paragraph_not_wrapped(self, processor: IndentProcessor):
+        """英文段落不加 div。"""
+        result = processor.process_markdown("plain english text")
+        assert "zh-paragraph" not in result
+
+    def test_table_paragraph_skipped(self, processor: IndentProcessor):
+        """表格段跳过不加 div。"""
+        md = "| 列1 | 列2 |\n|---|---|\n| 值1 | 值2 |"
+        result = processor.process_markdown(md)
+        assert "zh-paragraph" not in result
+
+    def test_list_paragraph_skipped(self, processor: IndentProcessor):
+        """列表段（无序/有序）跳过不加 div。"""
+        md = "- 项目一\n- 项目二"
+        assert "zh-paragraph" not in processor.process_markdown(md)
+        md2 = "1. 第一\n2. 第二"
+        assert "zh-paragraph" not in processor.process_markdown(md2)
+
+    def test_code_block_preserved(self, processor: IndentProcessor):
+        """代码块内容原样保留。"""
+        md = "```python\n中文注释\nprint(1)\n```"
+        result = processor.process_markdown(md)
+        assert "```python" in result
+        assert "中文注释" in result
+        # 代码块内部不应被包成 zh-paragraph
+        assert "zh-paragraph" not in result
+
+    def test_html_block_skipped(self, processor: IndentProcessor):
+        """含 ≥3 个 HTML 块标签的 VLM 输出整段跳过。"""
+        md = "<table><tr><td>中文</td></tr></table>"
+        result = processor.process_markdown(md)
+        assert "zh-paragraph" not in result
+        assert result == md
+
+    def test_few_html_tags_still_processed(self, processor: IndentProcessor):
+        """HTML 块标签 <3 个时不触发跳过，照常处理段落。"""
+        # 仅 2 个块标签，触发段落处理逻辑
+        md = "<div>中文段落内容比较长哦</div>"
+        result = processor.process_markdown(md)
+        # 段落被 strip 处理，div 标签本身不计入表格/列表，照常判断中文
+        assert "中文段落内容比较长哦" in result
