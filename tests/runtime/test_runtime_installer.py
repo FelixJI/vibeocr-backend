@@ -132,7 +132,7 @@ def _release(root: Path) -> tuple[Path, Path]:
             "version": "0.7.0",
             "artifact_sha256": manifest["backend_sha256"],
             "runtime_manifest_sha256": _sha(manifest_path.read_bytes()),
-            "profile": "win-x64-cpu",
+            "accelerator": "cpu",
         },
         "required_capabilities": ["ocr.recognition.v2"],
     }
@@ -245,21 +245,16 @@ def test_shared_layout_requires_explicit_valid_registration(tmp_path: Path) -> N
     local = resolve_runtime_store(
         product,
         manifest_sha256=digest,
-        profile="win-x64-cpu",
     )
     assert local.store_root == product.resolve()
     shared = resolve_runtime_store(
         product,
         manifest_sha256=digest,
-        profile="win-x64-cpu",
         layout_manifest=marker,
         product_id="classic",
     )
     assert shared.store_root == (bundle / "shared").resolve()
-    assert (
-        shared.runtime_root
-        == (bundle / "shared" / "runtimes" / "win-x64-cpu").resolve()
-    )
+    assert shared.runtime_root == (bundle / "shared" / "runtime").resolve()
 
 
 def test_shared_layout_rejects_traversal(tmp_path: Path) -> None:
@@ -281,7 +276,6 @@ def test_shared_layout_rejects_traversal(tmp_path: Path) -> None:
         resolve_runtime_store(
             product,
             manifest_sha256="a" * 64,
-            profile="win-x64-cpu",
             layout_manifest=marker,
             product_id="classic",
         )
@@ -299,18 +293,18 @@ def test_ensure_is_atomic_and_idempotent(tmp_path: Path) -> None:
         product_root=tmp_path / "product",
         component_lock=component,
         runtime_manifest=manifest,
-        profile="win-x64-cpu",
+        accelerator="cpu",
         install_runner=install,
     )
     first = installer.ensure()
     second = installer.ensure()
     assert first == second
     assert len(calls) == 1
-    assert calls == [installer.paths.runtimes_root / ".installing"]
-    assert first.runtime_id == "win-x64-cpu"
+    assert calls == [installer.paths.runtime_root.with_name("runtime.installing")]
     assert Path(first.python_executable).is_file()
-    assert not (installer.paths.runtimes_root / ".installing").exists()
+    assert not installer.paths.runtime_root.with_name("runtime.installing").exists()
     assert installer.inspect().integrity == "verified"
+    assert installer.inspect().accelerator == "cpu"
     portable_path_keys = {
         "VIBEOCR_PRODUCT_ROOT",
         "VIBEOCR_RUNTIME_ROOT",
@@ -340,13 +334,13 @@ def test_failed_install_leaves_no_partial_or_final(tmp_path: Path) -> None:
         product_root=tmp_path / "product",
         component_lock=component,
         runtime_manifest=manifest,
-        profile="win-x64-cpu",
+        accelerator="cpu",
         install_runner=fail,
     )
     with pytest.raises(RuntimeInstallError, match="boom"):
         installer.ensure()
     assert not installer.paths.runtime_root.exists()
-    assert not (installer.paths.runtimes_root / ".installing").exists()
+    assert not installer.paths.runtime_root.with_name("runtime.installing").exists()
 
 
 def test_component_lock_capability_mismatch_is_rejected(tmp_path: Path) -> None:
@@ -359,7 +353,7 @@ def test_component_lock_capability_mismatch_is_rejected(tmp_path: Path) -> None:
             product_root=tmp_path / "product",
             component_lock=component,
             runtime_manifest=manifest,
-            profile="win-x64-cpu",
+            accelerator="cpu",
             install_runner=_fake_install,
         )
 
@@ -376,7 +370,7 @@ def test_component_lock_protocol_manifest_mismatch_is_rejected(
             product_root=tmp_path / "product",
             component_lock=component,
             runtime_manifest=manifest,
-            profile="win-x64-cpu",
+            accelerator="cpu",
             install_runner=_fake_install,
         )
 
@@ -406,7 +400,7 @@ def test_repair_replaces_the_static_runtime_in_place(tmp_path: Path) -> None:
         product_root=tmp_path / "product",
         component_lock=component,
         runtime_manifest=manifest,
-        profile="win-x64-cpu",
+        accelerator="cpu",
         install_runner=install,
     )
     installer.ensure()
@@ -416,33 +410,51 @@ def test_repair_replaces_the_static_runtime_in_place(tmp_path: Path) -> None:
     installer.repair()
 
     assert calls == [
-        installer.paths.runtimes_root / ".installing",
-        installer.paths.runtimes_root / ".installing",
+        installer.paths.runtime_root.with_name("runtime.installing"),
+        installer.paths.runtime_root.with_name("runtime.installing"),
     ]
     assert not original_marker.exists()
     assert installer.paths.runtime_root.is_dir()
 
 
-def test_gc_cli_is_a_compatible_noop_for_static_profile_paths(
+def test_runtime_host_json_contract_selects_and_persists_accelerator(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     manifest, component = _release(tmp_path / "release")
 
-    assert (
-        main(
-            [
-                "gc",
-                "--product-root",
-                str(tmp_path / "product"),
-                "--component-lock",
-                str(component),
-                "--runtime-manifest",
-                str(manifest),
-                "--referenced-component-lock",
-                str(tmp_path / "another-component-lock.json"),
-            ]
-        )
-        == 0
-    )
-    assert json.loads(capsys.readouterr().out) == []
+    request = {
+        "protocol_version": 2,
+        "operation": "inspect",
+        "product_root": str(tmp_path / "product"),
+        "component_lock": str(component),
+        "runtime_manifest": str(manifest),
+        "accelerator": "nvidia_cuda",
+    }
+    assert main(["--request-json", json.dumps(request)]) == 0
+    envelope = json.loads(capsys.readouterr().out)
+    assert envelope["protocol_version"] == 2
+    assert envelope["ok"] is True
+    assert envelope["operation"] == "inspect"
+    assert envelope["state"]["accelerator"] == "nvidia_cuda"
+    assert envelope["state"]["runtime_root"].endswith("runtime")
+    assert "profile" not in envelope["state"]
+
+
+def test_runtime_host_rejects_legacy_profile_field(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    request = {
+        "protocol_version": 2,
+        "operation": "inspect",
+        "product_root": str(tmp_path / "product"),
+        "component_lock": str(component),
+        "runtime_manifest": str(manifest),
+        "profile": "win-x64-cpu",
+    }
+    assert main(["--request-json", json.dumps(request)]) == 1
+    envelope = json.loads(capsys.readouterr().out)
+    assert envelope["ok"] is False
+    assert envelope["error"]["code"] == "invalid_request"

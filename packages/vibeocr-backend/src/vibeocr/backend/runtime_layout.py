@@ -9,7 +9,6 @@ from pathlib import Path, PurePath
 from typing import Any
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_PROFILES = frozenset({"win-x64-cpu", "win-x64-cu126"})
 
 
 class LayoutError(ValueError):
@@ -20,7 +19,6 @@ class LayoutError(ValueError):
 class RuntimeStorePaths:
     product_root: Path
     store_root: Path
-    runtimes_root: Path
     models_root: Path
     locks_root: Path
     state_root: Path
@@ -93,11 +91,10 @@ def resolve_runtime_store(
     product_root: str | Path,
     *,
     manifest_sha256: str,
-    profile: str,
     layout_manifest: str | Path | None = None,
     product_id: str | None = None,
 ) -> RuntimeStorePaths:
-    """Resolve one fixed-profile runtime and model store.
+    """Resolve the single mutable runtime and persistent model store.
 
     With no explicit ``layout_manifest`` the store is entirely inside the
     product directory.  Shared storage is enabled only when both the manifest
@@ -106,9 +103,6 @@ def resolve_runtime_store(
     product = Path(product_root).resolve()
     if not _SHA256_RE.fullmatch(manifest_sha256):
         raise LayoutError("manifest_sha256 must be lowercase SHA-256")
-    if profile not in _PROFILES:
-        raise LayoutError(f"unsupported runtime profile: {profile}")
-
     shared = layout_manifest is not None
     if shared:
         if not product_id:
@@ -123,16 +117,14 @@ def resolve_runtime_store(
             raise LayoutError("product_id requires an explicit layout_manifest")
         store = product
 
-    runtimes = store / "runtimes"
     models = store / "models"
     locks = store / "locks"
     state = store / "state"
-    runtime = runtimes / profile
+    runtime = store / "runtime"
     model = models
     return RuntimeStorePaths(
         product_root=product,
         store_root=store,
-        runtimes_root=runtimes,
         models_root=models,
         locks_root=locks,
         state_root=state,
