@@ -1,7 +1,6 @@
 """delete_text_layers 词级 redact + 循环验证至清零。"""
 
 import fitz
-
 from vibeocr.backend.models.pdf_document import PdfDocument, PdfPageInfo
 from vibeocr.backend.services.pdf_service import PdfService
 
@@ -22,6 +21,7 @@ class TestDeleteTextLayersWordLevel:
         """返回 (deleted_count, rounds_used, has_residual) 三元组。"""
         import pathlib
         import tempfile
+
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "t.pdf"
             _make_pdf_with_text(path, ["Hello World", "Second Line"])
@@ -41,6 +41,7 @@ class TestDeleteTextLayersWordLevel:
         """删除后该页 get_text() 应为空。"""
         import pathlib
         import tempfile
+
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "t.pdf"
             _make_pdf_with_text(path, ["Line A", "Line B", "Line C"])
@@ -65,6 +66,7 @@ class TestDeleteTextLayersWordLevel:
         """删除后 has_text_layer=False, text_layers=[], ocr_text_blocks=[]。"""
         import pathlib
         import tempfile
+
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "t.pdf"
             _make_pdf_with_text(path, ["text"])

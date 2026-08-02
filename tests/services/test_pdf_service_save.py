@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import fitz
-
 from vibeocr.backend.models.ocr_result import OCRResult, TextBlock
 from vibeocr.backend.models.pdf_document import PdfDocument, PdfPageInfo
 from vibeocr.backend.models.pdf_ocr_options import PdfGlobalSettings
@@ -12,6 +11,7 @@ from vibeocr.backend.services.pdf_service import PdfService, SaveResult
 
 def _make_scanned_pdf(path):
     import numpy as np
+
     doc = fitz.open()
     page = doc.new_page(width=612, height=792)
     img = np.ones((792, 612, 3), dtype=np.uint8) * 240
@@ -202,12 +202,26 @@ class TestSaveSharesSubsetFont:
 
         # 两页不同字符（触发各自子集），但保存时应聚合为一个共享子集
         PdfService.add_text_layer(
-            doc, pdf_doc, 0,
-            OCRResult(raw_text="甲乙", text_blocks=[TextBlock(text="甲乙", score=0.9, bbox=(50, 50, 300, 100))]),
+            doc,
+            pdf_doc,
+            0,
+            OCRResult(
+                raw_text="甲乙",
+                text_blocks=[
+                    TextBlock(text="甲乙", score=0.9, bbox=(50, 50, 300, 100))
+                ],
+            ),
         )
         PdfService.add_text_layer(
-            doc, pdf_doc, 1,
-            OCRResult(raw_text="丙丁", text_blocks=[TextBlock(text="丙丁", score=0.9, bbox=(50, 50, 300, 100))]),
+            doc,
+            pdf_doc,
+            1,
+            OCRResult(
+                raw_text="丙丁",
+                text_blocks=[
+                    TextBlock(text="丙丁", score=0.9, bbox=(50, 50, 300, 100))
+                ],
+            ),
         )
 
         save_result = PdfService.save_with_rewrite(doc, pdf_doc, path=None)
@@ -221,7 +235,11 @@ class TestSaveSharesSubsetFont:
                 ftype = f[2] if len(f) > 2 else ""
                 ext = f[1] if len(f) > 1 else ""
                 # 仅统计嵌入的字体文件（子集 TrueType），china-s 等内置不计
-                if ext in ("ttf", "otf", "n/a") and "Type" in str(ftype) and "CID" not in str(ftype):
+                if (
+                    ext in ("ttf", "otf", "n/a")
+                    and "Type" in str(ftype)
+                    and "CID" not in str(ftype)
+                ):
                     embedded.add(f[0])
         verify.close()
         # 全量压缩覆盖：doc 已 close+reopen，关新 doc

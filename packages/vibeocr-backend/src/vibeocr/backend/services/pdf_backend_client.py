@@ -174,10 +174,15 @@ class PdfBackendClient:
             self._base_url = f"http://127.0.0.1:{port}"
 
             cmd = [
-                python_exe, "-m", "vibeocr.backend.services.pdf_backend_process",
-                "--host", "127.0.0.1",
-                "--port", str(port),
-                "--log-level", "info",
+                python_exe,
+                "-m",
+                "vibeocr.backend.services.pdf_backend_process",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--log-level",
+                "info",
             ]
             logger.info("[pdf-backend] 启动子进程 @ %s", self._base_url)
             self._process = subprocess.Popen(
@@ -234,9 +239,7 @@ class PdfBackendClient:
                     e,
                 )
             time.sleep(0.3)
-        raise PdfBackendError(
-            f"PDF 后端 {self._base_url} 启动超时({last_err})"
-        )
+        raise PdfBackendError(f"PDF 后端 {self._base_url} 启动超时({last_err})")
 
     def _drain_stdout_tail(self, max_lines: int = 30) -> str:
         """读取子进程 stdout 末尾若干行用于错误诊断。
@@ -365,11 +368,17 @@ class PdfBackendClient:
 
     # ---- HTTP 调用辅助 ---------------------------------------------------
 
-    def _post(self, path: str, payload: object | None = None, *, timeout=None) -> httpx.Response:
+    def _post(
+        self, path: str, payload: object | None = None, *, timeout=None
+    ) -> httpx.Response:
         client = self._ensure_started()
         started = time.perf_counter()
         try:
-            resp = client.post(path, json=payload, timeout=timeout) if payload is not None else client.post(path, timeout=timeout)
+            resp = (
+                client.post(path, json=payload, timeout=timeout)
+                if payload is not None
+                else client.post(path, timeout=timeout)
+            )
         except httpx.HTTPError as e:
             raise PdfBackendError(f"后端调用失败 {path}: {e}") from e
         self._log_http_response(
@@ -525,20 +534,28 @@ class PdfBackendClient:
             MutateResponse,
         )
 
-    def insert_blank(self, sid: str, after_index: int, width: float = 612.0, height: float = 792.0) -> MutateResponse:
+    def insert_blank(
+        self, sid: str, after_index: int, width: float = 612.0, height: float = 792.0
+    ) -> MutateResponse:
         return self._parse(
             self._post(
                 f"/session/{sid}/insert_blank",
-                InsertBlankRequest(after_index=after_index, width=width, height=height).model_dump(),
+                InsertBlankRequest(
+                    after_index=after_index, width=width, height=height
+                ).model_dump(),
             ),
             MutateResponse,
         )
 
-    def insert_from(self, sid: str, source_path: str, after_index: int) -> MutateResponse:
+    def insert_from(
+        self, sid: str, source_path: str, after_index: int
+    ) -> MutateResponse:
         return self._parse(
             self._post(
                 f"/session/{sid}/insert_from",
-                InsertFromRequest(source_path=source_path, after_index=after_index).model_dump(),
+                InsertFromRequest(
+                    source_path=source_path, after_index=after_index
+                ).model_dump(),
             ),
             MutateResponse,
         )
@@ -561,11 +578,23 @@ class PdfBackendClient:
             MutateResponse,
         )
 
-    def add_text_layer(self, sid: str, page: int, ocr_result: dict, pdf_settings: dict | None = None, overwrite: bool = False) -> MutateResponse:
+    def add_text_layer(
+        self,
+        sid: str,
+        page: int,
+        ocr_result: dict,
+        pdf_settings: dict | None = None,
+        overwrite: bool = False,
+    ) -> MutateResponse:
         return self._parse(
             self._post(
                 f"/session/{sid}/add_text_layer",
-                AddTextLayerRequest(page=page, ocr_result=ocr_result, pdf_settings=pdf_settings, overwrite=overwrite).model_dump(),
+                AddTextLayerRequest(
+                    page=page,
+                    ocr_result=ocr_result,
+                    pdf_settings=pdf_settings,
+                    overwrite=overwrite,
+                ).model_dump(),
             ),
             MutateResponse,
         )
@@ -594,42 +623,68 @@ class PdfBackendClient:
             self._post(
                 f"/session/{sid}/add_text_layer_batch",
                 BatchAddTextLayerRequest(
-                    pages=pages, pdf_settings=pdf_settings,
-                    overwrite=overwrite, save=save,
+                    pages=pages,
+                    pdf_settings=pdf_settings,
+                    overwrite=overwrite,
+                    save=save,
                 ).model_dump(),
                 timeout=_HTTP_LONG_TIMEOUT,
             ),
             MutateResponse,
         )
 
-    def rewrite_text_layer(self, sid: str, page: int, text_blocks: list, preproc_angle: int = 0, pdf_settings: dict | None = None) -> MutateResponse:
+    def rewrite_text_layer(
+        self,
+        sid: str,
+        page: int,
+        text_blocks: list,
+        preproc_angle: int = 0,
+        pdf_settings: dict | None = None,
+    ) -> MutateResponse:
         from vibeocr.backend.ipc.schemas import TextBlockMirror
+
         blocks = [
             TextBlockMirror(
-                text=b.text, score=b.score, bbox=b.bbox, polygon=b.polygon,
+                text=b.text,
+                score=b.score,
+                bbox=b.bbox,
+                polygon=b.polygon,
                 page_idx=b.page_idx,
-                is_manually_edited=b.is_manually_edited, label=b.label, order=b.order,
+                is_manually_edited=b.is_manually_edited,
+                label=b.label,
+                order=b.order,
             )
             for b in text_blocks
         ]
         return self._parse(
             self._post(
                 f"/session/{sid}/rewrite_text_layer",
-                RewriteTextLayerRequest(page=page, text_blocks=blocks, preproc_angle=preproc_angle, pdf_settings=pdf_settings).model_dump(),
+                RewriteTextLayerRequest(
+                    page=page,
+                    text_blocks=blocks,
+                    preproc_angle=preproc_angle,
+                    pdf_settings=pdf_settings,
+                ).model_dump(),
             ),
             MutateResponse,
         )
 
-    def update_block_text(self, sid: str, page: int, block_index: int, new_text: str) -> MutateResponse:
+    def update_block_text(
+        self, sid: str, page: int, block_index: int, new_text: str
+    ) -> MutateResponse:
         return self._parse(
             self._post(
                 f"/session/{sid}/update_block_text",
-                UpdateBlockTextRequest(page=page, block_index=block_index, new_text=new_text).model_dump(),
+                UpdateBlockTextRequest(
+                    page=page, block_index=block_index, new_text=new_text
+                ).model_dump(),
             ),
             MutateResponse,
         )
 
-    def delete_text_layers_stream(self, sid: str, pages: list[int]) -> Iterator[ProgressEvent]:
+    def delete_text_layers_stream(
+        self, sid: str, pages: list[int]
+    ) -> Iterator[ProgressEvent]:
         """逐页删除文字层,流式返回 ProgressEvent。"""
         client = self._ensure_started()
         path = f"/session/{sid}/delete_text_layers"

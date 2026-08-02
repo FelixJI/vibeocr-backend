@@ -17,7 +17,6 @@ import pytest
 # pytest puts conftest.py on sys.path for each test session, so importing the
 # shared NullExecutor from it is safe at runtime.
 from conftest import NullExecutor
-
 from vibeocr.backend.supervisor.app import create_app
 from vibeocr.backend.supervisor.bootstrap import new_instance_id
 from vibeocr.backend.supervisor.module import SupervisorModule, SupervisorOptions
@@ -236,7 +235,11 @@ async def test_delete_pages_marks_structural_change(
 @pytest.mark.parametrize(
     "op,body,expected_name",
     [
-        ("insert_blank", {"after_index": 0, "width": 100.0, "height": 200.0}, "insert_blank"),
+        (
+            "insert_blank",
+            {"after_index": 0, "width": 100.0, "height": 200.0},
+            "insert_blank",
+        ),
         ("insert_from", {"source_path": "src.pdf", "after_index": 0}, "insert_from"),
         ("move_page", {"from_index": 0, "to_index": 1}, "move_page"),
         ("reorder", {"new_order": [1, 0]}, "reorder"),

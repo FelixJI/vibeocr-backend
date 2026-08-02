@@ -176,9 +176,13 @@ def test_unknown_failure_retries_once_then_failfast() -> None:
     """An UNKNOWN failure on the first attempt retries; on the second it FAIL_FASTs
     (lines 139-143)."""
     policy = RecoveryPolicy()
-    d1 = policy.next_action(failure=FailureClass.UNKNOWN, current_batch_size=4, attempt=0)
+    d1 = policy.next_action(
+        failure=FailureClass.UNKNOWN, current_batch_size=4, attempt=0
+    )
     assert d1.action is RecoveryAction.BACKOFF_RETRY
     assert d1.degraded is True
-    d2 = policy.next_action(failure=FailureClass.UNKNOWN, current_batch_size=4, attempt=1)
+    d2 = policy.next_action(
+        failure=FailureClass.UNKNOWN, current_batch_size=4, attempt=1
+    )
     assert d2.action is RecoveryAction.FAIL_FAST
     assert d2.degraded is True

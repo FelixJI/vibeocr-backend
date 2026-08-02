@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import fitz
 import pytest
-
 from vibeocr.backend.models.ocr_result import OCRResult, TextBlock
 from vibeocr.backend.models.pdf_document import PdfDocument, PdfPageInfo
 from vibeocr.backend.services.pdf_service import PdfService
@@ -68,7 +67,11 @@ def _count_embedded_subset_fonts(doc: fitz.Document) -> set[int]:
         for f in doc.get_page_fonts(i, full=True):
             ftype = f[2] if len(f) > 2 else ""
             ext = f[1] if len(f) > 1 else ""
-            if ext in ("ttf", "otf", "n/a") and "Type" in str(ftype) and "CID" not in str(ftype):
+            if (
+                ext in ("ttf", "otf", "n/a")
+                and "Type" in str(ftype)
+                and "CID" not in str(ftype)
+            ):
                 embedded.add(f[0])
     return embedded
 
@@ -139,10 +142,15 @@ class TestAddTextLayerBatchSharesSubsetFont:
 
         # 先给 page 0 写一层
         PdfService.add_text_layer(
-            doc, pdf_doc, 0,
-            OCRResult(raw_text="已有", text_blocks=[
-                TextBlock(text="已有", score=0.9, bbox=(50, 50, 300, 100))
-            ]),
+            doc,
+            pdf_doc,
+            0,
+            OCRResult(
+                raw_text="已有",
+                text_blocks=[
+                    TextBlock(text="已有", score=0.9, bbox=(50, 50, 300, 100))
+                ],
+            ),
         )
         assert pdf_doc.pages[0].has_text_layer
 

@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from vibeocr.backend.runtime_layout import resolve_runtime_store
+from vibeocr.backend.runtime_layout import resolve_runtime_store, runtime_id_prefix
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_manifest import (
     ManifestError,
@@ -295,7 +295,8 @@ class RuntimeInstaller:
 
     @property
     def runtime_id(self) -> str:
-        return f"{self.manifest.sha256}/{self.profile}"
+        # 用 6 位前缀而非完整哈希，与物理目录名一致（见 runtime_id_prefix）。
+        return f"{runtime_id_prefix(self.manifest.sha256)}/{self.profile}"
 
     def _validate_binding(self) -> None:
         protocol = self.component_lock["protocol"]
@@ -306,10 +307,7 @@ class RuntimeInstaller:
             or f"-{protocol_version}-" not in self.manifest.protocol_wheel
         ):
             raise RuntimeInstallError("component lock Protocol version mismatch")
-        if (
-            protocol["manifest_sha256"]
-            != self.manifest.protocol_manifest_sha256
-        ):
+        if protocol["manifest_sha256"] != self.manifest.protocol_manifest_sha256:
             raise RuntimeInstallError("component lock Protocol manifest mismatch")
         if backend["version"] != self.manifest.backend_version:
             raise RuntimeInstallError("component lock Backend version mismatch")
@@ -477,10 +475,14 @@ class RuntimeInstaller:
             }
             for lock_path in all_locks:
                 value = _load_component_lock(Path(lock_path))
-                digest = value["backend"]["runtime_manifest_sha256"]
+                # lock 存的是完整 64 位哈希（密码学校验用），GC 比对时取同样的
+                # 6 位前缀，与物理目录名 / runtime_id 保持一致。
+                digest = runtime_id_prefix(value["backend"]["runtime_manifest_sha256"])
                 profile = value["backend"].get("profile")
                 if profile is None:
-                    referenced.update(f"{digest}/{item}" for item in self.manifest.profiles)
+                    referenced.update(
+                        f"{digest}/{item}" for item in self.manifest.profiles
+                    )
                 elif profile in self.manifest.profiles:
                     referenced.add(f"{digest}/{profile}")
                 else:

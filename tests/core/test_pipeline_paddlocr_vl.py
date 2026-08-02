@@ -68,9 +68,7 @@ def test_recognize_vl_extracts_blocks_from_dict_result():
         }
     )
     service = _FakeService([res])
-    result = _recognize_paddlocr_vl(
-        service, image=None, options=PaddleOCRVLOptions()
-    )
+    result = _recognize_paddlocr_vl(service, image=None, options=PaddleOCRVLOptions())
 
     assert result.pipeline_type == "PaddleOCR-VL"
     assert len(result.text_blocks) == 1
@@ -89,9 +87,7 @@ def test_recognize_vl_extracts_content_list_and_images():
         }
     )
     service = _FakeService([res])
-    result = _recognize_paddlocr_vl(
-        service, image=None, options=PaddleOCRVLOptions()
-    )
+    result = _recognize_paddlocr_vl(service, image=None, options=PaddleOCRVLOptions())
 
     content = next(c for c in result.content_list if c.get("text") == "from cl")
     text_block = next(b for b in result.text_blocks if b.text == "from cl")
@@ -128,9 +124,7 @@ def test_recognize_vl_extracts_object_blocks():
         }
     )
     service = _FakeService([res])
-    result = _recognize_paddlocr_vl(
-        service, image=None, options=PaddleOCRVLOptions()
-    )
+    result = _recognize_paddlocr_vl(service, image=None, options=PaddleOCRVLOptions())
 
     assert len(result.text_blocks) == 1
     assert result.text_blocks[0].text == "title text"
@@ -162,10 +156,7 @@ def test_vl_deduplicates_table_across_content_and_parsing_lists():
     tables = [block for block in result.content_list if block["type"] == "table"]
     assert len(tables) == 1
     assert tables[0]["table"]["table_id"] == tables[0]["block_id"]
-    assert (
-        tables[0]["table"]["provenance"]["provider_schema"]
-        == "paddlex-paddlocr-vl"
-    )
+    assert tables[0]["table"]["provenance"]["provider_schema"] == "paddlex-paddlocr-vl"
     assert tables[0]["table_body"]
     assert result.text_blocks[0].content_index == 0
     assert result.text_blocks[0].content_id == tables[0]["block_id"]
@@ -265,8 +256,7 @@ def test_vl_prefers_provider_block_id_for_ambiguous_tables():
 
 def test_vl_projects_content_list_only_table():
     table_html = (
-        "<table><tr><td rowspan='2'>A</td><td>B</td></tr>"
-        "<tr><td>C</td></tr></table>"
+        "<table><tr><td rowspan='2'>A</td><td>B</td></tr><tr><td>C</td></tr></table>"
     )
     res = _DictResult(
         {
@@ -282,8 +272,8 @@ def test_vl_projects_content_list_only_table():
     assert result.text_blocks[0].text == "A\tB\nC"
     assert result.raw_text == "A\tB\nC"
     assert "| A | B |" in result.markdown_text
-    assert "rowspan=\"2\"" in result.content_list[0]["table_body"]
-    assert "rowspan=\"2\"" in result.html_text
+    assert 'rowspan="2"' in result.content_list[0]["table_body"]
+    assert 'rowspan="2"' in result.html_text
     warnings = result.content_list[0]["table"]["provenance"]["warnings"]
     assert "lossy_markdown_source" in warnings
 

@@ -1,6 +1,5 @@
 # tests/core/test_pipeline_registry.py
 import pytest
-
 from vibeocr.backend.core.pipelines.base_options import BasePipelineOptions
 from vibeocr.backend.core.pipelines.registry import PipelineRegistry, PipelineSpec
 

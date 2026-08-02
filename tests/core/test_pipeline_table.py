@@ -423,9 +423,7 @@ class TestBackfillEmptyTableCells:
         ]
         ocr_items = [{"text": "左字", "center": (50.0, 30.0)}]
 
-        new_html, _ = _backfill_empty_table_cells(
-            table_html, cell_box_list, ocr_items
-        )
+        new_html, _ = _backfill_empty_table_cells(table_html, cell_box_list, ocr_items)
 
         assert "<td>左字</td><td></td>" in new_html
 
@@ -545,9 +543,7 @@ class TestBackfillEmptyTableCells:
             _backfill_empty_table_cells,
         )
 
-        table_html = (
-            "<table><tr><td rowspan='10001'></td></tr></table>"
-        )
+        table_html = "<table><tr><td rowspan='10001'></td></tr></table>"
         warnings: list[str] = []
 
         new_html, consumed = _backfill_empty_table_cells(
@@ -567,9 +563,7 @@ class TestBackfillEmptyTableCells:
             _backfill_empty_table_cells,
         )
 
-        table_html = (
-            "<table><tr><td rowspan='1001' colspan='1000'></td></tr></table>"
-        )
+        table_html = "<table><tr><td rowspan='1001' colspan='1000'></td></tr></table>"
         warnings: list[str] = []
 
         new_html, consumed = _backfill_empty_table_cells(
@@ -596,9 +590,7 @@ class TestBackfillEmptyTableCells:
         ]
         ocr_items = [{"text": "右字", "center": (150.0, 25.0)}]
 
-        new_html, _ = _backfill_empty_table_cells(
-            table_html, cell_box_list, ocr_items
-        )
+        new_html, _ = _backfill_empty_table_cells(table_html, cell_box_list, ocr_items)
 
         assert "<td></td><td>右字</td>" in new_html
 
@@ -911,8 +903,7 @@ def test_recognize_table_emits_canonical_table_with_stable_ids():
 
 def test_recognize_table_html_projection_preserves_rowspan():
     pred_html = (
-        "<table><tr><td rowspan='2'>A</td><td>B</td></tr>"
-        "<tr><td>C</td></tr></table>"
+        "<table><tr><td rowspan='2'>A</td><td>B</td></tr><tr><td>C</td></tr></table>"
     )
     result = _recognize_table(
         _FakeService([_make_table_result(pred_html=pred_html)]),

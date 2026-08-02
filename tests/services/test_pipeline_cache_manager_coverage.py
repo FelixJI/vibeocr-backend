@@ -10,7 +10,6 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-
 from vibeocr.backend.services.pipeline_cache_manager import (
     FALLBACK_MAX_HEAVY,
     PipelineCacheManager,
@@ -450,7 +449,9 @@ class TestEmptyCache:
 
     def test_release_one_paddle_calls_empty_cache(self, monkeypatch):
         """_release_one 对 paddle 管道调用 _empty_cache（lines 517-518）。"""
-        monkeypatch.setenv("VIBEOCR_USE_GPU", "false")  # CPU 模式，_empty_cache 跳过 paddle
+        monkeypatch.setenv(
+            "VIBEOCR_USE_GPU", "false"
+        )  # CPU 模式，_empty_cache 跳过 paddle
         mgr = _make_legacy_manager()
         mgr._service._pipelines = {"PP-StructureV3": object()}
         mgr._last_used = {"PP-StructureV3": 100.0}

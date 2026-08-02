@@ -109,4 +109,3 @@ def test_is_option_supported_reports_membership() -> None:
     assert ocr_options  # 非空
     assert is_option_supported(OCRPipeline.OCR, ocr_options[0])
     assert not is_option_supported(OCRPipeline.OCR, "parse_method")
-

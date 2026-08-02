@@ -112,7 +112,6 @@ class TestSessionCloseSync:
         from unittest.mock import MagicMock as Mock
 
         from fastapi import HTTPException
-
         from vibeocr.backend.services.pdf_backend_process import (
             BackendSession,
             SessionRegistry,

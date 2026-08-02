@@ -17,11 +17,13 @@ def test_ocr_default_pixel_budget_is_64m() -> None:
 
 def test_ocr_default_a4_300dpi_pages_fit_seven_per_chunk() -> None:
     entries = [
-        BatchEntry(value=index, encoded_bytes=1, pixels=8_700_000)
-        for index in range(8)
+        BatchEntry(value=index, encoded_bytes=1, pixels=8_700_000) for index in range(8)
     ]
 
-    assert [len(chunk.entries) for chunk in partition_batches(entries, BatchBudget.ocr_default())] == [7, 1]
+    assert [
+        len(chunk.entries)
+        for chunk in partition_batches(entries, BatchBudget.ocr_default())
+    ] == [7, 1]
 
 
 def test_item_limit_and_order_are_stable():
@@ -75,7 +77,6 @@ def test_oversized_single_always_enters_one_batch():
 def test_batch_budget_rejects_non_positive_limits() -> None:
     """任一限制 <=0 时 raise ValueError（line 25-26）。"""
     import pytest
-
     from vibeocr.backend.core.batch_budget import BatchBudget
 
     with pytest.raises(ValueError, match="positive"):
@@ -91,7 +92,6 @@ def test_image_pixel_count_reads_header_from_bytes() -> None:
     import io
 
     from PIL import Image
-
     from vibeocr.backend.core.batch_budget import image_pixel_count
 
     img = Image.new("RGB", (10, 20), "red")
@@ -104,7 +104,6 @@ def test_image_pixel_count_reads_header_from_path(tmp_path) -> None:
     """image_pixel_count 从文件路径读取（line 115 分支）。"""
 
     from PIL import Image
-
     from vibeocr.backend.core.batch_budget import image_pixel_count
 
     img = Image.new("RGB", (4, 5), "blue")

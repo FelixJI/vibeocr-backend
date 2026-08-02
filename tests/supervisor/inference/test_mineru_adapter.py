@@ -7,7 +7,6 @@ import threading
 import time
 
 import pytest
-
 from vibeocr.backend.supervisor.inference.budgets import InputItem
 from vibeocr.backend.supervisor.inference.mineru_adapter import (
     MinerUProcessAdapter,

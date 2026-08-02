@@ -13,7 +13,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from vibeocr.backend.core.pipelines.pipeline_ocr import (
     _build_ocr_result,
     _consume_generator_safely,
@@ -137,9 +136,7 @@ class TestBuildOcrResult:
         assert result.text_with_scores == []
 
     def test_with_scores_computes_avg(self):
-        result = _build_ocr_result(
-            "a b", text_with_scores=[("a", 0.9), ("b", 0.7)]
-        )
+        result = _build_ocr_result("a b", text_with_scores=[("a", 0.9), ("b", 0.7)])
         assert result.avg_score == pytest.approx(0.8)
         assert len(result.text_with_scores) == 2
 
@@ -151,9 +148,7 @@ class TestBuildOcrResult:
         assert result.low_confidence_items[0] == ("bad", 0.5)
 
     def test_explicit_markdown_html(self):
-        result = _build_ocr_result(
-            "raw", markdown_text="# md", html_text="<p>html</p>"
-        )
+        result = _build_ocr_result("raw", markdown_text="# md", html_text="<p>html</p>")
         assert result.markdown_text == "# md"
         assert result.html_text == "<p>html</p>"
 
@@ -310,7 +305,11 @@ def _make_ocr_result_dict(texts, scores=None, boxes=None):
 class TestRecognizeOcr:
     def test_recognize_single_image(self):
 
-        output = [_make_ocr_result_dict(["hello", "world"], boxes=[[0, 0, 10, 10], [1, 1, 2, 2]])]
+        output = [
+            _make_ocr_result_dict(
+                ["hello", "world"], boxes=[[0, 0, 10, 10], [1, 1, 2, 2]]
+            )
+        ]
         service = _FakeOcrService(output)
         result = _recognize_ocr(service, image=None, options=OCROptions())
         assert result.raw_text == "hello\nworld"
@@ -324,7 +323,6 @@ class TestRecognizeOcr:
 
     def test_recognize_with_preproc_info(self):
         import numpy as np
-
 
         arr = np.zeros((2, 3, 3), dtype=np.uint8)
         output = [
@@ -362,7 +360,9 @@ class TestRecognizeOcrBatch:
             _make_ocr_result_dict(["b", "c"]),
         ]
         service = _FakeOcrService(output)
-        results = _recognize_ocr_batch(service, images=[None, None], options=OCROptions())
+        results = _recognize_ocr_batch(
+            service, images=[None, None], options=OCROptions()
+        )
         assert len(results) == 2
         assert results[0].raw_text == "a"
         assert results[1].raw_text == "b\nc"
@@ -401,6 +401,4 @@ class TestRecognizeOcrBatch:
                 return _CrashPipeline()
 
         with pytest.raises(RuntimeError, match="batch failed"):
-            _recognize_ocr_batch(
-                _CrashService(), images=[None], options=OCROptions()
-            )
+            _recognize_ocr_batch(_CrashService(), images=[None], options=OCROptions())

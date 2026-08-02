@@ -69,7 +69,11 @@ def _staged(items: int, base: Path) -> list[StagedInput]:
     for i in range(items):
         p = base / f"f{i}.png"
         p.write_bytes(png)
-        out.append(StagedInput(item_id=f"it-{i}", display_name=f"f{i}.png", path=p, size_bytes=len(png)))
+        out.append(
+            StagedInput(
+                item_id=f"it-{i}", display_name=f"f{i}.png", path=p, size_bytes=len(png)
+            )
+        )
     return out
 
 
@@ -512,9 +516,7 @@ def test_fail_items_skips_already_terminal(tmp_path: Path) -> None:
         InputItem(item_id="it-0", encoded_bytes=1, decoded_pixels=1, estimated_pages=1),
         InputItem(item_id="it-1", encoded_bytes=1, decoded_pixels=1, estimated_pages=1),
     ]
-    AdapterExecutor._fail_items(
-        record, items, error_code="X", error="boom"
-    )
+    AdapterExecutor._fail_items(record, items, error_code="X", error="boom")
     # it-0 was skipped (still SUCCEEDED), it-1 transitioned to FAILED.
     snap = record.snapshot()
     states = {it.item_id: it.state for it in snap.items}
@@ -545,12 +547,16 @@ def test_cancel_non_terminal_items_leaves_terminal_items(tmp_path: Path) -> None
 def test_execute_with_recovery_noop_on_empty_items() -> None:
     """An empty items list returns immediately (line 211)."""
     executor = PaddleExecutor(adapter_factory=lambda: _FullAdapter())
+
     # Use a minimal record-like object.
     class _Rec:
         cancel_requested_at = None
 
     executor._execute_with_recovery(
-        _Rec(), [], options=None, policy=RecoveryPolicy()  # type: ignore[arg-type]
+        _Rec(),
+        [],
+        options=None,
+        policy=RecoveryPolicy(),  # type: ignore[arg-type]
     )
 
 
@@ -563,7 +569,11 @@ def test_execute_with_recovery_noop_when_cancelled() -> None:
 
     executor._execute_with_recovery(
         _Rec(),
-        [InputItem(item_id="it-0", encoded_bytes=1, decoded_pixels=1, estimated_pages=1)],
+        [
+            InputItem(
+                item_id="it-0", encoded_bytes=1, decoded_pixels=1, estimated_pages=1
+            )
+        ],
         options=None,
         policy=RecoveryPolicy(),  # type: ignore[arg-type]
     )
@@ -677,6 +687,7 @@ def test_staged_to_items_tolerates_non_image_bytes(tmp_path: Path) -> None:
 
 def test_staged_to_items_handles_entry_without_path_attribute() -> None:
     """A staged entry without a ``path`` attribute yields empty bytes (line 415)."""
+
     class _BareEntry:
         item_id = "it-0"
         display_name = "x"
@@ -703,6 +714,7 @@ def test_adapter_property_returns_cached_instance_on_second_access() -> None:
 def test_configure_settings_tolerates_adapter_without_configure() -> None:
     """An adapter lacking ``configure_settings`` is tolerated by configure_settings
     (line 395->397 False branch)."""
+
     class _NoConfig:
         def recognize_many(self, items, options=None):  # type: ignore[no-untyped-def]
             return []

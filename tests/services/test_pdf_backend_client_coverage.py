@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-
 from vibeocr.backend.services.pdf_backend_client import (
     PdfBackendClient,
     PdfBackendError,
@@ -45,7 +44,9 @@ class TestResolvePythonExe:
         import vibeocr.backend.env_manager as env
 
         monkeypatch.setattr(env, "get_project_root", lambda: Path("/fake"))
-        monkeypatch.setattr(env, "get_embedded_python", lambda r: Path("/fake/embedded/python.exe"))
+        monkeypatch.setattr(
+            env, "get_embedded_python", lambda r: Path("/fake/embedded/python.exe")
+        )
         monkeypatch.setattr(Path, "exists", lambda self: True)
         assert client._resolve_python_exe() == str(Path("/fake/embedded/python.exe"))
 
@@ -57,7 +58,9 @@ class TestResolvePythonExe:
         import vibeocr.backend.env_manager as env
 
         monkeypatch.setattr(env, "get_project_root", lambda: Path("/fake"))
-        monkeypatch.setattr(env, "get_embedded_python", lambda r: Path("/fake/none.exe"))
+        monkeypatch.setattr(
+            env, "get_embedded_python", lambda r: Path("/fake/none.exe")
+        )
         result = client._resolve_python_exe()
         assert result == sys.executable
 
@@ -130,7 +133,10 @@ class TestStartAndLifecycle:
         client._process = MagicMock()
         client._process.poll.return_value = None  # alive
         # 不应重新启动
-        with patch.object(client, "_stop_locked") as stop, patch.object(client, "_resolve_python_exe") as exe:
+        with (
+            patch.object(client, "_stop_locked") as stop,
+            patch.object(client, "_resolve_python_exe") as exe,
+        ):
             client.start()
         stop.assert_not_called()
         exe.assert_not_called()
@@ -155,7 +161,9 @@ class TestStartAndLifecycle:
         def _fail_get(url, timeout):
             raise ConnectionError("no connection")
 
-        monkeypatch.setattr("vibeocr.backend.services.pdf_backend_client.httpx.get", _fail_get)
+        monkeypatch.setattr(
+            "vibeocr.backend.services.pdf_backend_client.httpx.get", _fail_get
+        )
         # 缩短超时
         import vibeocr.backend.services.pdf_backend_client as mod
 
@@ -170,7 +178,10 @@ class TestStartAndLifecycle:
         client._process.poll.return_value = None
 
         resp = _mock_resp(status=200)
-        monkeypatch.setattr("vibeocr.backend.services.pdf_backend_client.httpx.get", lambda *a, **k: resp)
+        monkeypatch.setattr(
+            "vibeocr.backend.services.pdf_backend_client.httpx.get",
+            lambda *a, **k: resp,
+        )
         client._wait_ready()  # 不应抛异常
 
     def test_drain_stdout_tail_no_process(self):
@@ -320,7 +331,9 @@ class TestPostGetErrors:
     def test_post_400_raises_with_detail(self, monkeypatch):
         client = PdfBackendClient()
         mock_client = MagicMock(spec=httpx.Client)
-        resp = _mock_resp(status=400, json_data={"detail": "bad request"}, text='{"detail":"bad"}')
+        resp = _mock_resp(
+            status=400, json_data={"detail": "bad request"}, text='{"detail":"bad"}'
+        )
         mock_client.post.return_value = resp
         client._http_clients = {threading.get_ident(): mock_client}
         client._started = True
@@ -424,6 +437,7 @@ class TestEstimateBytes:
     def test_estimate_response_headers_exception(self):
         """headers 转为 dict 时抛异常 → 回退到 content（line 374-376）。"""
         resp = MagicMock(spec=httpx.Response)
+
         # headers 是一个 dict() 会抛异常的对象
         class _BadHeaders:
             def __iter__(self):
@@ -457,10 +471,9 @@ class TestLoadStream:
 
         from vibeocr.backend.ipc.schemas import ProgressEvent, ProgressPhase
 
-        ev_json = (
-            ProgressEvent(phase=ProgressPhase.LOAD, current=1, total=1, message="done")
-            .model_dump_json()
-        )
+        ev_json = ProgressEvent(
+            phase=ProgressPhase.LOAD, current=1, total=1, message="done"
+        ).model_dump_json()
 
         mock_stream_resp = MagicMock()
         mock_stream_resp.status_code = 200
@@ -527,10 +540,9 @@ class TestDeleteTextLayersStream:
 
         from vibeocr.backend.ipc.schemas import ProgressEvent, ProgressPhase
 
-        ev_json = (
-            ProgressEvent(phase=ProgressPhase.DELETE, current=1, total=1, message="done")
-            .model_dump_json()
-        )
+        ev_json = ProgressEvent(
+            phase=ProgressPhase.DELETE, current=1, total=1, message="done"
+        ).model_dump_json()
 
         mock_stream_resp = MagicMock()
         mock_stream_resp.status_code = 200

@@ -56,7 +56,9 @@ class _PdfChildLike(Protocol):
 
     def load_stream(self, session_id: str) -> Any: ...
 
-    def render_thumbnail(self, session_id: str, page: int, size: int = 160) -> bytes: ...
+    def render_thumbnail(
+        self, session_id: str, page: int, size: int = 160
+    ) -> bytes: ...
 
     def render_preview(self, session_id: str, page: int, dpi: int = 150) -> bytes: ...
 
@@ -78,9 +80,7 @@ class _PdfChildLike(Protocol):
         self, session_id: str, source_path: str, after_index: int
     ) -> Any: ...
 
-    def move_page(
-        self, session_id: str, from_index: int, to_index: int
-    ) -> Any: ...
+    def move_page(self, session_id: str, from_index: int, to_index: int) -> Any: ...
 
     def reorder(self, session_id: str, new_order: list[int]) -> Any: ...
 
@@ -212,14 +212,10 @@ class PdfProcessAdapter:
     # Render
     # ------------------------------------------------------------------
 
-    def render_thumbnail(
-        self, session_id: str, page: int, size: int = 160
-    ) -> bytes:
+    def render_thumbnail(self, session_id: str, page: int, size: int = 160) -> bytes:
         return self.ensure_started().render_thumbnail(session_id, page, size=size)
 
-    def render_preview(
-        self, session_id: str, page: int, dpi: int = 150
-    ) -> bytes:
+    def render_preview(self, session_id: str, page: int, dpi: int = 150) -> bytes:
         return self.ensure_started().render_preview(session_id, page, dpi=dpi)
 
     def detect_text_layers(
@@ -231,9 +227,7 @@ class PdfProcessAdapter:
     # Page mutations (rotate/delete/insert/move/reorder)
     # ------------------------------------------------------------------
 
-    def rotate(
-        self, session_id: str, pages: list[int], angle: int
-    ) -> MutateResponse:
+    def rotate(self, session_id: str, pages: list[int], angle: int) -> MutateResponse:
         return self.ensure_started().rotate(session_id, pages, angle)
 
     def delete_pages(self, session_id: str, pages: list[int]) -> MutateResponse:
@@ -253,9 +247,7 @@ class PdfProcessAdapter:
     def insert_from(
         self, session_id: str, source_path: str, after_index: int
     ) -> MutateResponse:
-        return self.ensure_started().insert_from(
-            session_id, source_path, after_index
-        )
+        return self.ensure_started().insert_from(session_id, source_path, after_index)
 
     def move_page(
         self, session_id: str, from_index: int, to_index: int

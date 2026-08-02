@@ -227,7 +227,9 @@ class TextBlock:
     text: str
     score: float
     bbox: tuple[float, float, float, float] | None  # 归一化 [0, 1000] 坐标
-    polygon: tuple[float, ...] | None = None  # 4 点检测多边形 [x,y,...]，归一化 [0,1000]
+    polygon: tuple[float, ...] | None = (
+        None  # 4 点检测多边形 [x,y,...]，归一化 [0,1000]
+    )
     page_idx: int | None = None  # 页码（0 起始），PDF 多页时使用
     is_manually_edited: bool = False  # 是否被手动修改过
     content_index: int | None = None  # 对应 content_list 中的索引（MinerU 管道）

@@ -14,7 +14,6 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
-
 from vibeocr.backend.supervisor import main as supervisor_main
 
 if TYPE_CHECKING:
@@ -51,9 +50,7 @@ def test_self_test_noop_when_smoke_env_unset(
     assert not target.exists()
 
 
-def test_self_test_noop_when_result_unset(
-    monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_self_test_noop_when_result_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VIBEOCR_SELF_TEST_SMOKE", "t6")
     monkeypatch.delenv("VIBEOCR_SELF_TEST_RESULT", raising=False)
     # Must not raise even though the result path is missing.

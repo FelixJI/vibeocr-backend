@@ -6,7 +6,6 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
-
 from vibeocr.backend.supervisor.inference.budgets import AdapterCapability
 from vibeocr.backend.supervisor.inference.paddle_executor import AdapterExecutor
 from vibeocr.backend.supervisor.jobs.staging import InputExpiredError
@@ -38,9 +37,7 @@ class _ScriptedAdapter:
 
     def capabilities(self, options=None):
         del options
-        return AdapterCapability(
-            name="scripted", real_batch=True, max_compute_batch=64
-        )
+        return AdapterCapability(name="scripted", real_batch=True, max_compute_batch=64)
 
     def residency_status(self):
         from vibeocr.runtime_contracts import ResidencyStatus
@@ -99,9 +96,7 @@ def _terminal(module: SupervisorModule, job_id: str):
 
 
 def test_submit_observe_preserves_manifest_and_returns_keyed_outcomes(tmp_path) -> None:
-    adapter = _ScriptedAdapter(
-        [[{"raw_text": "A"}, {"raw_text": "B"}]]
-    )
+    adapter = _ScriptedAdapter([[{"raw_text": "A"}, {"raw_text": "B"}]])
     module = _module(tmp_path, adapter)
     request = _request()
 
@@ -171,9 +166,7 @@ def test_short_adapter_result_fails_items_instead_of_faking_empty_success(
 
     assert snapshot.state is JobState.FAILED
     assert snapshot.summary.failed == 2
-    assert all(
-        result.error_code == "ADAPTER_PROTOCOL_VIOLATION" for result in results
-    )
+    assert all(result.error_code == "ADAPTER_PROTOCOL_VIOLATION" for result in results)
     assert all(result.payload == {} for result in results)
 
 

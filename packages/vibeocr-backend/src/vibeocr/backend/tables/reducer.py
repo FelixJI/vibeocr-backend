@@ -320,10 +320,7 @@ def _raw_parts_from_content(
     for text_index, text_block in enumerate(text_blocks):
         if text_index in used_text_indices:
             continue
-        if (
-            str(getattr(text_block, "label", "")).lower()
-            in DISCARDED_BLOCK_TYPES
-        ):
+        if str(getattr(text_block, "label", "")).lower() in DISCARDED_BLOCK_TYPES:
             continue
         text = str(getattr(text_block, "text", "") or "")
         if text:

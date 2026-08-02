@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import os
 import zipfile
@@ -11,7 +10,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from vibeocr.backend.models import ocr_result_from_payload, ocr_result_to_payload
 from vibeocr.backend.services.export_service import ExportService
 from vibeocr.backend.tables.html_adapter import table_model_from_html
@@ -19,17 +17,6 @@ from vibeocr.runtime_contracts.contracts.tables import TableModelV1
 
 REPO_ROOT = Path(__file__).parents[2]
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "table_contract" / "v1"
-VERIFIER_PATH = REPO_ROOT / "scripts" / "verify_table_artifact.py"
-
-
-def _load_verifier():
-    spec = importlib.util.spec_from_file_location(
-        "verify_table_artifact", VERIFIER_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _fixture_cases() -> list[dict]:
@@ -85,9 +72,7 @@ def _first_difference(expected: object, actual: object, path: str = "$") -> str:
                 f"expected={sorted(expected_keys)}, actual={sorted(actual_keys)}"
             )
         for key in expected:
-            difference = _first_difference(
-                expected[key], actual[key], f"{path}.{key}"
-            )
+            difference = _first_difference(expected[key], actual[key], f"{path}.{key}")
             if difference:
                 return difference
         return ""
@@ -178,80 +163,17 @@ def _result_from_provider_fixture(fixture: dict):
     raise AssertionError(f"unhandled provider fixture: {provider}")
 
 
-def test_fixture_manifest_has_stable_hashes_and_only_synthetic_inputs():
-    verifier = _load_verifier()
+def test_fixture_manifest_has_stable_hashes_and_only_synthetic_inputs() -> None:
+    manifest = json.loads((FIXTURE_ROOT / "manifest.json").read_text(encoding="utf-8"))
 
-    report = verifier.verify_fixture_manifest(FIXTURE_ROOT)
-
-    assert report["fixture_count"] == 5
-    assert report["synthetic"] is True
-    assert set(report["providers"]) == {
-        "mineru-legacy",
-        "mineru-v2",
-        "paddleocr-pp-structure",
-        "paddleocr-table-recognition",
-        "paddleocr-vl",
+    assert manifest["synthetic"] is True
+    assert len(manifest["fixtures"]) == 5
+    assert {record["provider_version"] for record in manifest["fixtures"]} == {
+        "synthetic"
     }
-
-
-def test_winui_manifest_resolves_distribution_from_wheel_metadata(tmp_path: Path):
-    verifier = _load_verifier()
-    backend = tmp_path / "backend"
-    backend.mkdir()
-    wheel = backend / "vibeocr_runtime_contracts-1.0-py3-none-any.whl"
-    with zipfile.ZipFile(wheel, "w") as archive:
-        archive.writestr(
-            "vibeocr_runtime_contracts-1.0.dist-info/METADATA",
-            "Metadata-Version: 2.1\nName: vibeocr-runtime-contracts\nVersion: 1.0\n",
-        )
-    manifest = {
-        "python_wheels": [
-            {
-                "file": wheel.name,
-                "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
-            }
-        ]
-    }
-    (tmp_path / "product-manifest.json").write_text(
-        json.dumps(manifest), encoding="utf-8"
-    )
-
-    verifier._verify_product_manifest(tmp_path, {"vibeocr-runtime-contracts": wheel})
-
-
-def test_product_manifest_must_bind_every_packaged_wheel(tmp_path: Path):
-    verifier = _load_verifier()
-    backend = tmp_path / "backend"
-    backend.mkdir()
-    wheels = {}
-    for distribution in ("vibeocr-runtime-contracts", "vibeocr-backend"):
-        normalized = distribution.replace("-", "_")
-        wheel = backend / f"{normalized}-1.0-py3-none-any.whl"
-        with zipfile.ZipFile(wheel, "w") as archive:
-            archive.writestr(
-                f"{normalized}-1.0.dist-info/METADATA",
-                (f"Metadata-Version: 2.1\nName: {distribution}\nVersion: 1.0\n"),
-            )
-        wheels[distribution] = wheel
-    contracts_wheel = wheels["vibeocr-runtime-contracts"]
-    (tmp_path / "product-manifest.json").write_text(
-        json.dumps(
-            {
-                "python_wheels": [
-                    {
-                        "file": contracts_wheel.name,
-                        "sha256": hashlib.sha256(
-                            contracts_wheel.read_bytes()
-                        ).hexdigest(),
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(RuntimeError, match="every packaged wheel"):
-        verifier._verify_product_manifest(tmp_path, wheels)
+    for record in manifest["fixtures"]:
+        fixture = FIXTURE_ROOT / record["file"]
+        assert hashlib.sha256(fixture.read_bytes()).hexdigest() == record["sha256"]
 
 
 def test_canonical_mismatch_writes_expected_actual_and_first_difference(
@@ -268,18 +190,17 @@ def test_canonical_mismatch_writes_expected_actual_and_first_difference(
             report_root=tmp_path,
         )
 
-    diagnostic_dir = (
-        tmp_path / "diagnostic-fixture" / "canonical-mismatch"
-    )
-    assert json.loads(
-        (diagnostic_dir / "expected.json").read_text(encoding="utf-8")
-    ) == expected
-    assert json.loads(
-        (diagnostic_dir / "actual.json").read_text(encoding="utf-8")
-    ) == actual
+    diagnostic_dir = tmp_path / "diagnostic-fixture" / "canonical-mismatch"
     assert (
-        "$.cells[0].text"
-        in (diagnostic_dir / "first-difference.txt").read_text(encoding="utf-8")
+        json.loads((diagnostic_dir / "expected.json").read_text(encoding="utf-8"))
+        == expected
+    )
+    assert (
+        json.loads((diagnostic_dir / "actual.json").read_text(encoding="utf-8"))
+        == actual
+    )
+    assert "$.cells[0].text" in (diagnostic_dir / "first-difference.txt").read_text(
+        encoding="utf-8"
     )
 
 

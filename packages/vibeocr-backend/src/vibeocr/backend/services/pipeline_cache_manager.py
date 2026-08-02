@@ -206,9 +206,7 @@ class PipelineCacheManager:
         """记录管道使用时间。每次 get_or_create_pipeline 后调用。"""
         self._ensure_runtime_fields()
         with self._state_lock:
-            self._last_used[pipeline_name] = (
-                now if now is not None else time.time()
-            )
+            self._last_used[pipeline_name] = now if now is not None else time.time()
         self._wakeup_event.set()
 
     def restore_last_used_unix_ms(self, values: dict[str, object]) -> None:
@@ -386,9 +384,7 @@ class PipelineCacheManager:
             )
         return evicted
 
-    def release(
-        self, heavy_only: bool = True, *, force: bool = False
-    ) -> list[str]:
+    def release(self, heavy_only: bool = True, *, force: bool = False) -> list[str]:
         """显式释放管道。活跃任务会先持有 lease，故本调用等待任务完成。"""
         self._ensure_runtime_fields()
         from vibeocr.backend.core.pipelines import get_heavy_pipelines
@@ -527,9 +523,7 @@ class PipelineCacheManager:
     def _is_paddle(pipeline_name: str) -> bool:
         from vibeocr.backend.core.pipelines import get_paddle_pipelines
 
-        return pipeline_name in {
-            pipeline.value for pipeline in get_paddle_pipelines()
-        }
+        return pipeline_name in {pipeline.value for pipeline in get_paddle_pipelines()}
 
     @staticmethod
     def _empty_cache() -> None:

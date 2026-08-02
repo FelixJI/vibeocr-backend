@@ -32,7 +32,11 @@ class _NullExecutor:
         # Immediately mark the job failed with a typed error: no backend.
         from vibeocr.runtime_contracts import JobState
 
-        if record.state not in (JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED):
+        if record.state not in (
+            JobState.COMPLETED,
+            JobState.FAILED,
+            JobState.CANCELLED,
+        ):
             try:
                 record.transition(JobState.FAILED)
                 record.append_event("no_backend", detail={"reason": "null-executor"})

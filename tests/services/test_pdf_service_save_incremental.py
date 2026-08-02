@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import fitz
-
 from vibeocr.backend.services.pdf_service import PdfService
 
 
@@ -47,6 +46,7 @@ def test_save_incremental_returns_false_and_keeps_doc_usable_on_failure(
         with Path(path).open("ab") as stream:
             stream.write(b"partial incremental bytes")
         raise RuntimeError("disk full")
+
     monkeypatch.setattr(fitz.Document, "save", boom)
 
     ok = PdfService.save_incremental(doc, str(pdf))
@@ -77,7 +77,9 @@ def test_save_incremental_does_not_copy_whole_pdf(tmp_path, monkeypatch):
     def reject_copy(*args, **kwargs):
         raise AssertionError("incremental checkpoint must not copy the whole PDF")
 
-    monkeypatch.setattr("vibeocr.backend.services.pdf_service.shutil.copy2", reject_copy)
+    monkeypatch.setattr(
+        "vibeocr.backend.services.pdf_service.shutil.copy2", reject_copy
+    )
     assert PdfService.save_incremental(doc, str(pdf)) is True
     doc.close()
 
@@ -118,9 +120,7 @@ def test_compress_in_place_after_incremental_unavailable_does_not_crash(
     的回归保护。
     """
     # 强制增量保存恒不可用，模拟生产环境中的复现条件
-    monkeypatch.setattr(
-        fitz.Document, "can_save_incrementally", lambda self: False
-    )
+    monkeypatch.setattr(fitz.Document, "can_save_incrementally", lambda self: False)
 
     pdf = tmp_path / "multi_batch.pdf"
     doc = fitz.open()
@@ -174,9 +174,7 @@ def test_save_incremental_logs_diagnostics_when_unavailable(
     doc.close()
     doc = fitz.open(str(pdf))
 
-    monkeypatch.setattr(
-        fitz.Document, "can_save_incrementally", lambda self: False
-    )
+    monkeypatch.setattr(fitz.Document, "can_save_incrementally", lambda self: False)
 
     with caplog.at_level(logging.ERROR, logger=ps.logger.name):
         ok = PdfService.save_incremental(doc, str(pdf))

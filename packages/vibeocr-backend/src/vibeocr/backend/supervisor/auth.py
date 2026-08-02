@@ -25,7 +25,9 @@ class AuthDecision:
     error: ErrorPayload | None = None
 
 
-def _make_error(code: ErrorCode, instance_id: str, *, detail: dict | None = None) -> ErrorPayload:
+def _make_error(
+    code: ErrorCode, instance_id: str, *, detail: dict | None = None
+) -> ErrorPayload:
     from vibeocr.runtime_contracts import error_registry
 
     entry = error_registry[code]
@@ -67,9 +69,13 @@ def check_loopback(
 ) -> AuthDecision:
     """Reject any client not on the loopback interface."""
     if client_host is None:
-        return AuthDecision(False, _make_error(ErrorCode.FORBIDDEN_LOOPBACK, instance_id))
+        return AuthDecision(
+            False, _make_error(ErrorCode.FORBIDDEN_LOOPBACK, instance_id)
+        )
     if client_host not in ("127.0.0.1", "::1", "localhost"):
-        return AuthDecision(False, _make_error(ErrorCode.FORBIDDEN_LOOPBACK, instance_id))
+        return AuthDecision(
+            False, _make_error(ErrorCode.FORBIDDEN_LOOPBACK, instance_id)
+        )
     return AuthDecision(True)
 
 

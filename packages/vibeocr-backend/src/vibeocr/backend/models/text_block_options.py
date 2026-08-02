@@ -13,9 +13,9 @@ from dataclasses import dataclass
 from typing import Any
 
 # 换行模式常量
-LINE_MODE_KEEP = "keep"      # 保留原样：每个文本块占一行
-LINE_MODE_MERGE = "merge"    # 合并成一段：去除断行
-LINE_MODE_SMART = "smart"    # 智能分段：按垂直间距判定段落边界
+LINE_MODE_KEEP = "keep"  # 保留原样：每个文本块占一行
+LINE_MODE_MERGE = "merge"  # 合并成一段：去除断行
+LINE_MODE_SMART = "smart"  # 智能分段：按垂直间距判定段落边界
 
 _VALID_LINE_MODES = frozenset({LINE_MODE_KEEP, LINE_MODE_MERGE, LINE_MODE_SMART})
 

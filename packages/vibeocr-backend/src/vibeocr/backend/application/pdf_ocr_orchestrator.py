@@ -168,9 +168,7 @@ class _CancelFlag:
         return self._cancelled
 
 
-def project_layer_source(
-    *, had_native_layer: bool, ocr_saved: bool
-) -> LayerSource:
+def project_layer_source(*, had_native_layer: bool, ocr_saved: bool) -> LayerSource:
     """Project the text-layer source for display.
 
     OCR-saved takes precedence (dark green); a native layer alone is light
@@ -190,7 +188,9 @@ class PdfOcrOrchestrator:
     sidecar. Callers pass the file path (sidecar key) and the session id.
     """
 
-    def __init__(self, backend: PdfOcrBackend, *, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
+    def __init__(
+        self, backend: PdfOcrBackend, *, batch_size: int = DEFAULT_BATCH_SIZE
+    ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
         self._backend = backend
@@ -244,19 +244,26 @@ class PdfOcrOrchestrator:
                 break
             batch = pending[batch_start : batch_start + self._batch_size]
             for idx in batch:
-                result.page_states[idx] = (PageState.PROCESSING, result.page_states[idx][1])
+                result.page_states[idx] = (
+                    PageState.PROCESSING,
+                    result.page_states[idx][1],
+                )
             outcome = self._process_batch(
                 session_id, file_path, batch, overwrite, cancel, sidecar_root
             )
             self._record_batch(outcome, result, seen_errors, batch)
             if cancel.cancelled:
                 result.cancelled = True
-                _mark_unfinished(pending, batch_start + len(batch), result, PageState.NONE)
+                _mark_unfinished(
+                    pending, batch_start + len(batch), result, PageState.NONE
+                )
                 break
             batch_start += len(batch)
 
         if not result.cancelled:
-            result.compressed = self._final_compress(session_id, file_path, cancel, sidecar_root)
+            result.compressed = self._final_compress(
+                session_id, file_path, cancel, sidecar_root
+            )
 
         return result
 
@@ -295,12 +302,18 @@ class PdfOcrOrchestrator:
         try:
             images = self._backend.render_pages(session_id, batch, cancel)
             if cancel.cancelled:
-                return BatchOutcome(saved_pages=(), failed_pages=tuple(batch), saved=False)
+                return BatchOutcome(
+                    saved_pages=(), failed_pages=tuple(batch), saved=False
+                )
             results = self._backend.recognize_pages(session_id, images, cancel)
             if cancel.cancelled:
-                return BatchOutcome(saved_pages=(), failed_pages=tuple(batch), saved=False)
+                return BatchOutcome(
+                    saved_pages=(), failed_pages=tuple(batch), saved=False
+                )
             pages_data = [
-                (idx, res) for idx, res in zip(batch, results, strict=True) if res.text or res.blocks
+                (idx, res)
+                for idx, res in zip(batch, results, strict=True)
+                if res.text or res.blocks
             ]
             outcome = self._backend.write_batch(
                 session_id,

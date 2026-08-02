@@ -20,15 +20,16 @@ permissions:
   contents: read
 
 concurrency:
-  # workflow_run events have empty inputs; fall back to a stable per-repo key so
-  # auto-triggered builds serialize. The "Resolve release tag" step + idempotency
-  # check prevent rebuilding a draft that already has assets.
+  # workflow_run events have empty inputs; auto-triggered builds serialize while
+  # --clobber keeps retries self-healing for partially populated drafts.
   group: release-assets-${{ github.repository }}-${{ inputs.release_tag || 'auto' }}
   cancel-in-progress: false
 
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_run'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     name: Build and upload Windows package
     runs-on: windows-latest
     environment: release
@@ -63,9 +64,8 @@ jobs:
             return
           }
 
-          # Auto path (workflow_run): find the latest draft release. If there is
-          # none, or it already carries assets, skip gracefully. The tag pattern
-          # tolerates prerelease suffixes (e.g. v0.1.0-preview.2).
+          # Auto path (workflow_run): find the latest draft release. The tag
+          # pattern tolerates prerelease suffixes (e.g. v0.1.0-preview.2).
           $drafts = gh release list --limit 50 --json tagName,isDraft `
             | ConvertFrom-Json | Where-Object { $_.isDraft -and $_.tagName -match '^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$' }
           if (-not $drafts) {
@@ -75,15 +75,6 @@ jobs:
             return
           }
           $tag = $drafts[0].tagName
-          # Idempotency: skip if this draft already has any assets attached
-          # (e.g. workflow_run fired again after a successful attach).
-          $assets = gh release view "$tag" --json assets --jq '.assets[].name'
-          if ($assets) {
-            Write-Host "::notice::Draft $tag already has assets; skipping build."
-            "RELEASE_TAG=" >> $env:GITHUB_ENV
-            "release_tag=" >> $env:GITHUB_OUTPUT
-            return
-          }
           git fetch origin "$tag" --tags --force
           git checkout "$tag"
           "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
@@ -115,6 +106,28 @@ jobs:
         if: env.RELEASE_TAG != ''
         shell: pwsh
         run: ./scripts/build-release.ps1 -Version '${{ env.RELEASE_TAG }}'
+      - name: Verify release candidate assets
+        if: env.RELEASE_TAG != ''
+        shell: pwsh
+        run: |
+          python scripts/verify_release_assets.py artifacts `
+            --require runtime-manifest.json `
+            --require protocol-release-manifest.json `
+            --require requirements-win-x64-cpu.lock `
+            --require requirements-win-x64-cu126.lock `
+            --require SBOM.spdx.json `
+            --require-one 'vibeocr_backend-*.whl' `
+            --require-one 'vibeocr_runtime_contracts-2.*.whl' `
+            --require-one 'vibeocr-runtime-installer-*.zip' `
+            --require-one 'cpython-*-install_only.tar.gz'
+      - name: Upload release candidate artifact
+        if: env.RELEASE_TAG != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ env.RELEASE_TAG }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/attest@v4
         if: env.RELEASE_TAG != ''
         with:
@@ -132,3 +145,21 @@ jobs:
         run: |
           $assets = @(Get-ChildItem artifacts -File | ForEach-Object FullName)
           gh release upload $env:RELEASE_TAG @assets --clobber
+      - name: Verify uploaded Release assets
+        if: env.RELEASE_TAG != ''
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          $expected = @(Get-ChildItem artifacts -File | ForEach-Object Name)
+          $uploaded = @(gh release view $env:RELEASE_TAG --json assets --jq '.assets[].name')
+          $missing = @($expected | Where-Object { $_ -notin $uploaded })
+          if ($missing.Count -ne 0) {
+            throw "Release $env:RELEASE_TAG is missing assets: $($missing -join ', ')"
+          }
+      - name: Publish verified Release
+        if: env.RELEASE_TAG != '' && github.event_name == 'workflow_run'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: gh release edit $env:RELEASE_TAG --draft=false

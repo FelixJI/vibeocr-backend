@@ -7,7 +7,6 @@ Facade 只依赖 dataclass/Protocol 和现有 service，不发 Qt signal。
 from __future__ import annotations
 
 import pytest
-
 from vibeocr.backend.application.contracts import (
     CancelToken,
     OcrApplication,
@@ -43,7 +42,9 @@ class _FakeOcrAdapter:
             raise OcrError("cancelled")
         if self._raise is not None:
             raise self._raise
-        return OcrResult(text=self._result_text, raw_blocks=[], pipeline=request.pipeline)
+        return OcrResult(
+            text=self._result_text, raw_blocks=[], pipeline=request.pipeline
+        )
 
     def recognize_batch(
         self, requests: list[OcrRequest], cancel: CancelToken

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-
 from vibeocr.backend.ipc.schemas import OpenResponse, PdfDocumentMirror
 from vibeocr.backend.supervisor.pdf.adapter import PdfProcessAdapter
 
@@ -14,16 +13,16 @@ if TYPE_CHECKING:
 
 
 class _FakePdfChild:
-    def __init__(self, *, save_payload: bytes = b"saved", fail_save: bool = False) -> None:
+    def __init__(
+        self, *, save_payload: bytes = b"saved", fail_save: bool = False
+    ) -> None:
         self.opened: list[str] = []
         self.renders: list[tuple[str, int]] = []
         self.saved: list[tuple[str, str]] = []
         self._save_payload = save_payload
         self._fail_save = fail_save
 
-    def open_session(
-        self, path: str, *, password: str | None = None
-    ) -> OpenResponse:
+    def open_session(self, path: str, *, password: str | None = None) -> OpenResponse:
         sid = f"session-{len(self.opened)}"
         self.opened.append(path)
         return OpenResponse(

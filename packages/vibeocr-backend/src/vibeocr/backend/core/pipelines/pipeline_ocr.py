@@ -431,7 +431,9 @@ def _recognize_ocr_batch(service: Any, images: list, options: OCROptions) -> lis
         _predict_elapsed = _time.perf_counter() - _predict_start
         _logger.info(
             "[识别] pipeline.predict 耗时 %.2fs (%d 张, %.2fs/页)",
-            _predict_elapsed, len(images), _predict_elapsed / max(len(images), 1),
+            _predict_elapsed,
+            len(images),
+            _predict_elapsed / max(len(images), 1),
         )
         _logger.debug(
             "[_recognize_ocr_batch] predict 返回 %d 个结果项", len(output_list)
@@ -440,7 +442,9 @@ def _recognize_ocr_batch(service: Any, images: list, options: OCROptions) -> lis
         _predict_elapsed = _time.perf_counter() - _predict_start
         _logger.error(
             "[_recognize_ocr_batch] predict 调用失败 (耗时 %.2fs): %s",
-            _predict_elapsed, e, exc_info=True,
+            _predict_elapsed,
+            e,
+            exc_info=True,
         )
         raise
 

@@ -6,9 +6,9 @@ import zipfile
 from typing import TYPE_CHECKING
 
 import pytest
+from vibeocr.backend.runtime_manifest import load_runtime_manifest
 
 from scripts.build_runtime_manifest import build_runtime_manifest
-from vibeocr.backend.runtime_manifest import load_runtime_manifest
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -32,8 +32,7 @@ def _inputs(root: Path) -> dict[str, Path]:
     root.mkdir()
     values = {
         "backend_wheel": root / "vibeocr_backend-0.7.0-py3-none-any.whl",
-        "protocol_wheel": root
-        / "vibeocr_runtime_contracts-2.0.0-py3-none-any.whl",
+        "protocol_wheel": root / "vibeocr_runtime_contracts-2.0.0-py3-none-any.whl",
         "protocol_manifest": root / "release-manifest.json",
         "cpu_lock": root / "requirements-win-x64-cpu.lock",
         "cu126_lock": root / "requirements-win-x64-cu126.lock",
@@ -109,8 +108,7 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
         checksums[filename] = digest
     for filename, digest in checksums.items():
         assert (
-            hashlib.sha256((first.parent / filename).read_bytes()).hexdigest()
-            == digest
+            hashlib.sha256((first.parent / filename).read_bytes()).hexdigest() == digest
         )
 
 

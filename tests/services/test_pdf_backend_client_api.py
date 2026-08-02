@@ -22,7 +22,6 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
-
 from vibeocr.backend.ipc.schemas import (
     DetectTextLayersResponse,
     HealthResponse,

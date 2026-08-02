@@ -4,7 +4,6 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
-
 from vibeocr.backend.services.ocr_service_base import OCRServiceBase
 
 

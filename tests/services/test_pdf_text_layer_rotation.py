@@ -14,7 +14,6 @@
 
 import fitz
 import pytest
-
 from vibeocr.backend.models.ocr_result import OCRResult, TextBlock
 from vibeocr.backend.services.pdf_service import PdfService
 

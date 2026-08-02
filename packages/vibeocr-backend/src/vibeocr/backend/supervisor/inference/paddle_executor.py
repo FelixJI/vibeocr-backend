@@ -72,9 +72,7 @@ class AdapterExecutor:
         self._adapter_lock = threading.Lock()
         self._scheduler = scheduler or DeviceScheduler(devices=[device])
         self._budget_planner = budget_planner or BudgetPlanner()
-        self._recovery_policy_factory = (
-            recovery_policy_factory or RecoveryPolicy
-        )
+        self._recovery_policy_factory = recovery_policy_factory or RecoveryPolicy
         self._device = device
         self._sleeper = sleeper
         self._clear_cache = clear_cache or (lambda: None)
@@ -86,9 +84,7 @@ class AdapterExecutor:
             with self._adapter_lock:
                 if self._adapter is None:
                     self._adapter = self._adapter_factory()
-                    configure = getattr(
-                        self._adapter, "configure_settings", None
-                    )
+                    configure = getattr(self._adapter, "configure_settings", None)
                     if callable(configure):
                         configure(self._settings)
         return self._adapter
@@ -231,10 +227,7 @@ class AdapterExecutor:
                     "batch_size": len(items),
                 },
             )
-            if (
-                decision.action is RecoveryAction.BISECT_ISOLATE
-                and len(items) > 1
-            ):
+            if decision.action is RecoveryAction.BISECT_ISOLATE and len(items) > 1:
                 midpoint = max(1, len(items) // 2)
                 self._execute_with_recovery(
                     record,
@@ -286,8 +279,7 @@ class AdapterExecutor:
         if not isinstance(payloads, list) or len(payloads) != len(items):
             actual = len(payloads) if isinstance(payloads, list) else None
             message = (
-                "adapter result count mismatch: "
-                f"expected={len(items)} actual={actual}"
+                f"adapter result count mismatch: expected={len(items)} actual={actual}"
             )
             self._fail_items(
                 record,
@@ -303,8 +295,7 @@ class AdapterExecutor:
 
         payload_type = (
             "mineru.v1"
-            if getattr(getattr(record, "kind", None), "value", None)
-            == "mineru_parse"
+            if getattr(getattr(record, "kind", None), "value", None) == "mineru_parse"
             else "ocr.v1"
         )
         for input_item, payload in zip(items, payloads, strict=True):
@@ -337,7 +328,11 @@ class AdapterExecutor:
                 for candidate in record.items
                 if candidate.item_id == item.item_id
             )
-            if current.state in (ItemState.SUCCEEDED, ItemState.FAILED, ItemState.CANCELLED):
+            if current.state in (
+                ItemState.SUCCEEDED,
+                ItemState.FAILED,
+                ItemState.CANCELLED,
+            ):
                 continue
             record.commit_item_failure(
                 item.item_id,

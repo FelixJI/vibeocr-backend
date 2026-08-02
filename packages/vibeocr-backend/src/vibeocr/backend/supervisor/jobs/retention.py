@@ -41,7 +41,9 @@ class RetentionPolicy:
         purged: list[str] = []
         with self._lock:
             expired = [
-                jid for jid, ts in self._terminal_at.items() if now - ts >= self.retention_seconds
+                jid
+                for jid, ts in self._terminal_at.items()
+                if now - ts >= self.retention_seconds
             ]
         for jid in expired:
             try:

@@ -38,12 +38,16 @@ class CutoverBoundary(Protocol):
     # Protocol method signatures have ``...`` bodies (no executable branch);
     # coverage's ``->exit`` branch partials on these lines are instrumentation
     # noise, not real uncovered code.
-    def verify_archive(self, archive_path: str, expected_sha256: str) -> None: ...  # pragma: no cover
+    def verify_archive(
+        self, archive_path: str, expected_sha256: str
+    ) -> None: ...  # pragma: no cover
     def stop_old_processes(self) -> None: ...  # pragma: no cover
     def atomic_replace(self, archive_path: str) -> None: ...  # pragma: no cover
     def migrate_config(self) -> None: ...  # pragma: no cover
     def check_prerequisites(self) -> None: ...  # pragma: no cover
-    def winui_health_handshake(self, timeout_seconds: float) -> None: ...  # pragma: no cover
+    def winui_health_handshake(
+        self, timeout_seconds: float
+    ) -> None: ...  # pragma: no cover
     def launch_winui(self) -> None: ...  # pragma: no cover
     def enter_repair_mode(self, reason: str) -> None: ...  # pragma: no cover
 
@@ -62,12 +66,18 @@ def run_cutover(boundary: CutoverBoundary, plan: CutoverPlan) -> str:
     :class:`CutoverError`. The legacy UI is never launched.
     """
     steps = [
-        ("verify archive", lambda: boundary.verify_archive(plan.archive_path, plan.expected_sha256)),
+        (
+            "verify archive",
+            lambda: boundary.verify_archive(plan.archive_path, plan.expected_sha256),
+        ),
         ("stop old processes", boundary.stop_old_processes),
         ("atomic replace", lambda: boundary.atomic_replace(plan.archive_path)),
         ("migrate config", boundary.migrate_config),
         ("check prerequisites", boundary.check_prerequisites),
-        ("winui health handshake", lambda: boundary.winui_health_handshake(plan.health_timeout_seconds)),
+        (
+            "winui health handshake",
+            lambda: boundary.winui_health_handshake(plan.health_timeout_seconds),
+        ),
         ("launch winui", boundary.launch_winui),
     ]
     for name, action in steps:
@@ -90,4 +100,10 @@ def verify_sha256(data: bytes, expected: str) -> None:
         raise CutoverError(f"sha256 mismatch: expected {expected}, got {actual}")
 
 
-__all__ = ["CutoverBoundary", "CutoverError", "CutoverPlan", "run_cutover", "verify_sha256"]
+__all__ = [
+    "CutoverBoundary",
+    "CutoverError",
+    "CutoverPlan",
+    "run_cutover",
+    "verify_sha256",
+]

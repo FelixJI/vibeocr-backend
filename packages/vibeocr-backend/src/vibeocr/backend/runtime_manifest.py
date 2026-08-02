@@ -208,9 +208,7 @@ def load_runtime_manifest(
         field="protocol_manifest",
     )
     if protocol_manifest != "protocol-release-manifest.json":
-        raise ManifestError(
-            "protocol_manifest must be protocol-release-manifest.json"
-        )
+        raise ManifestError("protocol_manifest must be protocol-release-manifest.json")
     protocol_manifest_sha = _sha256(
         data.get("protocol_manifest_sha256"),
         field="protocol_manifest_sha256",
@@ -219,9 +217,8 @@ def load_runtime_manifest(
     if not isinstance(python_data, dict):
         raise ManifestError("python runtime binding is required")
     python_version = python_data.get("version")
-    if (
-        not isinstance(python_version, str)
-        or not re.fullmatch(r"3\.13\.\d+", python_version)
+    if not isinstance(python_version, str) or not re.fullmatch(
+        r"3\.13\.\d+", python_version
     ):
         raise ManifestError("python.version must pin CPython 3.13 patch version")
     if python_data.get("abi") != "cp313":
@@ -230,8 +227,7 @@ def load_runtime_manifest(
         raise ManifestError("python.platform must be win_amd64")
     python_source_url = python_data.get("source_url")
     expected_python_suffix = (
-        f"cpython-{python_version}+20260325-x86_64-pc-windows-msvc"
-        "-install_only.tar.gz"
+        f"cpython-{python_version}+20260325-x86_64-pc-windows-msvc-install_only.tar.gz"
     )
     if (
         not isinstance(python_source_url, str)
@@ -304,7 +300,9 @@ def load_runtime_manifest(
     ):
         raise ManifestError("capabilities must be a non-empty string list")
     source_commit = data.get("source_commit")
-    if not isinstance(source_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+    if not isinstance(source_commit, str) or not re.fullmatch(
+        r"[0-9a-f]{40}", source_commit
+    ):
         raise ManifestError("source_commit must be a full Git SHA")
     workflow = data.get("build_workflow")
     if not isinstance(workflow, str) or not workflow.strip():

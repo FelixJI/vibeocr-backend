@@ -24,7 +24,6 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import numpy as np
-
 from vibeocr.runtime_contracts import (
     PipelineSelection,
     ResidencyEntry,
@@ -41,7 +40,9 @@ logger = logging.getLogger(__name__)
 class _OCRServiceLike(Protocol):
     """Minimal slice of :class:`OCRService` we depend on."""
 
-    def recognize_batch(self, images: list[Any], options: Any | None = ...) -> list[Any]: ...
+    def recognize_batch(
+        self, images: list[Any], options: Any | None = ...
+    ) -> list[Any]: ...
 
     def preload_pipelines_sequential(self, pipelines: list[Any]) -> dict[str, bool]: ...
 
@@ -88,7 +89,9 @@ class PaddlePipelineAdapter:
 
             registry = get_registry()
             spec = registry.get(pipeline_name) if registry.has(pipeline_name) else None
-            return bool(spec is not None and getattr(spec, "recognize_batch", None) is not None)
+            return bool(
+                spec is not None and getattr(spec, "recognize_batch", None) is not None
+            )
         except Exception:
             # In test environments without the pipeline registry we report
             # conservatively: not a real batch.

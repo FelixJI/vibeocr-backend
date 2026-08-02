@@ -3,7 +3,6 @@
 import io
 
 import pytest
-
 from vibeocr.backend.models.ocr_result import OCRResult
 from vibeocr.backend.services.export_service import ExportService
 
@@ -184,7 +183,9 @@ class TestTextLevelExport:
         headings = [
             p
             for p in doc.paragraphs
-            if (s := p.style) is not None and s.name is not None and s.name.startswith("Heading")
+            if (s := p.style) is not None
+            and s.name is not None
+            and s.name.startswith("Heading")
         ]
         assert len(headings) == 2
         assert headings[0].style is not None

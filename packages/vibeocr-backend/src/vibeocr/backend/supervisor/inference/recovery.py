@@ -62,9 +62,19 @@ class RecoveryPolicy:
         msg = (error_message or "").lower()
         if "out of memory" in msg or "oom" in msg or "cuda oom" in msg:
             return FailureClass.OOM
-        if "corrupt" in msg or "decode" in msg or "invalid image" in msg or "truncated" in msg:
+        if (
+            "corrupt" in msg
+            or "decode" in msg
+            or "invalid image" in msg
+            or "truncated" in msg
+        ):
             return FailureClass.BAD_INPUT
-        if "timeout" in msg or "temporarily" in msg or "unavailable" in msg or "connection" in msg:
+        if (
+            "timeout" in msg
+            or "temporarily" in msg
+            or "unavailable" in msg
+            or "connection" in msg
+        ):
             return FailureClass.TRANSIENT
         if "config" in msg or "option" in msg or "unsupported" in msg:
             return FailureClass.CONFIG_ERROR
@@ -89,7 +99,12 @@ class RecoveryPolicy:
             )
         if failure is FailureClass.DETERMINISTIC_MODEL:
             return RecoveryDecision(
-                RecoveryAction.FAIL_FAST, None, 0.0, attempt, False, "deterministic model error"
+                RecoveryAction.FAIL_FAST,
+                None,
+                0.0,
+                attempt,
+                False,
+                "deterministic model error",
             )
         if failure is FailureClass.BAD_INPUT:
             return RecoveryDecision(
@@ -103,7 +118,12 @@ class RecoveryPolicy:
         if failure is FailureClass.OOM:
             if attempt >= self.max_oom_retries:
                 return RecoveryDecision(
-                    RecoveryAction.FAIL_FAST, None, 0.0, attempt, True, "oom retries exhausted"
+                    RecoveryAction.FAIL_FAST,
+                    None,
+                    0.0,
+                    attempt,
+                    True,
+                    "oom retries exhausted",
                 )
             halved = max(self.min_batch_size, current_batch_size // 2)
             return RecoveryDecision(
@@ -117,7 +137,12 @@ class RecoveryPolicy:
         if failure is FailureClass.TRANSIENT:
             if attempt >= self.max_transient_retries:
                 return RecoveryDecision(
-                    RecoveryAction.FAIL_FAST, None, 0.0, attempt, True, "transient retries exhausted"
+                    RecoveryAction.FAIL_FAST,
+                    None,
+                    0.0,
+                    attempt,
+                    True,
+                    "transient retries exhausted",
                 )
             delay = min(
                 self.transient_max_delay,
@@ -125,7 +150,12 @@ class RecoveryPolicy:
             )
             if self.elapsed_seconds + delay > self.transient_total_budget_seconds:
                 return RecoveryDecision(
-                    RecoveryAction.FAIL_FAST, None, 0.0, attempt, True, "transient time budget exhausted"
+                    RecoveryAction.FAIL_FAST,
+                    None,
+                    0.0,
+                    attempt,
+                    True,
+                    "transient time budget exhausted",
                 )
             return RecoveryDecision(
                 RecoveryAction.BACKOFF_RETRY,
@@ -138,7 +168,12 @@ class RecoveryPolicy:
         # Unknown → treat conservatively as transient-once.
         if attempt >= 1:
             return RecoveryDecision(
-                RecoveryAction.FAIL_FAST, None, 0.0, attempt, True, "unknown failure; no retry"
+                RecoveryAction.FAIL_FAST,
+                None,
+                0.0,
+                attempt,
+                True,
+                "unknown failure; no retry",
             )
         return RecoveryDecision(
             RecoveryAction.BACKOFF_RETRY,

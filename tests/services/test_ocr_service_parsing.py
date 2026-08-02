@@ -15,7 +15,6 @@ fixtures，不依赖真实 PaddleOCR 模型加载：
 from __future__ import annotations
 
 import pytest
-
 from vibeocr.backend.models.ocr_result import OCRResult, TextBlock
 from vibeocr.backend.services.ocr_service import OCRPreset, OCRService
 

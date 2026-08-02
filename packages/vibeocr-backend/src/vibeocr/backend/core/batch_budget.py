@@ -104,7 +104,9 @@ def partition_batches[T](
     return chunks
 
 
-def image_pixel_count(source: bytes | bytearray | memoryview | str | Path) -> int | None:
+def image_pixel_count(
+    source: bytes | bytearray | memoryview | str | Path,
+) -> int | None:
     """只读取图像头部返回像素数；不可识别时返回 None。"""
     try:
         from PIL import Image

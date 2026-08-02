@@ -14,7 +14,6 @@ import time
 from typing import TYPE_CHECKING
 
 import pytest
-
 from vibeocr.backend.supervisor.jobs.staging import StagingQuotaError
 from vibeocr.backend.supervisor.module import (
     SupervisorModule,
@@ -73,9 +72,7 @@ def test_begin_drain_cancels_queued_job(tmp_path: Path) -> None:
     """A job still in QUEUED state when drain begins is cancelled (lines 160-162)."""
     executor = _NullExec()  # never transitions, so the job stays queued
     opts = SupervisorOptions(instance_id="drain-test")
-    mod = SupervisorModule(
-        options=opts, stager_root=tmp_path / "s", executor=executor
-    )
+    mod = SupervisorModule(options=opts, stager_root=tmp_path / "s", executor=executor)
     ref = mod.submit(
         kind=JobKind.RECOGNITION,
         priority=JobPriority.INTERACTIVE,
@@ -102,12 +99,8 @@ def test_shutdown_now_waits_bounded_for_running_job(tmp_path: Path) -> None:
             release.wait(timeout=2.0)  # hold the job non-terminal
 
     executor = _StuckRunner()
-    opts = SupervisorOptions(
-        instance_id="shutdown-test", draining_grace_seconds=0.2
-    )
-    mod = SupervisorModule(
-        options=opts, stager_root=tmp_path / "s", executor=executor
-    )
+    opts = SupervisorOptions(instance_id="shutdown-test", draining_grace_seconds=0.2)
+    mod = SupervisorModule(options=opts, stager_root=tmp_path / "s", executor=executor)
     mod.submit(
         kind=JobKind.RECOGNITION,
         priority=JobPriority.INTERACTIVE,
@@ -165,6 +158,7 @@ def test_shutdown_now_calls_pdf_adapter_stop(tmp_path: Path) -> None:
 
 def test_shutdown_now_does_not_call_close_when_missing(tmp_path: Path) -> None:
     """An executor without ``close`` must not break shutdown_now."""
+
     class _NoClose:
         def execute(self, record, staged):  # type: ignore[no-untyped-def]
             return
@@ -366,6 +360,7 @@ def test_update_settings_caches_residency_when_returned(tmp_path: Path) -> None:
 def test_update_settings_tolerates_non_residency_return(tmp_path: Path) -> None:
     """When configure_settings returns None, residency is NOT replaced
     (the False branch of ``isinstance(status, ResidencyStatus)``)."""
+
     class _NoneConfig(_NullExec):
         def configure_settings(self, snapshot):  # type: ignore[no-untyped-def]
             return None  # not a ResidencyStatus
@@ -381,6 +376,7 @@ def test_update_settings_tolerates_non_residency_return(tmp_path: Path) -> None:
 
 def test_update_settings_tolerates_missing_configure(tmp_path: Path) -> None:
     """An executor without ``configure_settings`` must not break update_settings."""
+
     class _NoConfig:
         def execute(self, record, staged):  # type: ignore[no-untyped-def]
             return

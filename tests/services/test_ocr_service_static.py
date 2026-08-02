@@ -10,7 +10,6 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import numpy as np
-
 from vibeocr.backend.models.ocr_result import OCRResult, TextBlock
 from vibeocr.backend.services.ocr_service import OCRService
 
@@ -220,7 +219,9 @@ class TestDecideEnableMkldnn:
 
     def test_cpu_safe_probe_true(self):
         """CPU 设备 + 探测安全 → True，且缓存结果"""
-        with patch("vibeocr.backend.utils.cpu_info.can_safely_enable_onednn") as mock_probe:
+        with patch(
+            "vibeocr.backend.utils.cpu_info.can_safely_enable_onednn"
+        ) as mock_probe:
             mock_probe.return_value = (True, "supported CPU")
             assert OCRService._decide_enable_mkldnn("cpu") is True
             # 缓存生效：第二次不再探测
@@ -229,12 +230,16 @@ class TestDecideEnableMkldnn:
 
     def test_cpu_unsafe_probe_false(self):
         """CPU 设备 + 探测不安全 → False"""
-        with patch("vibeocr.backend.utils.cpu_info.can_safely_enable_onednn") as mock_probe:
+        with patch(
+            "vibeocr.backend.utils.cpu_info.can_safely_enable_onednn"
+        ) as mock_probe:
             mock_probe.return_value = (False, "unsupported instruction set")
             assert OCRService._decide_enable_mkldnn("cpu") is False
 
     def test_probe_exception_defaults_false(self):
         """探测抛异常时保守禁用"""
-        with patch("vibeocr.backend.utils.cpu_info.can_safely_enable_onednn") as mock_probe:
+        with patch(
+            "vibeocr.backend.utils.cpu_info.can_safely_enable_onednn"
+        ) as mock_probe:
             mock_probe.side_effect = RuntimeError("probe crashed")
             assert OCRService._decide_enable_mkldnn("cpu") is False

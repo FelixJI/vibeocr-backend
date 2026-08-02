@@ -292,12 +292,16 @@ class TestMinerUService:
                 "_resolve_python_executable",
                 return_value=Path("/fake/python.exe"),
             ),
-            patch("vibeocr.backend.services.mineru_service.subprocess.Popen") as mock_popen,
+            patch(
+                "vibeocr.backend.services.mineru_service.subprocess.Popen"
+            ) as mock_popen,
             patch("vibeocr.backend.services.mineru_service.httpx") as mock_httpx,
             patch("vibeocr.backend.services.mineru_service.socket"),
             # JobObjectGuard.assign_from_popen 调真实 OpenProcess(pid=12345) 会因
             # 无效句柄失败并记 warning；mock 掉守卫避免噪声并隔离被测逻辑。
-            patch("vibeocr.backend.services.mineru_service.JobObjectGuard") as mock_guard_cls,
+            patch(
+                "vibeocr.backend.services.mineru_service.JobObjectGuard"
+            ) as mock_guard_cls,
             # NetworkDetector.__init__ 会触发 generate_machine_id() 调 wmic
             # （subprocess.Popen），与被 mock 的 Popen 冲突导致 assert_called_once 失败。
             # mock 掉 NetworkDetector 消除该副作用。
@@ -331,7 +335,9 @@ class TestMinerUService:
                 "_resolve_python_executable",
                 return_value=Path("/fake/python.exe"),
             ),
-            patch("vibeocr.backend.services.mineru_service.subprocess.Popen") as mock_popen,
+            patch(
+                "vibeocr.backend.services.mineru_service.subprocess.Popen"
+            ) as mock_popen,
             patch("vibeocr.backend.services.mineru_service.httpx") as mock_httpx,
             patch("vibeocr.backend.services.mineru_service.socket"),
             patch("vibeocr.backend.services.mineru_service.JobObjectGuard"),
@@ -846,9 +852,7 @@ class TestBuildOcrResultV2:
                 {
                     "type": "table",
                     "content": {
-                        "table_body": (
-                            "<table><tr><td>Nested</td></tr></table>"
-                        )
+                        "table_body": ("<table><tr><td>Nested</td></tr></table>")
                     },
                 }
             ]
@@ -1015,7 +1019,6 @@ class TestMinerUEnsureApiRunningNoModelProbe:
         assert not hasattr(MinerUService, "_check_models_available"), (
             "_check_models_available 应已删除：模型探测/下载交给 mineru 自理"
         )
-
 
 
 class TestMinerUTextExtraction:

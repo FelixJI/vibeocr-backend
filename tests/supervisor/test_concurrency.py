@@ -114,7 +114,9 @@ def test_concurrent_event_appends_are_unique_and_ordered() -> None:
 
 
 def test_concurrent_stage_and_release_are_safe(tmp_path: Path) -> None:
-    stager = InputStager(root=tmp_path / "staging", max_file_count=4, max_total_bytes=4096)
+    stager = InputStager(
+        root=tmp_path / "staging", max_file_count=4, max_total_bytes=4096
+    )
     errors: list[Exception] = []
 
     def _stage(idx: int) -> None:

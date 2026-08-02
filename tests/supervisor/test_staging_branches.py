@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-
 from vibeocr.backend.supervisor.jobs.staging import (
     InputStager,
     StagingQuotaError,
@@ -91,7 +90,9 @@ def test_clone_for_retry_cleans_retry_dir_when_copy_fails(
             source_to_retry_item_ids=[(staged[0].item_id, "new-it-0")],
         )
     # The retry dir was cleaned up by the except handler.
-    retry_dirs = [p for p in stager.root.iterdir() if p.name != _safe_dir_name("source-job")]
+    retry_dirs = [
+        p for p in stager.root.iterdir() if p.name != _safe_dir_name("source-job")
+    ]
     assert retry_dirs == []
 
 

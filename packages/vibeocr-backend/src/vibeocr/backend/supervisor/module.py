@@ -54,22 +54,32 @@ class Executor(Protocol):
     boundaries.
     """
 
-    def execute(self, record: JobRecord, staged: Iterable[StagedInput]) -> None:  # pragma: no cover - protocol
+    def execute(
+        self, record: JobRecord, staged: Iterable[StagedInput]
+    ) -> None:  # pragma: no cover - protocol
         ...
 
-    def cancel_mode_for(self, record: JobRecord) -> CancelMode:  # pragma: no cover - protocol
+    def cancel_mode_for(
+        self, record: JobRecord
+    ) -> CancelMode:  # pragma: no cover - protocol
         ...
 
     def residency_status(self) -> ResidencyStatus:  # pragma: no cover - protocol
         ...
 
-    def release_idle(self, pipeline: str | None = None) -> ResidencyStatus:  # pragma: no cover - protocol
+    def release_idle(
+        self, pipeline: str | None = None
+    ) -> ResidencyStatus:  # pragma: no cover - protocol
         ...
 
-    def preload(self, pipelines: tuple[str, ...]) -> ResidencyStatus:  # pragma: no cover - protocol
+    def preload(
+        self, pipelines: tuple[str, ...]
+    ) -> ResidencyStatus:  # pragma: no cover - protocol
         ...
 
-    def configure_settings(self, snapshot: SettingsSnapshot) -> ResidencyStatus:  # pragma: no cover - protocol
+    def configure_settings(
+        self, snapshot: SettingsSnapshot
+    ) -> ResidencyStatus:  # pragma: no cover - protocol
         ...
 
     def close(self) -> None:  # pragma: no cover - protocol
@@ -158,7 +168,9 @@ class SupervisorModule:
         for record in list(self.registry):
             if record.state is JobState.QUEUED:
                 try:
-                    self.registry.request_cancel(record.job_id, mode=CancelMode.QUEUED_ONLY)
+                    self.registry.request_cancel(
+                        record.job_id, mode=CancelMode.QUEUED_ONLY
+                    )
                     record.transition(JobState.CANCELLED)
                 except Exception:  # pragma: no cover - defensive
                     pass
@@ -176,11 +188,7 @@ class SupervisorModule:
 
         deadline = _time.monotonic() + self.options.draining_grace_seconds
         while _time.monotonic() < deadline:
-            running = [
-                r
-                for r in self.registry
-                if r.state not in TERMINAL_JOB_STATES
-            ]
+            running = [r for r in self.registry if r.state not in TERMINAL_JOB_STATES]
             if not running:
                 break
             _time.sleep(0.02)
@@ -274,14 +282,10 @@ class SupervisorModule:
         for item in request.items:
             source_type = item.source.get("type")
             if source_type != "upload.v1":
-                raise StagingQuotaError(
-                    f"source type is not wired yet: {source_type}"
-                )
+                raise StagingQuotaError(f"source type is not wired yet: {source_type}")
             attachment = str(item.source["attachment"])
             if attachment not in attachments:
-                raise StagingQuotaError(
-                    f"manifest attachment is missing: {attachment}"
-                )
+                raise StagingQuotaError(f"manifest attachment is missing: {attachment}")
             referenced.add(attachment)
             content_type, data = attachments[attachment]
             uploads.append((item.display_name, content_type, data))
@@ -314,7 +318,9 @@ class SupervisorModule:
                 if record.state not in TERMINAL_JOB_STATES:
                     try:
                         record.transition(JobState.FAILED)
-                        record.append_event("executor_failed", detail={"error": str(exc)})
+                        record.append_event(
+                            "executor_failed", detail={"error": str(exc)}
+                        )
                         self.retention.mark_terminal(record)
                     except Exception:  # pragma: no cover
                         pass
@@ -389,7 +395,10 @@ class SupervisorModule:
             source_job_id=job_id,
             retry_job_id=new_record.job_id,
             source_to_retry_item_ids=list(
-                zip(new_record.source_item_ids, [item.item_id for item in new_record.items])
+                zip(
+                    new_record.source_item_ids,
+                    [item.item_id for item in new_record.items],
+                )
             ),
         )
         new_record.transition(JobState.QUEUED)

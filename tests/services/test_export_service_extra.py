@@ -1,7 +1,6 @@
 """export_service 补充测试 — 覆盖 txt/html/markdown 导出、不支持的格式、get_output_filename 等"""
 
 import pytest
-
 from vibeocr.backend.models.ocr_result import OCRResult
 from vibeocr.backend.services.export_service import ExportService
 from vibeocr.runtime_contracts.contracts.tables import TableCellV1, TableModelV1
@@ -23,12 +22,8 @@ def _mixed_table_payload() -> dict:
         row_count=2,
         column_count=3,
         cells=(
-            TableCellV1(
-                cell_id="a", row=0, column=0, rowspan=2, text="A"
-            ),
-            TableCellV1(
-                cell_id="b", row=0, column=1, colspan=2, text="B"
-            ),
+            TableCellV1(cell_id="a", row=0, column=0, rowspan=2, text="A"),
+            TableCellV1(cell_id="b", row=0, column=1, colspan=2, text="B"),
             TableCellV1(cell_id="c", row=1, column=1, text="C"),
             TableCellV1(cell_id="d", row=1, column=2, text="D"),
         ),
@@ -162,9 +157,7 @@ class TestExportHtml:
                 {"type": "text", "text": "between"},
                 {
                     "type": "table",
-                    "table_body": (
-                        "<table><tr><td>LEGACY_SECOND</td></tr></table>"
-                    ),
+                    "table_body": ("<table><tr><td>LEGACY_SECOND</td></tr></table>"),
                 },
             ],
             html_text=(
@@ -185,9 +178,7 @@ class TestExportHtml:
         assert content.index("CANONICAL_FIRST") < content.index("LEGACY_SECOND")
         assert "<p>between</p>" in content
 
-    def test_structured_html_parses_each_table_only_once(
-        self, tmp_path, monkeypatch
-    ):
+    def test_structured_html_parses_each_table_only_once(self, tmp_path, monkeypatch):
         import vibeocr.backend.tables.reducer as reducer
 
         original = reducer.table_model_from_block
@@ -200,9 +191,7 @@ class TestExportHtml:
 
         monkeypatch.setattr(reducer, "table_model_from_block", tracked)
         result = _make_result(
-            content_list=[
-                {"type": "table", "table": _mixed_table_payload()}
-            ],
+            content_list=[{"type": "table", "table": _mixed_table_payload()}],
             html_text="<p>LOSSY</p>",
         )
 
@@ -219,9 +208,7 @@ class TestExportHtml:
 
         monkeypatch.setattr(reducer, "table_model_to_markdown", fail_if_called)
         result = _make_result(
-            content_list=[
-                {"type": "table", "table": _mixed_table_payload()}
-            ],
+            content_list=[{"type": "table", "table": _mixed_table_payload()}],
             html_text="<p>LOSSY</p>",
         )
         output = tmp_path / "html-only.html"
@@ -229,9 +216,7 @@ class TestExportHtml:
         assert ExportService.export(result, output, "html")
         assert "<table" in output.read_text(encoding="utf-8")
 
-    def test_structured_html_matches_shared_projection_for_rich_blocks(
-        self, tmp_path
-    ):
+    def test_structured_html_matches_shared_projection_for_rich_blocks(self, tmp_path):
         from vibeocr.backend.tables.reducer import build_result_projections
 
         result = _make_result(
@@ -398,9 +383,7 @@ class TestExportDocxExtra:
         assert table.cell(1, 1).text == "C"
         assert table.cell(1, 2).text == "D"
 
-    def test_canonical_table_uses_native_horizontal_and_vertical_merges(
-        self, tmp_path
-    ):
+    def test_canonical_table_uses_native_horizontal_and_vertical_merges(self, tmp_path):
         from docx import Document  # type: ignore[import-not-found]
 
         result = _make_result(
@@ -782,9 +765,8 @@ class TestExportCoverageGaps:
         self, tmp_path, monkeypatch
     ):
         """_write_xlsx_table_sheet 在 grid 为空时返回不变计数（line 458）。"""
-        from openpyxl import Workbook
-
         import vibeocr.backend.services.export_service as export_mod
+        from openpyxl import Workbook
 
         empty_model = TableModelV1(
             table_id="t",
@@ -793,9 +775,7 @@ class TestExportCoverageGaps:
             cells=(TableCellV1(cell_id="c", row=0, column=0, text=""),),
         )
         # monkey table_model_to_grid 返回空
-        monkeypatch.setattr(
-            export_mod, "table_model_to_grid", lambda model: []
-        )
+        monkeypatch.setattr(export_mod, "table_model_to_grid", lambda model: [])
         wb = Workbook()
         assert ExportService._write_xlsx_table_sheet(wb, empty_model, 0) == 0
 
@@ -944,7 +924,10 @@ class TestExportCoverageGaps:
         result = _make_result(
             content_list=[
                 {"type": "text", "text": "pre"},  # has_text=True
-                {"type": "table", "table_footnote": ["fn"]},  # 无 body/html/table/caption
+                {
+                    "type": "table",
+                    "table_footnote": ["fn"],
+                },  # 无 body/html/table/caption
             ],
         )
         out = tmp_path / "test.xlsx"
@@ -962,7 +945,11 @@ class TestExportCoverageGaps:
             content_list=[
                 {"type": "text", "text": "pre"},
                 {"type": "title", "text": "T"},  # has_text 已 True
-                {"type": "image", "img_path": "p", "image_caption": ["IC"]},  # has_text 已 True
+                {
+                    "type": "image",
+                    "img_path": "p",
+                    "image_caption": ["IC"],
+                },  # has_text 已 True
             ],
         )
         out = tmp_path / "test.xlsx"
@@ -1092,7 +1079,6 @@ class TestExportCoverageGaps:
         # 为覆盖 False 分支：让 wb 一开始就没有 'Sheet'。
         import openpyxl
         from openpyxl import load_workbook
-
         from vibeocr.backend.services.export_service import ExportService
 
         result = _make_result(
@@ -1109,7 +1095,6 @@ class TestExportCoverageGaps:
                 # 重命名默认 sheet，使 'Sheet' 不在 sheetnames
                 if self._sheets:
                     self._sheets[0].title = "Renamed"
-
 
         # openpyxl.Workbook 在函数内 import，patch openpyxl.Workbook
         monkeypatch_target = openpyxl.Workbook

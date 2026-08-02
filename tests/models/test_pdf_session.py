@@ -2,7 +2,6 @@
 
 import fitz
 import pytest
-
 from vibeocr.backend.models.pdf_document import PdfDocument, PdfPageInfo
 from vibeocr.backend.models.pdf_session import PdfSession
 
@@ -53,7 +52,9 @@ class TestPdfSession:
     def test_load_progress_empty_doc(self):
         doc = fitz.open()
         pdf_doc = PdfDocument(file_path="empty.pdf", pages=[])
-        session = PdfSession(file_path="empty.pdf", session_id="test-sid", pdf_document=pdf_doc)
+        session = PdfSession(
+            file_path="empty.pdf", session_id="test-sid", pdf_document=pdf_doc
+        )
 
         assert session.load_progress == 1.0
         doc.close()

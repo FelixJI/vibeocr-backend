@@ -2,7 +2,6 @@
 """Tests for PDF bbox coordinate inverse transform."""
 
 import fitz
-
 from vibeocr.backend.services.pdf_service import PdfService
 
 # 标准信纸尺寸 page_rect: 612×792 points
@@ -127,7 +126,7 @@ class TestUnrotatePosition:
         )
         # 应落在右半部分（接近右边缘）
         assert result.x0 > _PAGE_RECT.width * 0.5, (
-            f"angle=90: 顶部窄条还原后应在右侧(x0>{_PAGE_RECT.width*0.5:.0f})，"
+            f"angle=90: 顶部窄条还原后应在右侧(x0>{_PAGE_RECT.width * 0.5:.0f})，"
             f"实际 rect={result}（90/270 分支写反的症状）"
         )
 
@@ -138,7 +137,7 @@ class TestUnrotatePosition:
         )
         # 应落在左半部分（接近左边缘）
         assert result.x1 < _PAGE_RECT.width * 0.5, (
-            f"angle=270: 顶部窄条还原后应在左侧(x1<{_PAGE_RECT.width*0.5:.0f})，"
+            f"angle=270: 顶部窄条还原后应在左侧(x1<{_PAGE_RECT.width * 0.5:.0f})，"
             f"实际 rect={result}（90/270 分支写反的症状）"
         )
 
@@ -149,7 +148,7 @@ class TestUnrotatePosition:
             (50.0, 400.0, 100.0, 600.0), 90, _PAGE_RECT
         )
         assert result.y1 < _PAGE_RECT.height * 0.5, (
-            f"angle=90: 左侧竖条还原后应在顶部(y1<{_PAGE_RECT.height*0.5:.0f})，"
+            f"angle=90: 左侧竖条还原后应在顶部(y1<{_PAGE_RECT.height * 0.5:.0f})，"
             f"实际 rect={result}"
         )
 
@@ -159,7 +158,7 @@ class TestUnrotatePosition:
             (50.0, 400.0, 100.0, 600.0), 270, _PAGE_RECT
         )
         assert result.y0 > _PAGE_RECT.height * 0.5, (
-            f"angle=270: 左侧竖条还原后应在底部(y0>{_PAGE_RECT.height*0.5:.0f})，"
+            f"angle=270: 左侧竖条还原后应在底部(y0>{_PAGE_RECT.height * 0.5:.0f})，"
             f"实际 rect={result}"
         )
 
@@ -204,8 +203,11 @@ class TestBboxToPixel:
         disp_rect = (0.0, 0.0, 841.68, 595.2)
         # mb(200,300) 点 → 显示 (841.68-300, 200) = (541.68, 200)
         result = PdfService.bbox_to_pixel(
-            (200.0, 300.0, 200.0, 300.0), disp_rect, render_dpi=72,
-            source="pdf", rotation=90,
+            (200.0, 300.0, 200.0, 300.0),
+            disp_rect,
+            render_dpi=72,
+            source="pdf",
+            rotation=90,
         )
         assert abs(result[0] - 541.68) < 1, f"rot=90 x 应≈541.68，实际 {result[0]:.1f}"
         assert abs(result[1] - 200) < 1, f"rot=90 y 应≈200，实际 {result[1]:.1f}"
@@ -215,8 +217,11 @@ class TestBboxToPixel:
         disp_rect = (0.0, 0.0, 595.2, 841.68)
         # mb(200,300) -> (595.2-200, 841.68-300) = (395.2, 541.68)
         result = PdfService.bbox_to_pixel(
-            (200.0, 300.0, 200.0, 300.0), disp_rect, render_dpi=72,
-            source="pdf", rotation=180,
+            (200.0, 300.0, 200.0, 300.0),
+            disp_rect,
+            render_dpi=72,
+            source="pdf",
+            rotation=180,
         )
         assert abs(result[0] - 395.2) < 1
         assert abs(result[1] - 541.68) < 1
@@ -226,8 +231,11 @@ class TestBboxToPixel:
         disp_rect = (0.0, 0.0, 841.68, 595.2)  # rot=270 display
         # mb(200,300) -> (300, 595.2-200) = (300, 395.2)
         result = PdfService.bbox_to_pixel(
-            (200.0, 300.0, 200.0, 300.0), disp_rect, render_dpi=72,
-            source="pdf", rotation=270,
+            (200.0, 300.0, 200.0, 300.0),
+            disp_rect,
+            render_dpi=72,
+            source="pdf",
+            rotation=270,
         )
         assert abs(result[0] - 300) < 1
         assert abs(result[1] - 395.2) < 1
@@ -235,8 +243,11 @@ class TestBboxToPixel:
     def test_rotation_ignored_for_normalized(self):
         """source=normalized 时 rotation 应被忽略（bbox 已在显示空间）。"""
         result = PdfService.bbox_to_pixel(
-            (500.0, 500.0, 500.0, 500.0), _PAGE_RECT, render_dpi=72,
-            source="normalized", rotation=90,
+            (500.0, 500.0, 500.0, 500.0),
+            _PAGE_RECT,
+            render_dpi=72,
+            source="normalized",
+            rotation=90,
         )
         # 500/1000 * 612 = 306, 500/1000 * 792 = 396（不受 rotation 影响）
         assert abs(result[0] - 306) < 1

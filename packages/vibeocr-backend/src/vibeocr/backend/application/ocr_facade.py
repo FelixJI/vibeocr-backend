@@ -25,7 +25,9 @@ class OcrAdapter(Protocol):
 
     # Protocol 方法签名为 ``...`` body（无可执行分支）；coverage 的 ``->exit``
     # partial 是插桩噪音，非真实未覆盖代码。
-    def recognize(self, request: OcrRequest, cancel: CancelToken) -> OcrResult: ...  # pragma: no cover
+    def recognize(
+        self, request: OcrRequest, cancel: CancelToken
+    ) -> OcrResult: ...  # pragma: no cover
 
     def recognize_batch(
         self, requests: list[OcrRequest], cancel: CancelToken

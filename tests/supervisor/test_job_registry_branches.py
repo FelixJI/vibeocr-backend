@@ -9,7 +9,6 @@ all_job_ids filtering.
 from __future__ import annotations
 
 import pytest
-
 from vibeocr.backend.supervisor.jobs.registry import (
     JobNotFoundError,
     JobRecord,
@@ -103,9 +102,7 @@ def test_commit_item_success_rejects_item_in_non_running_state() -> None:
     rec.transition_item("it-0", ItemState.RUNNING)
     rec.transition_item("it-0", ItemState.SUCCEEDED)
     with pytest.raises(ContractError, match="cannot commit success"):
-        rec.commit_item_success(
-            "it-0", payload_type="ocr.v1", payload={"text": "ok"}
-        )
+        rec.commit_item_success("it-0", payload_type="ocr.v1", payload={"text": "ok"})
 
 
 # ---------------------------------------------------------------------------
@@ -467,7 +464,9 @@ def test_create_wires_terminal_hook() -> None:
     calls: list[str] = []
 
     def hook(record: JobRecord) -> None:
-        calls.append(record.state.value if hasattr(record.state, "value") else str(record.state))
+        calls.append(
+            record.state.value if hasattr(record.state, "value") else str(record.state)
+        )
 
     reg = _make_registry()
     reg.set_terminal_hook(hook)

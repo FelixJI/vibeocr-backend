@@ -30,7 +30,6 @@ jobs:
           $committedLock = Get-Content release/protocol.lock.json -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
           if ($generatedLock -ne $committedLock) { throw 'Protocol lock mismatch' }
           python -m pip install --upgrade pip
-          python -m pip install pytest pyyaml ruff ./.protocol/vibeocr_runtime_contracts-2.0.0-py3-none-any.whl ./packages/vibeocr-backend
+          python -m pip install --group dev ./.protocol/vibeocr_runtime_contracts-2.0.0-py3-none-any.whl ./packages/vibeocr-backend
           python scripts/check_runtime_protocol_conformance.py
-          python -m pytest tests/runtime tests/application tests/core tests/models
-          python -m ruff check packages/vibeocr-backend scripts tests/runtime
+          ./scripts/check-quality.ps1

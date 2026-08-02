@@ -38,7 +38,9 @@ class CompositeExecutor:
     """Route jobs to children by ``record.kind``; aggregate runtime ops."""
 
     def __init__(self, children: Iterable[tuple[Executor, frozenset[JobKind]]]) -> None:
-        self._children: list[_Routed] = [_Routed(ex, frozenset(ks)) for ex, ks in children]
+        self._children: list[_Routed] = [
+            _Routed(ex, frozenset(ks)) for ex, ks in children
+        ]
         # Remember the last executor we dispatched to per job_id so cancel_mode_for
         # and residency/release hit the right backend without re-inspecting kind.
         self._dispatch: dict[str, _Routed] = {}
@@ -75,7 +77,9 @@ class CompositeExecutor:
         routed.executor.execute(record, staged)
 
     def cancel_mode_for(self, record: Any) -> CancelMode:
-        routed = self._dispatch.get(getattr(record, "job_id", "")) or self._routed_for(record)
+        routed = self._dispatch.get(getattr(record, "job_id", "")) or self._routed_for(
+            record
+        )
         if routed is not None:
             return routed.executor.cancel_mode_for(record)
         return CancelMode.COOPERATIVE
