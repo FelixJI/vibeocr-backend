@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "project": {
+    "component": "backend",
+    "repository": "FelixJI/vibeocr-backend",
+    "protocol_compatibility": {
+      "supported_majors": [2],
+      "minor_compatible": true
+    }
+  },
+  "ci": {
+    "bootstrap": [["python", "-m", "pip", "install", "--upgrade", "pip"], ["python", "-m", "pip", "install", "pytest==9.0.3", "ruff==0.15.17"]],
+    "quality": [["powershell", "-ExecutionPolicy", "Bypass", "-File", "scripts/check-quality.ps1"]],
+    "e2e": [["python", "scripts/check_runtime_protocol_conformance.py"]],
+    "release_build": [["powershell", "-ExecutionPolicy", "Bypass", "-File", "scripts/build-release.ps1", "-Version", "{version}", "-ArtifactsDir", "{artifacts_dir}"]],
+    "release_smoke": [["python", "scripts/verify_release_assets.py", "{artifacts_dir}", "--require", "SBOM.spdx.json", "--require", "runtime-manifest.json"]]
+  },
+  "release": {
+    "version_sources": [
+      {"kind": "text", "path": "version.txt"},
+      {"kind": "toml", "path": "packages/vibeocr-backend/pyproject.toml", "key": "project.version"},
+      {"kind": "python", "path": "packages/vibeocr-backend/src/vibeocr/backend/__init__.py", "key": "__version__"},
+      {"kind": "json", "path": "repository.json", "key": "version"}
+    ],
+    "generated_commands": [],
+    "identity_asset": "build-identity.json",
+    "required_assets": ["build-identity.json", "SBOM.spdx.json", "runtime-manifest.json", "protocol-release-manifest.json", "vibeocr_backend-*.whl", "vibeocr_runtime_contracts-2.*.whl", "vibeocr-runtime-installer-*.zip"],
+    "mirrors": [
+      {"name": "gitee", "url_env": "GITEE_URL", "user_env": "GITEE_USER", "token_env": "GITEE_TOKEN"},
+      {"name": "cnb", "url_env": "CNB_URL", "token_env": "CNB_TOKEN", "user": "cnb"}
+    ]
+  }
+}

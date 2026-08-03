@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$Version
+    [string]$Version,
+    [string]$ArtifactsDir
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -16,7 +17,10 @@ if (-not $Version) {
 if ($Version -ne $projectVersion) {
     throw "Release version '$Version' does not match project version '$projectVersion'"
 }
-$artifacts = Join-Path $root 'artifacts'
+if (-not $ArtifactsDir) {
+    $ArtifactsDir = Join-Path $root 'artifacts'
+}
+$artifacts = [IO.Path]::GetFullPath($ArtifactsDir)
 $build = Join-Path $root '.release-build'
 $inputs = Join-Path $root '.release-input'
 foreach ($path in @($artifacts, $build, $inputs)) {
@@ -86,6 +90,10 @@ python (Join-Path $root 'scripts/build_runtime_manifest.py') `
   --output-dir $artifacts
 if ($LASTEXITCODE -ne 0) { throw 'Runtime manifest build failed' }
 Remove-Item -LiteralPath (Join-Path $artifacts 'SHA256SUMS') -Force
+python (Join-Path $root 'scripts/build_automation_identity.py') `
+  --artifacts-dir $artifacts --version $Version `
+  --source-sha (git -C $root rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Automation identity build failed' }
 python (Join-Path $root 'scripts/build_spdx_sbom.py') --artifacts-dir $artifacts `
   --repository-name FelixJI/vibeocr-backend --version $Version
 if ($LASTEXITCODE -ne 0) { throw 'SBOM build failed' }
