@@ -24,7 +24,7 @@
     ],
     "generated_commands": [],
     "identity_asset": "build-identity.json",
-    "required_assets": ["build-identity.json", "SBOM.spdx.json", "runtime-manifest.json", "protocol-release-manifest.json", "vibeocr_backend-*.whl", "vibeocr_runtime_contracts-2.*.whl", "vibeocr-runtime-installer-*.zip"],
+    "required_assets": ["build-identity.json", "SBOM.spdx.json", "SHA256SUMS", "runtime-manifest.json", "protocol-release-manifest.json", "cpython-*-x86_64-pc-windows-msvc-install_only.tar.gz", "requirements-win-x64-cpu.lock", "requirements-win-x64-cu126.lock", "vibeocr_backend-*.whl", "vibeocr_runtime_contracts-2.*.whl", "vibeocr-runtime-installer-*.zip"],
     "mirrors": [
       {"name": "gitee", "url_env": "GITEE_URL", "user_env": "GITEE_USER", "token_env": "GITEE_TOKEN"},
       {"name": "cnb", "url_env": "CNB_URL", "token_env": "CNB_TOKEN", "user": "cnb"}
