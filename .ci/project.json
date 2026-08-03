@@ -9,7 +9,7 @@
     }
   },
   "ci": {
-    "bootstrap": [["python", "-m", "pip", "install", "--upgrade", "pip"], ["python", "-m", "pip", "install", "pytest==9.0.3", "ruff==0.15.17"]],
+    "bootstrap": [["powershell", "-ExecutionPolicy", "Bypass", "-File", "scripts/bootstrap-ci.ps1"]],
     "quality": [["powershell", "-ExecutionPolicy", "Bypass", "-File", "scripts/check-quality.ps1"]],
     "e2e": [["python", "scripts/check_runtime_protocol_conformance.py"]],
     "release_build": [["powershell", "-ExecutionPolicy", "Bypass", "-File", "scripts/build-release.ps1", "-Version", "{version}", "-ArtifactsDir", "{artifacts_dir}"]],
