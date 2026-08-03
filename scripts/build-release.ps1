@@ -5,6 +5,20 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+function Get-Sha256([string]$Path) {
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        return [System.BitConverter]::ToString(
+            $algorithm.ComputeHash($stream)
+        ).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+        $algorithm.Dispose()
+    }
+}
+
 $projectFile = Join-Path $root 'packages/vibeocr-backend/pyproject.toml'
 $projectVersion = (
     python -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path(r'$projectFile').read_text(encoding='utf-8'))['project']['version'])"
@@ -59,8 +73,7 @@ $runtimeLock = Get-Content (Join-Path $root 'release/python-runtime.lock.json') 
   ConvertFrom-Json
 $pythonArchive = Join-Path $inputs ([IO.Path]::GetFileName($runtimeLock.source_url))
 Invoke-WebRequest -Uri $runtimeLock.source_url -OutFile $pythonArchive
-if ((Get-FileHash $pythonArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne
-    $runtimeLock.sha256) {
+if ((Get-Sha256 $pythonArchive) -ne $runtimeLock.sha256) {
     throw 'standalone Python archive hash mismatch'
 }
 python -m pip install build==1.5.0 hatchling==1.27.0 pyinstaller==6.21.0

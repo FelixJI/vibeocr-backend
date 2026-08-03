@@ -13,3 +13,11 @@ def test_workflows_are_thin_automation_cli_callers() -> None:
         text = workflow.read_text(encoding="utf-8")
         assert "python scripts/automation.py" in text
         assert "release-please" not in text
+
+
+def test_release_build_hashes_runtime_without_shell_module_autoloading() -> None:
+    script = (ROOT / "scripts/build-release.ps1").read_text(encoding="utf-8")
+
+    assert "System.Security.Cryptography.SHA256" in script
+    assert "ComputeHash" in script
+    assert "Get-FileHash" not in script
