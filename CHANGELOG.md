@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0
+
+### Features
+
+- **runtime:** 统一单一 Runtime 与加速方案 (#10) (8c68f90)
+- **ci:** 统一 CI/CD 自动化 (#11) (c7678af)
+
+### Bug Fixes
+
+- **ci:** 修复发布 tag 推送认证 (#15) (3b93e80)
+
 ## [0.7.2](https://github.com/FelixJI/vibeocr-backend/compare/v0.7.1...v0.7.2) (2026-08-02)
 
 
