@@ -20,16 +20,26 @@ def _sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _protocol_release(root: Path) -> Path:
+def _protocol_release(root: Path, *, schema_version: int = 1) -> Path:
     root.mkdir()
     wheel = root / "vibeocr_runtime_contracts-2.0.0-py3-none-any.whl"
     wheel.write_bytes(b"protocol")
-    manifest = {
-        "protocol_version": "2.0.0",
+    manifest: dict[str, object] = {
         "artifacts": {
             wheel.name: {"sha256": _sha(b"protocol"), "size": len(b"protocol")}
         },
     }
+    if schema_version == 1:
+        manifest.update({"schema_version": 1, "protocol_version": "2.0.0"})
+    else:
+        manifest.update(
+            {
+                "schema_version": 2,
+                "project": {"component": "protocol"},
+                "protocol": {"version": "2.0.0"},
+                "release": {"tag": "v2.0.0", "version": "2.0.0"},
+            }
+        )
     (root / "release-manifest.json").write_text(
         json.dumps(manifest),
         encoding="utf-8",
@@ -107,6 +117,32 @@ def test_binds_verified_protocol_manifest(tmp_path: Path) -> None:
     assert lock["manifest_sha256"] == _sha(
         (release / "release-manifest.json").read_bytes()
     )
+
+
+def test_binds_verified_protocol_v2_manifest(tmp_path: Path) -> None:
+    release = _protocol_release(tmp_path / "protocol", schema_version=2)
+    output = bind_protocol_release(
+        release_dir=release,
+        repository="FelixJI/vibeocr-protocol",
+        version="2.0.0",
+        output=tmp_path / "protocol.lock.json",
+    )
+    assert json.loads(output.read_text(encoding="utf-8"))["version"] == "2.0.0"
+
+
+def test_rejects_inconsistent_protocol_v2_release_identity(tmp_path: Path) -> None:
+    release = _protocol_release(tmp_path / "protocol", schema_version=2)
+    manifest_path = release / "release-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["release"]["tag"] = "v2.0.1"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="release identity mismatch"):
+        bind_protocol_release(
+            release_dir=release,
+            repository="FelixJI/vibeocr-protocol",
+            version="2.0.0",
+            output=tmp_path / "protocol.lock.json",
+        )
 
 
 def test_rejects_tampered_protocol_asset(tmp_path: Path) -> None:

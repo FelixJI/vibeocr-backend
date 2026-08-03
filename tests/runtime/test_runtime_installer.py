@@ -13,11 +13,11 @@ from vibeocr.backend.runtime_installer import (
     RuntimeInstaller,
     RuntimeInstallError,
     _extract_python_archive,
+    main,
 )
 from vibeocr.backend.runtime_layout import (
     LayoutError,
     resolve_runtime_store,
-    runtime_id_prefix,
 )
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_manifest import ManifestError, load_runtime_manifest
@@ -132,7 +132,7 @@ def _release(root: Path) -> tuple[Path, Path]:
             "version": "0.7.0",
             "artifact_sha256": manifest["backend_sha256"],
             "runtime_manifest_sha256": _sha(manifest_path.read_bytes()),
-            "profile": "win-x64-cpu",
+            "accelerator": "cpu",
         },
         "required_capabilities": ["ocr.recognition.v2"],
     }
@@ -175,15 +175,6 @@ def test_python_archive_rejects_traversal(tmp_path: Path) -> None:
     with pytest.raises(RuntimeInstallError, match="unsafe"):
         _extract_python_archive(archive, destination)
     assert not (tmp_path / "escape.exe").exists()
-
-
-def test_runtime_id_prefix_is_six_chars() -> None:
-    # 物理目录名 / runtime_id 用 6 位前缀，完整哈希仅留在 lock 校验字段。
-    digest = "a" * 64
-    assert runtime_id_prefix(digest) == "aaaaaa"
-    # 非法哈希（校验职责）应拒绝，与完整哈希的防篡改校验保持一致。
-    with pytest.raises(LayoutError, match="manifest_sha256"):
-        runtime_id_prefix("short")
 
 
 def test_manifest_verifies_raw_hash_and_bound_artifacts(tmp_path: Path) -> None:
@@ -254,22 +245,16 @@ def test_shared_layout_requires_explicit_valid_registration(tmp_path: Path) -> N
     local = resolve_runtime_store(
         product,
         manifest_sha256=digest,
-        profile="win-x64-cpu",
     )
     assert local.store_root == product.resolve()
     shared = resolve_runtime_store(
         product,
         manifest_sha256=digest,
-        profile="win-x64-cpu",
         layout_manifest=marker,
         product_id="classic",
     )
     assert shared.store_root == (bundle / "shared").resolve()
-    # 物理目录名用 6 位前缀（见 runtime_id_prefix），完整哈希仅留在 lock 校验。
-    assert (
-        shared.runtime_root
-        == (bundle / "shared" / "runtimes" / digest[:6] / "win-x64-cpu").resolve()
-    )
+    assert shared.runtime_root == (bundle / "shared" / "runtime").resolve()
 
 
 def test_shared_layout_rejects_traversal(tmp_path: Path) -> None:
@@ -291,7 +276,6 @@ def test_shared_layout_rejects_traversal(tmp_path: Path) -> None:
         resolve_runtime_store(
             product,
             manifest_sha256="a" * 64,
-            profile="win-x64-cpu",
             layout_manifest=marker,
             product_id="classic",
         )
@@ -309,16 +293,18 @@ def test_ensure_is_atomic_and_idempotent(tmp_path: Path) -> None:
         product_root=tmp_path / "product",
         component_lock=component,
         runtime_manifest=manifest,
-        profile="win-x64-cpu",
+        accelerator="cpu",
         install_runner=install,
     )
     first = installer.ensure()
     second = installer.ensure()
     assert first == second
     assert len(calls) == 1
+    assert calls == [installer.paths.runtime_root.with_name("runtime.installing")]
     assert Path(first.python_executable).is_file()
-    assert not list(installer.paths.runtime_root.parent.glob("*.partial-*"))
+    assert not installer.paths.runtime_root.with_name("runtime.installing").exists()
     assert installer.inspect().integrity == "verified"
+    assert installer.inspect().accelerator == "cpu"
     portable_path_keys = {
         "VIBEOCR_PRODUCT_ROOT",
         "VIBEOCR_RUNTIME_ROOT",
@@ -348,13 +334,13 @@ def test_failed_install_leaves_no_partial_or_final(tmp_path: Path) -> None:
         product_root=tmp_path / "product",
         component_lock=component,
         runtime_manifest=manifest,
-        profile="win-x64-cpu",
+        accelerator="cpu",
         install_runner=fail,
     )
     with pytest.raises(RuntimeInstallError, match="boom"):
         installer.ensure()
     assert not installer.paths.runtime_root.exists()
-    assert not list(installer.paths.runtime_root.parent.glob("*.partial-*"))
+    assert not installer.paths.runtime_root.with_name("runtime.installing").exists()
 
 
 def test_component_lock_capability_mismatch_is_rejected(tmp_path: Path) -> None:
@@ -367,7 +353,7 @@ def test_component_lock_capability_mismatch_is_rejected(tmp_path: Path) -> None:
             product_root=tmp_path / "product",
             component_lock=component,
             runtime_manifest=manifest,
-            profile="win-x64-cpu",
+            accelerator="cpu",
             install_runner=_fake_install,
         )
 
@@ -384,7 +370,7 @@ def test_component_lock_protocol_manifest_mismatch_is_rejected(
             product_root=tmp_path / "product",
             component_lock=component,
             runtime_manifest=manifest,
-            profile="win-x64-cpu",
+            accelerator="cpu",
             install_runner=_fake_install,
         )
 
@@ -402,57 +388,73 @@ def test_store_lock_is_cross_handle_exclusive(tmp_path: Path) -> None:
     second.release()
 
 
-def test_gc_fails_closed_on_invalid_component_lock(tmp_path: Path) -> None:
+def test_repair_replaces_the_static_runtime_in_place(tmp_path: Path) -> None:
     manifest, component = _release(tmp_path / "release")
+    calls: list[Path] = []
+
+    def install(partial: Path, runtime_manifest, profile: str) -> Path:
+        calls.append(partial)
+        return _fake_install(partial, runtime_manifest, profile)
+
     installer = RuntimeInstaller(
         product_root=tmp_path / "product",
         component_lock=component,
         runtime_manifest=manifest,
-        profile="win-x64-cpu",
-        install_runner=_fake_install,
+        accelerator="cpu",
+        install_runner=install,
     )
     installer.ensure()
-    invalid = tmp_path / "bad-component-lock.json"
-    invalid.write_text("not json", encoding="utf-8")
-    assert installer.gc(component_locks=[invalid], grace_seconds=0) == []
+    original_marker = installer.paths.runtime_root / "original.txt"
+    original_marker.write_text("old", encoding="utf-8")
+
+    installer.repair()
+
+    assert calls == [
+        installer.paths.runtime_root.with_name("runtime.installing"),
+        installer.paths.runtime_root.with_name("runtime.installing"),
+    ]
+    assert not original_marker.exists()
     assert installer.paths.runtime_root.is_dir()
 
 
-def test_gc_still_matches_after_prefix_shorten(tmp_path: Path) -> None:
-    """目录名改为 6 位前缀后，GC 仍能按目录名重建 runtime_id 并正确回收。
-
-    自洽性：referenced（从 lock 算前缀）=== 目录名重建值，无需读 marker 拼回。
-    """
+def test_runtime_host_json_contract_selects_and_persists_accelerator(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     manifest, component = _release(tmp_path / "release")
-    installer = RuntimeInstaller(
-        product_root=tmp_path / "product",
-        component_lock=component,
-        runtime_manifest=manifest,
-        profile="win-x64-cpu",
-        install_runner=_fake_install,
-    )
-    installer.ensure()
-    # 当前 runtime 的目录名应为 6 位前缀（与 runtime_id 一致）。
-    digest_dir = installer.paths.runtime_root.parent
-    assert len(digest_dir.name) == 6
-    assert digest_dir.name == runtime_id_prefix(installer.manifest.sha256)
 
-    # 未被任何 lock 引用的孤儿目录也应能被 GC 按 6 位前缀目录名回收。
-    orphan = installer.paths.runtimes_root / "deadbeef" / "win-x64-cpu"
-    orphan.mkdir(parents=True)
-    (orphan / ".installed.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "runtime_id": "deadbeef/win-x64-cpu",
-                "backend_version": installer.manifest.backend_version,
-                "profile": "win-x64-cpu",
-            }
-        ),
-        encoding="utf-8",
-    )
-    removed = installer.gc(component_locks=[component], grace_seconds=0)
-    assert "deadbeef/win-x64-cpu" in removed
-    assert not orphan.exists()
-    # 被引用的当前 runtime 保留。
-    assert installer.paths.runtime_root.is_dir()
+    request = {
+        "protocol_version": 2,
+        "operation": "inspect",
+        "product_root": str(tmp_path / "product"),
+        "component_lock": str(component),
+        "runtime_manifest": str(manifest),
+        "accelerator": "nvidia_cuda",
+    }
+    assert main(["--request-json", json.dumps(request)]) == 0
+    envelope = json.loads(capsys.readouterr().out)
+    assert envelope["protocol_version"] == 2
+    assert envelope["ok"] is True
+    assert envelope["operation"] == "inspect"
+    assert envelope["state"]["accelerator"] == "nvidia_cuda"
+    assert envelope["state"]["runtime_root"].endswith("runtime")
+    assert "profile" not in envelope["state"]
+
+
+def test_runtime_host_rejects_legacy_profile_field(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    request = {
+        "protocol_version": 2,
+        "operation": "inspect",
+        "product_root": str(tmp_path / "product"),
+        "component_lock": str(component),
+        "runtime_manifest": str(manifest),
+        "profile": "win-x64-cpu",
+    }
+    assert main(["--request-json", json.dumps(request)]) == 1
+    envelope = json.loads(capsys.readouterr().out)
+    assert envelope["ok"] is False
+    assert envelope["error"]["code"] == "invalid_request"

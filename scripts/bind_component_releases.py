@@ -34,6 +34,34 @@ def _write_json(path: Path, value: dict[str, object]) -> Path:
     return path
 
 
+def _protocol_manifest_version(manifest: dict[str, object]) -> str:
+    schema_version = manifest.get("schema_version")
+    if schema_version in (None, 1):
+        version = manifest.get("protocol_version")
+        if not isinstance(version, str):
+            raise ValueError("Protocol v1 manifest version is missing")
+        return version
+    if schema_version != 2:
+        raise ValueError("unsupported Protocol manifest schema_version")
+
+    project = manifest.get("project")
+    protocol = manifest.get("protocol")
+    release = manifest.get("release")
+    if (
+        not isinstance(project, dict)
+        or project.get("component") != "protocol"
+        or not isinstance(protocol, dict)
+        or not isinstance(release, dict)
+    ):
+        raise ValueError("Protocol v2 manifest identity is incomplete")
+    version = protocol.get("version")
+    if not isinstance(version, str):
+        raise ValueError("Protocol v2 manifest version is missing")
+    if release.get("version") != version or release.get("tag") != f"v{version}":
+        raise ValueError("Protocol v2 manifest release identity mismatch")
+    return version
+
+
 def verify_protocol_release(
     release_dir: Path,
     *,
@@ -42,7 +70,7 @@ def verify_protocol_release(
     root = release_dir.resolve(strict=True)
     manifest_path = root / "release-manifest.json"
     manifest = _load_json(manifest_path)
-    if manifest.get("protocol_version") != version:
+    if _protocol_manifest_version(manifest) != version:
         raise ValueError("Protocol manifest version mismatch")
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, dict):

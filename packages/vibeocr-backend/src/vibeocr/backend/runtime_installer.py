@@ -1,8 +1,8 @@
 """Backend-owned portable runtime installer.
 
-The public surface is intentionally small: ``inspect``, ``ensure``, ``repair``
-and ``gc``.  Frontends receive paths and integrity state, never dependency
-names, index URLs or pip arguments.
+The public surface is intentionally small: ``inspect``, ``ensure`` and ``repair``.
+Frontends receive paths and integrity state,
+never dependency names, index URLs or pip arguments.
 """
 
 from __future__ import annotations
@@ -13,15 +13,14 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
-import time
-import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from vibeocr.backend.runtime_layout import resolve_runtime_store, runtime_id_prefix
+from vibeocr.backend.runtime_layout import resolve_runtime_store
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_manifest import (
     ManifestError,
@@ -37,12 +36,18 @@ class RuntimeInstallError(RuntimeError):
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
+PROTOCOL_VERSION = 2
+ACCELERATOR_TO_PLAN = {
+    "cpu": "win-x64-cpu",
+    "nvidia_cuda": "win-x64-cu126",
+}
+
+
 @dataclass(frozen=True, slots=True)
-class RuntimeInspection:
+class RuntimeState:
     status: str
-    runtime_id: str
-    profile: str
     runtime_root: str
+    accelerator: str
     manifest_sha256: str
     backend_version: str
     integrity: str
@@ -50,8 +55,6 @@ class RuntimeInspection:
 
 @dataclass(frozen=True, slots=True)
 class RuntimeLaunch:
-    runtime_id: str
-    profile: str
     python_executable: str
     supervisor_module: str
     working_directory: str
@@ -62,12 +65,11 @@ class RuntimeLaunch:
 InstallRunner = Callable[[Path, RuntimeManifest, str], Path]
 
 
-def _select_profile(requested: str | None, component_lock: dict[str, Any]) -> str:
-    if requested in (None, "auto"):
-        requested = component_lock["backend"].get("profile", "win-x64-cpu")
-    if requested not in ("win-x64-cpu", "win-x64-cu126"):
-        raise RuntimeInstallError(f"unsupported runtime profile: {requested}")
-    return requested
+def _default_accelerator(component_lock: dict[str, Any]) -> str:
+    accelerator = component_lock["backend"].get("accelerator")
+    if accelerator not in ACCELERATOR_TO_PLAN:
+        raise RuntimeInstallError(f"unsupported accelerator: {accelerator}")
+    return accelerator
 
 
 def _load_component_lock(path: Path) -> dict[str, Any]:
@@ -86,6 +88,7 @@ def _load_component_lock(path: Path) -> dict[str, Any]:
         "version",
         "artifact_sha256",
         "runtime_manifest_sha256",
+        "accelerator",
     }
     if not required.issubset(backend):
         raise RuntimeInstallError("component lock backend binding is incomplete")
@@ -110,9 +113,8 @@ def _load_component_lock(path: Path) -> dict[str, Any]:
     ):
         if not _SHA256_RE.fullmatch(str(record[field])):
             raise RuntimeInstallError(f"component lock {field} is invalid")
-    profile = backend.get("profile")
-    if profile is not None and profile not in ("win-x64-cpu", "win-x64-cu126"):
-        raise RuntimeInstallError("component lock Backend profile is invalid")
+    if backend.get("accelerator") not in ACCELERATOR_TO_PLAN:
+        raise RuntimeInstallError("component lock Backend accelerator is invalid")
     capabilities = value.get("required_capabilities")
     if not isinstance(capabilities, list) or not all(
         isinstance(item, str) and item for item in capabilities
@@ -147,7 +149,7 @@ def _default_install_runner(
         raise RuntimeInstallError("Python archive has no python.exe")
     lock = manifest.profiles[profile].lock_path
     portable_env = os.environ.copy()
-    cache = partial_root.parent.parent.parent / "state" / "installer-cache"
+    cache = partial_root.parent.parent / "state" / "installer-cache"
     portable_env.update(
         {
             "PIP_CACHE_DIR": str(cache / "pip"),
@@ -271,7 +273,7 @@ class RuntimeInstaller:
         product_root: str | Path,
         component_lock: str | Path,
         runtime_manifest: str | Path,
-        profile: str | None = None,
+        accelerator: str | None = None,
         layout_manifest: str | Path | None = None,
         product_id: str | None = None,
         install_runner: InstallRunner | None = None,
@@ -281,22 +283,49 @@ class RuntimeInstaller:
         self.component_lock_path = Path(component_lock).resolve()
         self.manifest = load_runtime_manifest(runtime_manifest)
         self.component_lock = _load_component_lock(self.component_lock_path)
-        self.profile = _select_profile(profile, self.component_lock)
         self.paths = resolve_runtime_store(
             self.product_root,
             manifest_sha256=self.manifest.sha256,
-            profile=self.profile,
             layout_manifest=layout_manifest,
             product_id=product_id,
         )
+        self.accelerator = self._select_accelerator(accelerator)
+        self.plan = ACCELERATOR_TO_PLAN[self.accelerator]
         self._install_runner = install_runner or _default_install_runner
         self._lock_timeout = lock_timeout
         self._validate_binding()
 
-    @property
-    def runtime_id(self) -> str:
-        # 用 6 位前缀而非完整哈希，与物理目录名一致（见 runtime_id_prefix）。
-        return f"{runtime_id_prefix(self.manifest.sha256)}/{self.profile}"
+    def _preference_path(self) -> Path:
+        return self.paths.state_root / "runtime-preference.json"
+
+    def _select_accelerator(self, requested: str | None) -> str:
+        if requested is not None:
+            if requested not in ACCELERATOR_TO_PLAN:
+                raise RuntimeInstallError(f"unsupported accelerator: {requested}")
+            return requested
+        try:
+            value = json.loads(self._preference_path().read_text(encoding="utf-8"))
+            preferred = (
+                value.get("accelerator") if value.get("schema_version") == 1 else None
+            )
+        except (OSError, ValueError, AttributeError):
+            preferred = None
+        return (
+            preferred
+            if preferred in ACCELERATOR_TO_PLAN
+            else _default_accelerator(self.component_lock)
+        )
+
+    def _save_preference(self) -> None:
+        path = self._preference_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {"schema_version": 1, "accelerator": self.accelerator}, sort_keys=True
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     def _validate_binding(self) -> None:
         protocol = self.component_lock["protocol"]
@@ -336,18 +365,17 @@ class RuntimeInstaller:
             return False
         return value == {
             "schema_version": 1,
-            "runtime_id": self.runtime_id,
             "backend_version": self.manifest.backend_version,
-            "profile": self.profile,
+            "manifest_sha256": self.manifest.sha256,
+            "accelerator": self.accelerator,
         }
 
-    def inspect(self) -> RuntimeInspection:
+    def inspect(self) -> RuntimeState:
         ready = self._integrity_ok()
-        return RuntimeInspection(
+        return RuntimeState(
             status="ready" if ready else "missing",
-            runtime_id=self.runtime_id,
-            profile=self.profile,
             runtime_root=str(self.paths.runtime_root),
+            accelerator=self.accelerator,
             manifest_sha256=self.manifest.sha256,
             backend_version=self.manifest.backend_version,
             integrity="verified" if ready else "not-installed",
@@ -381,15 +409,20 @@ class RuntimeInstaller:
             with lock:
                 if not self._integrity_ok():
                     self._install_locked()
+        self._save_preference()
         return self._launch()
 
     def _install_locked(self) -> None:
         final = self.paths.runtime_root
         final.parent.mkdir(parents=True, exist_ok=True)
-        partial = final.with_name(f"{final.name}.partial-{uuid.uuid4().hex}")
+        partial = final.with_name("runtime.installing")
+        if partial.exists():
+            shutil.rmtree(partial)
+        if final.exists():
+            shutil.rmtree(final)
         partial.mkdir(parents=True)
         try:
-            python = self._install_runner(partial, self.manifest, self.profile)
+            python = self._install_runner(partial, self.manifest, self.plan)
             try:
                 python.relative_to(partial)
             except ValueError as exc:
@@ -400,19 +433,14 @@ class RuntimeInstaller:
                 raise RuntimeInstallError("installed runtime has no Python executable")
             marker = {
                 "schema_version": 1,
-                "runtime_id": self.runtime_id,
                 "backend_version": self.manifest.backend_version,
-                "profile": self.profile,
+                "manifest_sha256": self.manifest.sha256,
+                "accelerator": self.accelerator,
             }
             (partial / ".installed.json").write_text(
                 json.dumps(marker, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-            if final.exists():
-                if self._integrity_ok():
-                    shutil.rmtree(partial)
-                    return
-                raise RuntimeInstallError("invalid runtime already occupies final path")
             partial.replace(final)
         except Exception:
             shutil.rmtree(partial, ignore_errors=True)
@@ -424,13 +452,8 @@ class RuntimeInstaller:
             timeout=self._lock_timeout,
         )
         with lock:
-            if self.paths.runtime_root.exists() and not self._integrity_ok():
-                quarantine = self.paths.runtime_root.with_name(
-                    f"{self.paths.runtime_root.name}.invalid-{uuid.uuid4().hex}"
-                )
-                self.paths.runtime_root.replace(quarantine)
-            if not self._integrity_ok():
-                self._install_locked()
+            self._install_locked()
+        self._save_preference()
         return self._launch()
 
     def _launch(self) -> RuntimeLaunch:
@@ -442,8 +465,6 @@ class RuntimeInstaller:
             if path.is_absolute() and directory.startswith(str(self.paths.store_root)):
                 path.mkdir(parents=True, exist_ok=True)
         return RuntimeLaunch(
-            runtime_id=self.runtime_id,
-            profile=self.profile,
             python_executable=str(_python_in(self.paths.runtime_root)),
             supervisor_module="vibeocr.backend.supervisor.main",
             working_directory=str(self.product_root),
@@ -452,138 +473,110 @@ class RuntimeInstaller:
         )
 
     def acquire_lease(self, *, timeout: float = 0.0) -> RuntimeStoreLock:
-        name = self.runtime_id.replace("/", "-")
         lease = RuntimeStoreLock(
-            self.paths.locks_root / "leases" / f"{name}.lock",
+            self.paths.locks_root / "leases" / "runtime.lock",
             timeout=timeout,
         )
         lease.acquire()
         return lease
 
-    def gc(
-        self,
-        *,
-        component_locks: Iterable[str | Path],
-        grace_seconds: float = 7 * 86400,
-    ) -> list[str]:
-        """Remove unreferenced runtimes, failing closed on any bad lock."""
-        referenced: set[str] = set()
-        try:
-            all_locks = {
-                self.component_lock_path,
-                *(Path(item).resolve() for item in component_locks),
-            }
-            for lock_path in all_locks:
-                value = _load_component_lock(Path(lock_path))
-                # lock 存的是完整 64 位哈希（密码学校验用），GC 比对时取同样的
-                # 6 位前缀，与物理目录名 / runtime_id 保持一致。
-                digest = runtime_id_prefix(value["backend"]["runtime_manifest_sha256"])
-                profile = value["backend"].get("profile")
-                if profile is None:
-                    referenced.update(
-                        f"{digest}/{item}" for item in self.manifest.profiles
-                    )
-                elif profile in self.manifest.profiles:
-                    referenced.add(f"{digest}/{profile}")
-                else:
-                    raise RuntimeInstallError("component lock profile is invalid")
-        except RuntimeInstallError:
-            return []
-
-        removed: list[str] = []
-        now = time.time()
-        with RuntimeStoreLock(
-            self.paths.locks_root / "runtime-store.lock",
-            timeout=self._lock_timeout,
-        ):
-            if not self.paths.runtimes_root.is_dir():
-                return []
-            for digest_root in self.paths.runtimes_root.iterdir():
-                if not digest_root.is_dir() or not digest_root.name.isalnum():
-                    continue
-                for profile_root in digest_root.iterdir():
-                    runtime_id = f"{digest_root.name}/{profile_root.name}"
-                    if runtime_id in referenced or not profile_root.is_dir():
-                        continue
-                    if now - profile_root.stat().st_mtime < grace_seconds:
-                        continue
-                    lease = RuntimeStoreLock(
-                        self.paths.locks_root
-                        / "leases"
-                        / f"{runtime_id.replace('/', '-')}.lock",
-                        timeout=0,
-                    )
-                    try:
-                        lease.acquire()
-                    except RuntimeLockTimeout:
-                        continue
-                    try:
-                        shutil.rmtree(profile_root)
-                        removed.append(runtime_id)
-                    finally:
-                        lease.release()
-        return removed
-
 
 def _emit(value: object) -> None:
-    print(json.dumps(asdict(value), ensure_ascii=False, sort_keys=True))
+    print(json.dumps(value, ensure_ascii=False, sort_keys=True))
+
+
+def _request(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise RuntimeInstallError("Runtime Host request must be a JSON object")
+    required = {
+        "protocol_version",
+        "operation",
+        "product_root",
+        "component_lock",
+        "runtime_manifest",
+    }
+    if set(value).difference(
+        required | {"accelerator", "layout_manifest", "product_id"}
+    ):
+        raise RuntimeInstallError("Runtime Host request contains unknown fields")
+    if not required.issubset(value) or value["protocol_version"] != PROTOCOL_VERSION:
+        raise RuntimeInstallError(
+            "Runtime Host request is incompatible with Protocol v2"
+        )
+    if value["operation"] not in ("inspect", "ensure", "repair"):
+        raise RuntimeInstallError("Runtime Host operation is invalid")
+    for field in ("product_root", "component_lock", "runtime_manifest"):
+        if not isinstance(value[field], str) or not value[field]:
+            raise RuntimeInstallError(f"Runtime Host {field} is invalid")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="vibeocr-runtime-installer")
-    parser.add_argument("operation", choices=("inspect", "ensure", "repair", "gc"))
-    parser.add_argument("--product-root", required=True)
-    parser.add_argument("--component-lock", required=True)
-    parser.add_argument("--runtime-manifest", required=True)
-    parser.add_argument(
-        "--profile",
-        choices=("auto", "win-x64-cpu", "win-x64-cu126"),
-        default="auto",
-    )
-    parser.add_argument("--layout-manifest")
-    parser.add_argument("--product-id")
-    parser.add_argument(
-        "--component-locks",
-        nargs="*",
-        help="registered component locks used by fail-closed garbage collection",
-    )
-    parser.add_argument(
-        "--referenced-component-lock",
-        action="append",
-        dest="referenced_component_locks",
-        help="repeatable cross-language alias for one registered component lock",
-    )
-    parser.add_argument("--grace-seconds", type=float, default=7 * 86400)
-    parser.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--request-json")
     args = parser.parse_args(argv)
+    operation: str | None = None
     try:
-        installer = RuntimeInstaller(
-            product_root=args.product_root,
-            component_lock=args.component_lock,
-            runtime_manifest=args.runtime_manifest,
-            profile=args.profile,
-            layout_manifest=args.layout_manifest,
-            product_id=args.product_id,
+        raw_request = (
+            args.request_json if args.request_json is not None else sys.stdin.read()
         )
-        if args.operation == "gc":
-            locks = (
-                args.referenced_component_locks
-                or args.component_locks
-                or [args.component_lock]
-            )
-            result = installer.gc(
-                component_locks=locks,
-                grace_seconds=args.grace_seconds,
-            )
+        request = _request(json.loads(raw_request))
+        operation = request["operation"]
+        installer = RuntimeInstaller(
+            product_root=request["product_root"],
+            component_lock=request["component_lock"],
+            runtime_manifest=request["runtime_manifest"],
+            accelerator=request.get("accelerator"),
+            layout_manifest=request.get("layout_manifest"),
+            product_id=request.get("product_id"),
+        )
+        if operation == "inspect":
+            state = installer.inspect()
+            launch = None
         else:
-            result = getattr(installer, args.operation)()
-    except (ManifestError, RuntimeInstallError, RuntimeLockTimeout, OSError) as exc:
-        print(json.dumps({"error": type(exc).__name__, "message": str(exc)}))
+            launch = getattr(installer, operation)()
+            state = installer.inspect()
+    except (
+        json.JSONDecodeError,
+        ManifestError,
+        RuntimeInstallError,
+        RuntimeLockTimeout,
+        OSError,
+    ) as exc:
+        code = (
+            "lock_timeout"
+            if isinstance(exc, RuntimeLockTimeout)
+            else "io_error"
+            if isinstance(exc, OSError)
+            else "invalid_request"
+            if isinstance(exc, (json.JSONDecodeError, RuntimeInstallError))
+            and operation is None
+            else "invalid_binding"
+            if isinstance(exc, ManifestError)
+            else "install_failed"
+        )
+        _emit(
+            {
+                "protocol_version": PROTOCOL_VERSION,
+                "ok": False,
+                "operation": operation,
+                "error": {
+                    "code": code,
+                    "message": str(exc),
+                    "retryable": code in {"lock_timeout", "io_error"},
+                },
+            }
+        )
         return 1
-    if isinstance(result, list):
-        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    else:
-        _emit(result)
+    _emit(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "ok": True,
+            "operation": operation,
+            "state": asdict(state),
+            "launch": asdict(launch) if launch is not None else None,
+        }
+    )
     return 0
 
 
@@ -592,7 +585,7 @@ if __name__ == "__main__":
 
 
 __all__ = [
-    "RuntimeInspection",
+    "RuntimeState",
     "RuntimeInstallError",
     "RuntimeInstaller",
     "RuntimeLaunch",
