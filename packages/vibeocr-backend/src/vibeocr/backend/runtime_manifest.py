@@ -113,9 +113,32 @@ def _validate_protocol_release_manifest(
         value: Any = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ManifestError("Protocol release manifest is invalid") from exc
-    if not isinstance(value, dict) or value.get("schema_version") != 1:
-        raise ManifestError("Protocol release manifest schema_version must be 1")
-    if value.get("protocol_version") != protocol_version:
+    if not isinstance(value, dict):
+        raise ManifestError("Protocol release manifest must be an object")
+    schema_version = value.get("schema_version")
+    if schema_version == 1:
+        manifest_version = value.get("protocol_version")
+    elif schema_version == 2:
+        project = value.get("project")
+        protocol = value.get("protocol")
+        release = value.get("release")
+        if (
+            not isinstance(project, dict)
+            or project.get("component") != "protocol"
+            or not isinstance(protocol, dict)
+            or not isinstance(release, dict)
+        ):
+            raise ManifestError("Protocol v2 release identity is incomplete")
+        manifest_version = protocol.get("version")
+        if (
+            not isinstance(manifest_version, str)
+            or release.get("version") != manifest_version
+            or release.get("tag") != f"v{manifest_version}"
+        ):
+            raise ManifestError("Protocol v2 release identity mismatch")
+    else:
+        raise ManifestError("unsupported Protocol release manifest schema_version")
+    if manifest_version != protocol_version:
         raise ManifestError("Protocol release manifest version mismatch")
     artifacts = value.get("artifacts")
     if not isinstance(artifacts, dict):

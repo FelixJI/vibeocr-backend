@@ -44,8 +44,10 @@ def _inputs(root: Path) -> dict[str, Path]:
     values["protocol_manifest"].write_text(
         json.dumps(
             {
-                "schema_version": 1,
-                "protocol_version": "2.0.0",
+                "schema_version": 2,
+                "project": {"component": "protocol"},
+                "protocol": {"version": "2.0.0"},
+                "release": {"tag": "v2.0.0", "version": "2.0.0"},
                 "artifacts": {
                     values["protocol_wheel"].name: {
                         "sha256": hashlib.sha256(b"protocol").hexdigest(),

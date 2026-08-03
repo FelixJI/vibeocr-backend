@@ -5,6 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$protocolVersion = '2.1.0'
 
 function Get-Sha256([string]$Path) {
     $algorithm = [System.Security.Cryptography.SHA256]::Create()
@@ -45,7 +46,7 @@ foreach ($path in @($artifacts, $build, $inputs)) {
 }
 $protocol = Join-Path $inputs 'protocol'
 New-Item -ItemType Directory -Path $protocol -Force | Out-Null
-gh release download v2.0.0 --repo FelixJI/vibeocr-protocol --dir $protocol
+gh release download "v$protocolVersion" --repo FelixJI/vibeocr-protocol --dir $protocol
 if ($LASTEXITCODE -ne 0) { throw 'Protocol release download failed' }
 Get-ChildItem -LiteralPath $protocol -File |
   Where-Object Name -ne 'SHA256SUMS' |
@@ -56,7 +57,7 @@ Get-ChildItem -LiteralPath $protocol -File |
 $generatedLock = Join-Path $build 'protocol.lock.json'
 python (Join-Path $root 'scripts/bind_component_releases.py') protocol-lock `
   --release-dir $protocol --repository FelixJI/vibeocr-protocol `
-  --version 2.0.0 --output $generatedLock
+  --version $protocolVersion --output $generatedLock
 if ($LASTEXITCODE -ne 0) { throw 'Protocol release verification failed' }
 $committedLock = Join-Path $root 'release/protocol.lock.json'
 if (-not (Test-Path -LiteralPath $committedLock -PathType Leaf)) {
@@ -85,7 +86,8 @@ python (Join-Path $root 'scripts/build_runtime_installer.py') `
 if ($LASTEXITCODE -ne 0) { throw 'Runtime installer build failed' }
 $backendWheel = Get-ChildItem -LiteralPath $build -Filter "vibeocr_backend-$Version-*.whl" |
   Select-Object -First 1
-$protocolWheel = Get-ChildItem -LiteralPath $protocol -Filter 'vibeocr_runtime_contracts-2.0.0-*.whl' |
+$protocolWheel = Get-ChildItem -LiteralPath $protocol `
+  -Filter "vibeocr_runtime_contracts-$protocolVersion-*.whl" |
   Select-Object -First 1
 $installerArchive = Get-ChildItem -LiteralPath $build -Filter "vibeocr-runtime-installer-$Version.zip" |
   Select-Object -First 1
