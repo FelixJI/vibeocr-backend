@@ -1,5 +1,9 @@
 """Implementation behind the stable :mod:`scripts.automation` workflow interface."""
 
+# This implementation is mirrored byte-for-byte across repositories with
+# different Ruff formatter settings. Keep its canonical formatting intact.
+# fmt: off
+
 from __future__ import annotations
 
 import fnmatch
@@ -87,10 +91,13 @@ class CommandRunner:
         capture: bool = False,
         check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
+        merged_env = {**os.environ, **(env or {})}
+        executable = shutil.which(argv[0], path=merged_env.get("PATH"))
+        command = [executable, *argv[1:]] if executable is not None else argv
         process = subprocess.run(
-            argv,
+            command,
             cwd=self.root,
-            env={**os.environ, **(env or {})},
+            env=merged_env,
             check=False,
             text=True,
             encoding="utf-8",
@@ -1311,3 +1318,5 @@ class Automation:
                     f"repos/{self.repository}/releases/{release['id']}",
                 ]
             )
+
+# fmt: on
