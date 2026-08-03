@@ -31,8 +31,12 @@ def test_backend_config_uses_canonical_lanes_and_identity_asset() -> None:
 
 def test_backend_versions_are_consistent_under_canonical_adapter() -> None:
     automation = Automation.for_repository()
+    versions = automation.current_versions()
+
     assert automation.component == "backend"
-    assert str(automation.current_version()) == "0.7.2"
+    assert len(versions) == 4
+    assert len(set(versions)) == 1
+    assert automation.current_version() == versions[0]
 
 
 def test_semver_project_parser_ignores_prerelease_for_manual_bump() -> None:
