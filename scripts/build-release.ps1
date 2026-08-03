@@ -1,9 +1,24 @@
 [CmdletBinding()]
 param(
-    [string]$Version
+    [string]$Version,
+    [string]$ArtifactsDir
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+function Get-Sha256([string]$Path) {
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        return [System.BitConverter]::ToString(
+            $algorithm.ComputeHash($stream)
+        ).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+        $algorithm.Dispose()
+    }
+}
+
 $projectFile = Join-Path $root 'packages/vibeocr-backend/pyproject.toml'
 $projectVersion = (
     python -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path(r'$projectFile').read_text(encoding='utf-8'))['project']['version'])"
@@ -16,7 +31,10 @@ if (-not $Version) {
 if ($Version -ne $projectVersion) {
     throw "Release version '$Version' does not match project version '$projectVersion'"
 }
-$artifacts = Join-Path $root 'artifacts'
+if (-not $ArtifactsDir) {
+    $ArtifactsDir = Join-Path $root 'artifacts'
+}
+$artifacts = [IO.Path]::GetFullPath($ArtifactsDir)
 $build = Join-Path $root '.release-build'
 $inputs = Join-Path $root '.release-input'
 foreach ($path in @($artifacts, $build, $inputs)) {
@@ -55,8 +73,7 @@ $runtimeLock = Get-Content (Join-Path $root 'release/python-runtime.lock.json') 
   ConvertFrom-Json
 $pythonArchive = Join-Path $inputs ([IO.Path]::GetFileName($runtimeLock.source_url))
 Invoke-WebRequest -Uri $runtimeLock.source_url -OutFile $pythonArchive
-if ((Get-FileHash $pythonArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne
-    $runtimeLock.sha256) {
+if ((Get-Sha256 $pythonArchive) -ne $runtimeLock.sha256) {
     throw 'standalone Python archive hash mismatch'
 }
 python -m pip install build==1.5.0 hatchling==1.27.0 pyinstaller==6.21.0
@@ -86,6 +103,10 @@ python (Join-Path $root 'scripts/build_runtime_manifest.py') `
   --output-dir $artifacts
 if ($LASTEXITCODE -ne 0) { throw 'Runtime manifest build failed' }
 Remove-Item -LiteralPath (Join-Path $artifacts 'SHA256SUMS') -Force
+python (Join-Path $root 'scripts/build_automation_identity.py') `
+  --artifacts-dir $artifacts --version $Version `
+  --source-sha (git -C $root rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Automation identity build failed' }
 python (Join-Path $root 'scripts/build_spdx_sbom.py') --artifacts-dir $artifacts `
   --repository-name FelixJI/vibeocr-backend --version $Version
 if ($LASTEXITCODE -ne 0) { throw 'SBOM build failed' }
