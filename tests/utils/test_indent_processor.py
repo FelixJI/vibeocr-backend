@@ -97,3 +97,23 @@ class TestProcessMarkdown:
         result = processor.process_markdown(md)
         # 段落被 strip 处理，div 标签本身不计入表格/列表，照常判断中文
         assert "中文段落内容比较长哦" in result
+
+    def test_lone_code_fence_paragraph_skipped(self, processor: IndentProcessor):
+        """独立成段的单行代码围栏标记（非成对代码块）原样保留，不包 div。
+
+        覆盖 process_markdown 中 ``para.startswith("```")`` 的跳过分支：
+        当按双换行分割后某段恰好是单个 ``` 围栏时，避免误判为中文段落。
+        """
+        md = "这是中文段落。\n\n```\n\n另一段中文。"
+        result = processor.process_markdown(md)
+        # 独立的 ``` 段落原样保留，不被包进 zh-paragraph
+        assert "zh-paragraph" in result  # 中文段落仍被包装
+        # 围栏标记本身不应被包进 div
+        assert '<div class="zh-paragraph">```' not in result
+
+    def test_mixed_code_blocks_and_chinese(self, processor: IndentProcessor):
+        """成对代码块与中文段落混合时各自正确处理。"""
+        md = "```python\ncode\n```\n\n这是一段中文内容。"
+        result = processor.process_markdown(md)
+        assert "```python" in result
+        assert '<div class="zh-paragraph">这是一段中文内容。</div>' in result
