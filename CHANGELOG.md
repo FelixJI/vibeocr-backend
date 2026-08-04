@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.2
+
+### Features
+
+- **runtime:** 统一单一 Runtime 与加速方案 (#10) (8c68f90)
+- **ci:** 统一 CI/CD 自动化 (#11) (c7678af)
+
+### Bug Fixes
+
+- **release:** 统一候选派生资产归属 (#20) (a4cac60)
+- **release:** 补齐 Backend 候选资产声明 (#18) (a7791cd)
+- **ci:** 修复发布 tag 推送认证 (#15) (3b93e80)
+
 ## 0.8.1
 
 ### Features
