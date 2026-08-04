@@ -12,7 +12,9 @@ def test_ci_runs_the_unified_full_quality_gate() -> None:
     bootstrap = (REPO_ROOT / "scripts/bootstrap-ci.ps1").read_text(encoding="utf-8")
     script = (REPO_ROOT / "scripts/check-quality.ps1").read_text(encoding="utf-8")
 
-    assert workflow.count("python scripts/automation.py") == 1
+    assert "--phase plan" in workflow
+    assert "--phase finalize" in workflow
+    assert "name: required" in workflow
     assert "python -m pip install" not in workflow
     assert config["ci"]["bootstrap"] == [
         [
