@@ -25,9 +25,10 @@ def test_backend_config_uses_canonical_lanes_and_identity_asset() -> None:
         "minor_compatible": True,
     }
     assert config["release"]["identity_asset"] == "build-identity.json"
-    assert "release-manifest.json" not in config["release"]["required_assets"]
+    assert {"release-manifest.json", "SHA256SUMS"}.isdisjoint(
+        config["release"]["required_assets"]
+    )
     assert {
-        "SHA256SUMS",
         "cpython-*-x86_64-pc-windows-msvc-install_only.tar.gz",
         "requirements-win-x64-cpu.lock",
         "requirements-win-x64-cu126.lock",
