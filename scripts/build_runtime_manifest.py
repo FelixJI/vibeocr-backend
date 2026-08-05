@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import unquote
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 for _source_root in (
@@ -26,6 +27,7 @@ for _source_root in (
 
 from vibeocr.backend.runtime_manifest import (  # noqa: E402
     PROFILE_NAMES,
+    default_profile_components,
     installer_executable_sha256,
     load_runtime_manifest,
     sha256_file,
@@ -40,7 +42,18 @@ DEFAULT_CAPABILITIES = (
     "pdf.edit.v2",
     "qrcode.v2",
     "runtime.settings.v2",
+    "runtime.maintenance.v1",
+    "task.progress.v1",
 )
+
+_COMPONENT_VERSION_PACKAGES = {
+    "ocr_engine": "paddleocr",
+    "document_parsing": "mineru",
+    "pdf_document_tools": "pymupdf",
+    "image_code_tools": "opencv-contrib-python",
+    "runtime_host": "fastapi",
+    "gpu_runtime": "torch",
+}
 
 
 def _git_sha() -> str:
@@ -77,6 +90,39 @@ def _canonical_json(value: object) -> bytes:
         )
         + "\n"
     ).encode("utf-8")
+
+
+def _locked_version(path: Path, project: str) -> str | None:
+    text = path.read_text(encoding="utf-8")
+    exact = re.search(rf"(?mi)^{re.escape(project)}==([^\s\\]+)", text)
+    if exact is not None:
+        return exact.group(1)
+    direct = re.search(rf"(?mi)^{re.escape(project)}\s+@\s+(\S+)", text)
+    if direct is None:
+        return None
+    filename = unquote(direct.group(1).rsplit("/", 1)[-1])
+    package_pattern = re.escape(project).replace(r"\-", "[-_]")
+    artifact = re.search(
+        rf"(?i)^{package_pattern}[-_](\d+(?:\.\d+)+(?:\+cu\d+)?)-",
+        filename,
+    )
+    return artifact.group(1) if artifact is not None else None
+
+
+def _profile_components(path: Path, profile: str) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    for descriptor in default_profile_components(profile):
+        version = _locked_version(
+            path,
+            _COMPONENT_VERSION_PACKAGES[descriptor.component_id],
+        )
+        result.append(
+            {
+                **descriptor.to_payload(),
+                **({"version": version} if version is not None else {}),
+            }
+        )
+    return result
 
 
 def build_runtime_manifest(
@@ -171,6 +217,7 @@ def build_runtime_manifest(
                 "lock": copied_profiles[profile].name,
                 "runtime_pack": None,
                 "sha256": sha256_file(copied_profiles[profile]),
+                "components": _profile_components(copied_profiles[profile], profile),
             }
             for profile in PROFILE_NAMES
         },

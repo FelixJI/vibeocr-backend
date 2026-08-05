@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
@@ -13,6 +14,7 @@ from vibeocr.backend.runtime_installer import (
     RuntimeInstaller,
     RuntimeInstallError,
     _extract_python_archive,
+    _run_install_command,
     main,
 )
 from vibeocr.backend.runtime_layout import (
@@ -20,6 +22,11 @@ from vibeocr.backend.runtime_layout import (
     resolve_runtime_store,
 )
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
+from vibeocr.backend.runtime_maintenance import (
+    RuntimeMaintenanceReporter,
+    profile_descriptor,
+    runtime_status_from_environment,
+)
 from vibeocr.backend.runtime_manifest import ManifestError, load_runtime_manifest
 
 
@@ -341,6 +348,7 @@ def test_failed_install_leaves_no_partial_or_final(tmp_path: Path) -> None:
         installer.ensure()
     assert not installer.paths.runtime_root.exists()
     assert not installer.paths.runtime_root.with_name("runtime.installing").exists()
+    assert installer.maintenance_snapshot()["operation_state"] == "failed"
 
 
 def test_component_lock_capability_mismatch_is_rejected(tmp_path: Path) -> None:
@@ -439,6 +447,148 @@ def test_runtime_host_json_contract_selects_and_persists_accelerator(
     assert envelope["state"]["accelerator"] == "nvidia_cuda"
     assert envelope["state"]["runtime_root"].endswith("runtime")
     assert "profile" not in envelope["state"]
+    assert envelope["profile"]["profile_id"] == "win-x64-cu126"
+    assert envelope["profile"]["components"][-1]["component_id"] == "gpu_runtime"
+    assert envelope["maintenance"]["operation_state"] == "succeeded"
+
+
+def test_runtime_host_emits_opt_in_ndjson_progress(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    request = {
+        "protocol_version": 2,
+        "operation": "inspect",
+        "product_root": str(tmp_path / "product"),
+        "component_lock": str(component),
+        "runtime_manifest": str(manifest),
+        "accelerator": "cpu",
+        "accepted_event_streams": ["ndjson.v1"],
+    }
+
+    assert main(["--request-json", json.dumps(request)]) == 0
+
+    messages = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    events = messages[:-1]
+    response = messages[-1]
+    assert [event["event_type"] for event in events] == ["progress", "snapshot"]
+    assert [event["snapshot"]["sequence"] for event in events] == [1, 2]
+    assert all(event["operation"] == "inspect" for event in events)
+    assert response["ok"] is True
+    assert response["maintenance"] == events[-1]["snapshot"]
+
+
+def test_runtime_host_rejects_unknown_event_stream(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    request = {
+        "protocol_version": 2,
+        "operation": "inspect",
+        "product_root": str(tmp_path / "product"),
+        "component_lock": str(component),
+        "runtime_manifest": str(manifest),
+        "accepted_event_streams": ["sse.v1"],
+    }
+
+    assert main(["--request-json", json.dumps(request)]) == 1
+    envelope = json.loads(capsys.readouterr().out)
+    assert envelope["error"]["code"] == "invalid_request"
+
+
+def test_install_progress_and_http_status_share_the_persisted_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    events: list[dict] = []
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+        event_sink=events.append,
+    )
+
+    launch = installer.ensure()
+
+    assert [event["snapshot"]["phase"] for event in events] == [
+        "validate_binding",
+        "wait_for_lock",
+        "prepare_runtime",
+        "install_profile",
+        "verify_runtime",
+        "commit_runtime",
+        "commit_runtime",
+    ]
+    assert events[-1]["snapshot"]["operation_state"] == "succeeded"
+    for key, value in launch.environment.items():
+        monkeypatch.setenv(key, value)
+    status = runtime_status_from_environment("instance-test", "ready")
+    assert status["maintenance"]["sequence"] == events[-1]["snapshot"]["sequence"]
+    assert status["maintenance"]["message_code"] == "runtime.ensure_complete"
+    assert status["profile"]["components"][0] == {
+        "component_id": "ocr_engine",
+        "display_name": "OCR engine",
+        "state": "ready",
+    }
+
+
+def test_long_install_command_emits_heartbeat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, _ = _release(tmp_path / "release")
+    manifest = load_runtime_manifest(manifest_path)
+    events: list[dict] = []
+    reporter = RuntimeMaintenanceReporter(
+        state_root=tmp_path / "state",
+        profile=profile_descriptor(
+            manifest.profiles["win-x64-cpu"],
+            accelerator="cpu",
+        ),
+        event_sink=events.append,
+    )
+    reporter.start("ensure", total_steps=7)
+    reporter.advance(
+        phase="install_profile",
+        current=4,
+        total=7,
+        message_code="runtime.install_profile",
+    )
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self) -> None:
+            self.communicate_calls = 0
+
+        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+            self.communicate_calls += 1
+            if self.communicate_calls == 1:
+                raise subprocess.TimeoutExpired("pip", timeout)
+            return "", ""
+
+        def poll(self) -> int:
+            return self.returncode
+
+    process = FakeProcess()
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+
+    _run_install_command(
+        ["python.exe", "-m", "pip"],
+        timeout=60,
+        env={},
+        reporter=reporter,
+        heartbeat_code="runtime.install_profile",
+    )
+
+    assert events[-1]["event_type"] == "heartbeat"
+    assert events[-1]["snapshot"]["phase"] == "install_profile"
+    assert events[-1]["message_code"] == "runtime.install_profile"
 
 
 def test_runtime_host_rejects_legacy_profile_field(

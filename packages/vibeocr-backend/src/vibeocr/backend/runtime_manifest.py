@@ -11,6 +11,23 @@ from pathlib import Path, PurePath
 from typing import Any
 
 PROFILE_NAMES = ("win-x64-cpu", "win-x64-cu126")
+PROFILE_COMPONENTS = {
+    "win-x64-cpu": (
+        ("ocr_engine", "OCR engine"),
+        ("document_parsing", "Document parsing"),
+        ("pdf_document_tools", "PDF and document tools"),
+        ("image_code_tools", "Image, QR, and barcode tools"),
+        ("runtime_host", "Runtime HTTP host"),
+    ),
+    "win-x64-cu126": (
+        ("ocr_engine", "OCR engine"),
+        ("document_parsing", "Document parsing"),
+        ("pdf_document_tools", "PDF and document tools"),
+        ("image_code_tools", "Image, QR, and barcode tools"),
+        ("runtime_host", "Runtime HTTP host"),
+        ("gpu_runtime", "CUDA and Torch runtime"),
+    ),
+}
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -20,11 +37,28 @@ class ManifestError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeComponent:
+    component_id: str
+    display_name: str
+    version: str | None = None
+
+    def to_payload(self) -> dict[str, str]:
+        payload = {
+            "component_id": self.component_id,
+            "display_name": self.display_name,
+        }
+        if self.version is not None:
+            payload["version"] = self.version
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeProfile:
     name: str
     lock_path: Path
     sha256: str
     runtime_pack: str | None
+    components: tuple[RuntimeComponent, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +225,17 @@ def validate_requirements_lock(path: Path, *, profile: str) -> None:
         raise ManifestError(f"unsupported profile: {profile}")
 
 
+def default_profile_components(profile: str) -> tuple[RuntimeComponent, ...]:
+    try:
+        values = PROFILE_COMPONENTS[profile]
+    except KeyError as exc:
+        raise ManifestError(f"unsupported profile: {profile}") from exc
+    return tuple(
+        RuntimeComponent(component_id, display_name)
+        for component_id, display_name in values
+    )
+
+
 def load_runtime_manifest(
     path: str | Path,
     *,
@@ -310,11 +355,49 @@ def load_runtime_manifest(
                 runtime_pack,
                 field=f"profiles.{name}.runtime_pack",
             )
+        expected = default_profile_components(name)
+        components_data = record.get("components")
+        if components_data is None:
+            components = expected
+        else:
+            if not isinstance(components_data, list):
+                raise ManifestError(f"profiles.{name}.components must be an array")
+            parsed_components: list[RuntimeComponent] = []
+            for component in components_data:
+                if not isinstance(component, dict):
+                    raise ManifestError(f"profiles.{name}.components is invalid")
+                component_id = component.get("component_id")
+                display_name = component.get("display_name")
+                version_value = component.get("version")
+                if (
+                    not isinstance(component_id, str)
+                    or not component_id
+                    or not isinstance(display_name, str)
+                    or not display_name
+                    or (
+                        version_value is not None and not isinstance(version_value, str)
+                    )
+                ):
+                    raise ManifestError(f"profiles.{name}.components is invalid")
+                parsed_components.append(
+                    RuntimeComponent(component_id, display_name, version_value)
+                )
+            if tuple(item.component_id for item in parsed_components) != tuple(
+                item.component_id for item in expected
+            ):
+                raise ManifestError(f"profiles.{name}.components must use stable ids")
+            components = tuple(parsed_components)
         if verify_artifacts:
             if sha256_file(lock_path) != lock_sha:
                 raise ManifestError(f"{name} lock SHA-256 mismatch")
             validate_requirements_lock(lock_path, profile=name)
-        profiles[name] = RuntimeProfile(name, lock_path, lock_sha, runtime_pack)
+        profiles[name] = RuntimeProfile(
+            name,
+            lock_path,
+            lock_sha,
+            runtime_pack,
+            components,
+        )
     capabilities = data.get("capabilities")
     if (
         not isinstance(capabilities, list)
@@ -379,13 +462,16 @@ def load_runtime_manifest(
 
 __all__ = [
     "PROFILE_NAMES",
+    "PROFILE_COMPONENTS",
     "InstallerArtifact",
     "ManifestError",
     "PythonRuntime",
     "RuntimeManifest",
+    "RuntimeComponent",
     "RuntimeProfile",
     "installer_executable_sha256",
     "load_runtime_manifest",
     "sha256_file",
     "validate_requirements_lock",
+    "default_profile_components",
 ]

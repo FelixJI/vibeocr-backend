@@ -12,10 +12,10 @@ def test_ci_bootstrap_restores_verified_protocol_and_backend_dependencies() -> N
     )
     lock = json.loads((ROOT / "release/protocol.lock.json").read_text(encoding="utf-8"))
 
-    assert "$protocolVersion = '2.1.0'" in script
-    assert "$protocolVersion = '2.1.0'" in release_script
-    assert '"vibeocr-runtime-contracts==2.1.0"' in package_config
-    assert lock["version"] == "2.1.0"
+    assert "$protocolVersion = '2.2.0'" in script
+    assert "$protocolVersion = '2.2.0'" in release_script
+    assert '"vibeocr-runtime-contracts==2.2.0"' in package_config
+    assert lock["version"] == "2.2.0"
     assert "gh release download" in script
     assert "gh attestation verify" in script
     assert "release/protocol.lock.json" in script
