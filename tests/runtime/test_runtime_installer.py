@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from vibeocr.backend import runtime_maintenance
 from vibeocr.backend.runtime_installer import (
     RuntimeInstaller,
     RuntimeInstallError,
@@ -23,6 +24,7 @@ from vibeocr.backend.runtime_layout import (
 )
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_maintenance import (
+    RuntimeInstallFailure,
     RuntimeMaintenanceReporter,
     profile_descriptor,
     runtime_status_from_environment,
@@ -172,6 +174,22 @@ def test_python_archive_extracts_only_stripped_python_root(tmp_path: Path) -> No
     destination.mkdir()
     _extract_python_archive(archive, destination)
     assert (destination / "python.exe").read_bytes() == b"python"
+
+
+def test_python_archive_reports_actual_uncompressed_bytes(tmp_path: Path) -> None:
+    archive = tmp_path / "python.tar.gz"
+    _tar_with(archive, "python/python.exe", b"python")
+    destination = tmp_path / "runtime"
+    destination.mkdir()
+    samples: list[tuple[int, int]] = []
+
+    _extract_python_archive(
+        archive,
+        destination,
+        progress=lambda current, total: samples.append((current, total)),
+    )
+
+    assert samples == [(6, 6)]
 
 
 def test_python_archive_rejects_traversal(tmp_path: Path) -> None:
@@ -351,6 +369,126 @@ def test_failed_install_leaves_no_partial_or_final(tmp_path: Path) -> None:
     assert installer.maintenance_snapshot()["operation_state"] == "failed"
 
 
+def test_failed_repair_preserves_previous_runtime_until_verified_commit(
+    tmp_path: Path,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    initial = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+    )
+    launch = initial.ensure()
+    assert launch is not None
+    preserved = initial.paths.runtime_root / "preserved.txt"
+    preserved.write_text("previous-runtime", encoding="utf-8")
+    marker_before = (initial.paths.runtime_root / ".installed.json").read_bytes()
+
+    def fail(_partial: Path, _manifest, _profile: str) -> Path:
+        raise RuntimeInstallError("repair failed")
+
+    repair = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=fail,
+        component_probe=lambda _root, component_ids: {
+            component_id: component_id != "ocr_engine" for component_id in component_ids
+        },
+        operation_id="failed-repair",
+    )
+
+    with pytest.raises(RuntimeInstallError, match="repair failed"):
+        repair.repair()
+
+    assert preserved.read_text(encoding="utf-8") == "previous-runtime"
+    assert (
+        initial.paths.runtime_root / ".installed.json"
+    ).read_bytes() == marker_before
+    assert Path(launch.python_executable).is_file()
+    assert not initial.paths.runtime_root.with_name("runtime.installing").exists()
+    assert not initial.paths.runtime_root.with_name("runtime.rollback").exists()
+
+
+def test_component_import_probe_reports_integrity_failed_drift(
+    tmp_path: Path,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    initial = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+    )
+    initial.ensure()
+    inspected = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+        component_probe=lambda _root, component_ids: {
+            component_id: component_id != "ocr_engine" for component_id in component_ids
+        },
+    )
+
+    component_status = inspected.profile_payload()["components"][0]
+    inspection = inspected.inspect(emit=False)
+
+    assert component_status["actual_state"] == "drifted"
+    assert component_status["drift_reason"] == "integrity_failed"
+    assert component_status["repairable"] is True
+    assert inspection.status == "missing"
+    assert inspection.integrity == "not-installed"
+
+
+def test_repair_of_in_sync_component_succeeds_without_claiming_global_ready(
+    tmp_path: Path,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    calls: list[Path] = []
+
+    def install(partial: Path, runtime_manifest, profile: str) -> Path:
+        calls.append(partial)
+        return _fake_install(partial, runtime_manifest, profile)
+
+    initial = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=install,
+    )
+    initial.ensure()
+    repair = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=install,
+        component_probe=lambda _root, component_ids: {
+            component_id: component_id != "ocr_engine" for component_id in component_ids
+        },
+        component_ids=("runtime_host",),
+        operation_id="repair-ready-component",
+    )
+
+    launch = repair.repair()
+
+    assert launch is None
+    assert len(calls) == 1
+    snapshot = repair.maintenance_snapshot()
+    assert snapshot is not None
+    assert snapshot["operation_state"] == "succeeded"
+    assert snapshot["requested_component_ids"] == ["runtime_host"]
+    assert "effective_component_ids" not in snapshot
+    assert repair.profile_payload()["components"][0]["actual_state"] == "drifted"
+
+
 def test_component_lock_capability_mismatch_is_rejected(tmp_path: Path) -> None:
     manifest, component = _release(tmp_path / "release")
     data = json.loads(component.read_text(encoding="utf-8"))
@@ -396,7 +534,7 @@ def test_store_lock_is_cross_handle_exclusive(tmp_path: Path) -> None:
     second.release()
 
 
-def test_repair_replaces_the_static_runtime_in_place(tmp_path: Path) -> None:
+def test_repair_is_idempotent_when_runtime_has_no_drift(tmp_path: Path) -> None:
     manifest, component = _release(tmp_path / "release")
     calls: list[Path] = []
 
@@ -417,12 +555,171 @@ def test_repair_replaces_the_static_runtime_in_place(tmp_path: Path) -> None:
 
     installer.repair()
 
-    assert calls == [
-        installer.paths.runtime_root.with_name("runtime.installing"),
-        installer.paths.runtime_root.with_name("runtime.installing"),
+    assert calls == [installer.paths.runtime_root.with_name("runtime.installing")]
+    assert original_marker.read_text(encoding="utf-8") == "old"
+
+
+def test_failed_operation_id_replays_failure_without_reexecuting(
+    tmp_path: Path,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+
+    def fail_install(partial: Path, runtime_manifest, profile: str) -> Path:
+        del partial, runtime_manifest, profile
+        raise RuntimeInstallError("expected failure")
+
+    failed = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=fail_install,
+        operation_id="stable-operation",
+    )
+    with pytest.raises(RuntimeInstallError, match="expected failure"):
+        failed.ensure()
+    calls: list[Path] = []
+
+    def unexpected_install(partial: Path, runtime_manifest, profile: str) -> Path:
+        calls.append(partial)
+        return _fake_install(partial, runtime_manifest, profile)
+
+    replay = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=unexpected_install,
+        operation_id="stable-operation",
+    )
+
+    with pytest.raises(RuntimeInstallFailure, match="expected failure"):
+        replay.ensure()
+    assert calls == []
+    assert replay.maintenance_snapshot() == failed.maintenance_snapshot()
+
+
+def test_component_repair_reports_requested_and_effective_scope(tmp_path: Path) -> None:
+    manifest, component = _release(tmp_path / "release")
+    calls: list[Path] = []
+
+    def install(partial: Path, runtime_manifest, profile: str) -> Path:
+        calls.append(partial)
+        return _fake_install(partial, runtime_manifest, profile)
+
+    initial = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=install,
+    )
+    initial.ensure()
+    marker = initial.paths.runtime_root / ".installed.json"
+    marker_payload = json.loads(marker.read_text(encoding="utf-8"))
+    marker_payload["manifest_sha256"] = "f" * 64
+    marker.write_text(json.dumps(marker_payload), encoding="utf-8")
+
+    repair = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=install,
+        operation_id="repair-1",
+        component_ids=("ocr_engine",),
+    )
+    repair.repair()
+
+    assert len(calls) == 2
+    snapshot = repair.maintenance_snapshot()
+    assert snapshot is not None
+    assert snapshot["requested_component_ids"] == ["ocr_engine"]
+    assert set(snapshot["effective_component_ids"]) == {
+        component.component_id
+        for component in repair.manifest.profiles[repair.plan].components
+    }
+    assert repair.paths.runtime_root.is_dir()
+
+
+def test_component_drift_uses_installed_distribution_and_selected_repair(
+    tmp_path: Path,
+) -> None:
+    manifest, component_lock = _release(tmp_path / "release")
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_payload["profiles"]["win-x64-cpu"]["components"] = [
+        {
+            "component_id": "ocr_engine",
+            "display_name": "OCR engine",
+            "version": "3.7.0",
+        },
+        *[
+            {"component_id": component_id, "display_name": display_name}
+            for component_id, display_name in (
+                ("document_parsing", "Document parsing"),
+                ("pdf_document_tools", "PDF and document tools"),
+                ("image_code_tools", "Image and code tools"),
+                ("runtime_host", "Runtime HTTP host"),
+            )
+        ],
     ]
-    assert not original_marker.exists()
-    assert installer.paths.runtime_root.is_dir()
+    manifest.write_text(json.dumps(manifest_payload) + "\n", encoding="utf-8")
+    lock_payload = json.loads(component_lock.read_text(encoding="utf-8"))
+    lock_payload["backend"]["runtime_manifest_sha256"] = _sha(manifest.read_bytes())
+    component_lock.write_text(json.dumps(lock_payload) + "\n", encoding="utf-8")
+    calls: list[Path] = []
+
+    def install(partial: Path, runtime_manifest, profile: str) -> Path:
+        calls.append(partial)
+        python = _fake_install(partial, runtime_manifest, profile)
+        metadata = partial / "Lib" / "site-packages" / "paddleocr-3.7.0.dist-info"
+        metadata.mkdir(parents=True)
+        (metadata / "METADATA").write_text(
+            "Metadata-Version: 2.1\nName: paddleocr\nVersion: 3.7.0\n",
+            encoding="utf-8",
+        )
+        return python
+
+    initial = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component_lock,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=install,
+    )
+    initial.ensure()
+    metadata = (
+        initial.paths.runtime_root
+        / "Lib"
+        / "site-packages"
+        / "paddleocr-3.7.0.dist-info"
+        / "METADATA"
+    )
+    metadata.write_text(
+        "Metadata-Version: 2.1\nName: paddleocr\nVersion: 3.6.0\n",
+        encoding="utf-8",
+    )
+    drifted = initial.profile_payload()["components"][0]
+    assert drifted["actual_state"] == "drifted"
+    assert drifted["actual_version"] == "3.6.0"
+    assert drifted["drift_reason"] == "version_mismatch"
+    metadata.unlink()
+    missing = initial.profile_payload()["components"][0]
+    assert missing["actual_state"] == "missing"
+
+    repair = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component_lock,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=install,
+        operation_id="repair-component",
+        component_ids=("ocr_engine",),
+    )
+    repair.repair()
+
+    assert len(calls) == 2
+    assert repair.profile_payload()["components"][0]["actual_state"] == "ready"
 
 
 def test_runtime_host_json_contract_selects_and_persists_accelerator(
@@ -450,6 +747,16 @@ def test_runtime_host_json_contract_selects_and_persists_accelerator(
     assert envelope["profile"]["profile_id"] == "win-x64-cu126"
     assert envelope["profile"]["components"][-1]["component_id"] == "gpu_runtime"
     assert envelope["maintenance"]["operation_state"] == "succeeded"
+    descriptors = {item["name"]: item for item in envelope["capability_descriptors"]}
+    recognition = descriptors["ocr.recognition.v2"]
+    assert recognition == {
+        "name": "ocr.recognition.v2",
+        "lifecycle": "active",
+        "introduced_in": "2.0.0",
+        "deprecated_in": None,
+        "sunset_at": None,
+        "replacement": None,
+    }
 
 
 def test_runtime_host_emits_opt_in_ndjson_progress(
@@ -527,6 +834,13 @@ def test_install_progress_and_http_status_share_the_persisted_snapshot(
     assert events[-1]["snapshot"]["operation_state"] == "succeeded"
     for key, value in launch.environment.items():
         monkeypatch.setenv(key, value)
+    monkeypatch.setattr(
+        "vibeocr.backend.runtime_maintenance.probe_runtime_components",
+        lambda _root, component_ids: {
+            component_id: True for component_id in component_ids
+        },
+    )
+    runtime_maintenance._component_probe_cache.clear()
     status = runtime_status_from_environment("instance-test", "ready")
     assert status["maintenance"]["sequence"] == events[-1]["snapshot"]["sequence"]
     assert status["maintenance"]["message_code"] == "runtime.ensure_complete"
@@ -534,7 +848,25 @@ def test_install_progress_and_http_status_share_the_persisted_snapshot(
         "component_id": "ocr_engine",
         "display_name": "OCR engine",
         "state": "ready",
+        "desired_state": "ready",
+        "desired_version": None,
+        "actual_state": "ready",
+        "actual_version": None,
+        "drift_reason": "none",
+        "repairable": False,
     }
+    assert status["source"]["backend_source_sha"] == "0" * 40
+
+    monkeypatch.setattr(
+        "vibeocr.backend.runtime_maintenance.probe_runtime_components",
+        lambda _root, component_ids: {
+            component_id: component_id != "ocr_engine" for component_id in component_ids
+        },
+    )
+    runtime_maintenance._component_probe_cache.clear()
+    degraded = runtime_status_from_environment("instance-test", "ready")
+    assert degraded["service_state"] == "degraded"
+    assert degraded["profile"]["components"][0]["drift_reason"] == ("integrity_failed")
 
 
 def test_long_install_command_emits_heartbeat(

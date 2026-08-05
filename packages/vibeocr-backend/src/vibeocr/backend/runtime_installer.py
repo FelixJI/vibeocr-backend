@@ -18,6 +18,7 @@ import tarfile
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -25,8 +26,22 @@ from vibeocr.backend.runtime_layout import resolve_runtime_store
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_maintenance import (
     EventSink,
+    RuntimeCapabilityError,
+    RuntimeCommandConflict,
+    RuntimeCursorExpired,
+    RuntimeInstallFailure,
     RuntimeMaintenanceReporter,
+    RuntimeOperationCancelled,
+    RuntimeOperationConflict,
+    RuntimeOperationError,
+    RuntimeOperationNotCancellable,
+    RuntimeOperationNotFound,
+    RuntimeOperationNotRetryable,
+    RuntimeSourceIdentityMismatch,
+    probe_runtime_components,
     profile_descriptor,
+    runtime_profile_status,
+    runtime_source_identity,
 )
 from vibeocr.backend.runtime_manifest import (
     ManifestError,
@@ -35,8 +50,16 @@ from vibeocr.backend.runtime_manifest import (
 )
 
 
-class RuntimeInstallError(RuntimeError):
+class RuntimeInstallError(RuntimeInstallFailure):
     pass
+
+
+class RuntimeIdentityMismatch(RuntimeInstallError, RuntimeSourceIdentityMismatch):
+    """The verified Runtime source identity differs from the bound intent."""
+
+
+class RuntimeCapabilityUnavailable(RuntimeInstallError, RuntimeCapabilityError):
+    """A requested capability is absent from the verified Runtime manifest."""
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -57,6 +80,7 @@ class RuntimeState:
     manifest_sha256: str
     backend_version: str
     integrity: str
+    source: dict[str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +93,13 @@ class RuntimeLaunch:
 
 
 InstallRunner = Callable[[Path, RuntimeManifest, str], Path]
+ComponentProbe = Callable[[Path, tuple[str, ...]], dict[str, bool]]
+
+
+def _default_component_probe(
+    runtime_root: Path, component_ids: tuple[str, ...]
+) -> dict[str, bool]:
+    return probe_runtime_components(runtime_root, component_ids)
 
 
 def _run_install_command(
@@ -197,7 +228,25 @@ def _default_install_runner(
     ``sys.executable -m venv``. Protocol and Backend wheels are installed from
     the manifest directory; no editable/local workspace source is accepted.
     """
-    _extract_python_archive(manifest.python.archive_path, partial_root)
+    progress: Callable[[int, int], None] | None = None
+    if reporter is not None:
+
+        def report_extraction(current: int, total: int) -> None:
+            reporter.advance_measured(
+                phase="prepare_runtime",
+                unit="bytes",
+                current=current,
+                total=total,
+                message_code="runtime.extract_python",
+                component_id="runtime_base",
+            )
+
+        progress = report_extraction
+    _extract_python_archive(
+        manifest.python.archive_path,
+        partial_root,
+        progress=progress,
+    )
     python = _python_in(partial_root)
     if not python.is_file():
         raise RuntimeInstallError("Python archive has no python.exe")
@@ -299,12 +348,19 @@ def _default_install_runner(
     return python
 
 
-def _extract_python_archive(archive_path: Path, destination: Path) -> None:
+def _extract_python_archive(
+    archive_path: Path,
+    destination: Path,
+    *,
+    progress: Callable[[int, int], None] | None = None,
+) -> None:
     """Safely strip the archive's ``python/`` prefix into the partial root."""
     with tarfile.open(archive_path, mode="r:gz") as archive:
         members = archive.getmembers()
         if not members:
             raise RuntimeInstallError("Python archive is empty")
+        total_bytes = sum(member.size for member in members if member.isfile())
+        extracted_bytes = 0
         for member in members:
             parts = Path(member.name.replace("\\", "/")).parts
             if not parts or parts[0] != "python" or ".." in parts:
@@ -344,6 +400,9 @@ def _extract_python_archive(archive_path: Path, destination: Path) -> None:
                 )
             with source, target.open("wb") as output:
                 shutil.copyfileobj(source, output)
+            extracted_bytes += member.size
+            if progress is not None and total_bytes > 0:
+                progress(extracted_bytes, total_bytes)
 
 
 class RuntimeInstaller:
@@ -357,8 +416,13 @@ class RuntimeInstaller:
         layout_manifest: str | Path | None = None,
         product_id: str | None = None,
         install_runner: InstallRunner | None = None,
+        component_probe: ComponentProbe | None = None,
         event_sink: EventSink | None = None,
         lock_timeout: float = 60.0,
+        operation_id: str | None = None,
+        source_operation_id: str | None = None,
+        component_ids: tuple[str, ...] = (),
+        required_capabilities: tuple[str, ...] = (),
     ) -> None:
         self.product_root = Path(product_root).resolve()
         self.component_lock_path = Path(component_lock).resolve()
@@ -372,7 +436,34 @@ class RuntimeInstaller:
         )
         self.accelerator = self._select_accelerator(accelerator)
         self.plan = ACCELERATOR_TO_PLAN[self.accelerator]
+        available_components = {
+            component.component_id
+            for component in self.manifest.profiles[self.plan].components
+        }
+        if len(set(component_ids)) != len(component_ids) or not set(
+            component_ids
+        ).issubset(available_components):
+            raise RuntimeInstallError("Runtime component_ids are invalid")
+        missing_capabilities = set(required_capabilities).difference(
+            self.manifest.capabilities
+        )
+        if missing_capabilities:
+            raise RuntimeCapabilityUnavailable(
+                f"required capabilities are unavailable: {sorted(missing_capabilities)}"
+            )
+        self._operation_id = operation_id
+        self._source_operation_id = source_operation_id
+        self._component_ids = component_ids
+        self._required_capabilities = required_capabilities
+        self._source = runtime_source_identity(self.manifest)
         self._runner_reports_phases = install_runner is None
+        self._component_probe = component_probe or (
+            _default_component_probe
+            if install_runner is None
+            else lambda _root, component_ids: {
+                component_id: True for component_id in component_ids
+            }
+        )
         if install_runner is None:
             self._install_runner = lambda partial, manifest, profile: (
                 _default_install_runner(
@@ -435,19 +526,19 @@ class RuntimeInstaller:
             not isinstance(protocol_version, str)
             or f"-{protocol_version}-" not in self.manifest.protocol_wheel
         ):
-            raise RuntimeInstallError("component lock Protocol version mismatch")
+            raise RuntimeIdentityMismatch("component lock Protocol version mismatch")
         if protocol["manifest_sha256"] != self.manifest.protocol_manifest_sha256:
-            raise RuntimeInstallError("component lock Protocol manifest mismatch")
+            raise RuntimeIdentityMismatch("component lock Protocol manifest mismatch")
         if backend["version"] != self.manifest.backend_version:
-            raise RuntimeInstallError("component lock Backend version mismatch")
+            raise RuntimeIdentityMismatch("component lock Backend version mismatch")
         if backend["artifact_sha256"] != self.manifest.backend_sha256:
-            raise RuntimeInstallError("component lock Backend artifact mismatch")
+            raise RuntimeIdentityMismatch("component lock Backend artifact mismatch")
         if backend["runtime_manifest_sha256"] != self.manifest.sha256:
-            raise RuntimeInstallError("component lock runtime manifest mismatch")
+            raise RuntimeIdentityMismatch("component lock runtime manifest mismatch")
         required = set(self.component_lock["required_capabilities"])
         missing = required.difference(self.manifest.capabilities)
         if missing:
-            raise RuntimeInstallError(
+            raise RuntimeCapabilityUnavailable(
                 f"Backend is missing required capabilities: {sorted(missing)}"
             )
 
@@ -471,15 +562,47 @@ class RuntimeInstaller:
         }
 
     def profile_payload(self) -> dict[str, Any]:
-        return self._reporter.profile.to_payload()
+        component_ids = self._profile_component_ids()
+        return runtime_profile_status(
+            self.manifest,
+            accelerator=self.accelerator,
+            runtime_root=self.paths.runtime_root,
+            probe_results=self._component_probe(self.paths.runtime_root, component_ids),
+        )
 
     def maintenance_snapshot(self) -> dict[str, Any] | None:
         return self._reporter.snapshot
 
+    def _profile_component_ids(self) -> tuple[str, ...]:
+        return tuple(
+            component.component_id
+            for component in self.manifest.profiles[self.plan].components
+        )
+
+    def _drifted_component_ids(self) -> tuple[str, ...]:
+        return tuple(
+            str(component["component_id"])
+            for component in self.profile_payload()["components"]
+            if component.get("actual_state") != "ready"
+        )
+
+    def _start_operation(
+        self, operation: str, *, effective_component_ids: tuple[str, ...] = ()
+    ) -> bool:
+        return self._reporter.start(
+            operation,
+            total_steps=7 if operation != "inspect" else 2,
+            operation_id=self._operation_id,
+            component_ids=self._component_ids,
+            effective_component_ids=effective_component_ids,
+            source=self._source,
+            source_operation_id=self._source_operation_id,
+            required_capabilities=self._required_capabilities,
+        )
+
     def inspect(self, *, emit: bool = True) -> RuntimeState:
-        if emit:
-            self._reporter.start("inspect", total_steps=2)
-        ready = self._integrity_ok()
+        started = self._start_operation("inspect") if emit else False
+        ready = self._integrity_ok() and not self._drifted_component_ids()
         state = RuntimeState(
             status="ready" if ready else "missing",
             runtime_root=str(self.paths.runtime_root),
@@ -487,8 +610,9 @@ class RuntimeInstaller:
             manifest_sha256=self.manifest.sha256,
             backend_version=self.manifest.backend_version,
             integrity="verified" if ready else "not-installed",
+            source=self._source,
         )
-        if emit:
+        if emit and started:
             self._reporter.succeed(
                 phase="verify_runtime",
                 current=2,
@@ -504,6 +628,7 @@ class RuntimeInstaller:
             "VIBEOCR_RUNTIME_ROOT": str(self.paths.runtime_root),
             "VIBEOCR_MODEL_ROOT": str(self.paths.models_root),
             "VIBEOCR_RUNTIME_MANIFEST": str(self.manifest.path),
+            "VIBEOCR_COMPONENT_LOCK": str(self.component_lock_path),
             "VIBEOCR_RUNTIME_ACCELERATOR": self.accelerator,
             "VIBEOCR_RUNTIME_STATE_ROOT": str(state),
             "PIP_CACHE_DIR": str(state / "cache" / "pip"),
@@ -519,10 +644,16 @@ class RuntimeInstaller:
             "PYTHONUTF8": "1",
         }
 
-    def ensure(self) -> RuntimeLaunch:
-        self._reporter.start("ensure", total_steps=7)
+    def ensure(self) -> RuntimeLaunch | None:
+        ready = self._integrity_ok() and not self._drifted_component_ids()
+        started = self._start_operation(
+            "ensure",
+            effective_component_ids=() if ready else self._profile_component_ids(),
+        )
+        if not started:
+            return self._launch() if ready else None
         try:
-            if not self._integrity_ok():
+            if not ready:
                 self._reporter.advance(
                     phase="wait_for_lock",
                     current=2,
@@ -534,7 +665,7 @@ class RuntimeInstaller:
                     timeout=self._lock_timeout,
                 )
                 with lock:
-                    if not self._integrity_ok():
+                    if not self._integrity_ok() or self._drifted_component_ids():
                         self._install_locked()
             else:
                 self._reporter.advance(
@@ -552,8 +683,10 @@ class RuntimeInstaller:
                 message_code="runtime.ensure_complete",
             )
             return launch
-        except Exception:
-            self._reporter.fail()
+        except RuntimeOperationCancelled:
+            raise
+        except Exception as exc:
+            self._reporter.fail(exc)
             raise
 
     def _install_locked(self) -> None:
@@ -566,10 +699,14 @@ class RuntimeInstaller:
         final = self.paths.runtime_root
         final.parent.mkdir(parents=True, exist_ok=True)
         partial = final.with_name("runtime.installing")
+        rollback = final.with_name("runtime.rollback")
+        if rollback.exists():
+            if final.exists():
+                shutil.rmtree(rollback)
+            else:
+                rollback.replace(final)
         if partial.exists():
             shutil.rmtree(partial)
-        if final.exists():
-            shutil.rmtree(final)
         partial.mkdir(parents=True)
         try:
             if not self._runner_reports_phases:
@@ -596,6 +733,22 @@ class RuntimeInstaller:
                 ) from exc
             if not python.is_file():
                 raise RuntimeInstallError("installed runtime has no Python executable")
+            probe_results = self._component_probe(
+                partial, self._profile_component_ids()
+            )
+            failed_components = sorted(
+                component_id
+                for component_id, ready in probe_results.items()
+                if not ready
+            )
+            if failed_components:
+                raise RuntimeInstallError(
+                    f"installed Runtime component imports failed: {failed_components}"
+                )
+            (partial / ".component-integrity.json").write_text(
+                json.dumps(probe_results, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
             marker = {
                 "schema_version": 1,
                 "backend_version": self.manifest.backend_version,
@@ -612,14 +765,46 @@ class RuntimeInstaller:
                 total=7,
                 message_code="runtime.commit_runtime",
             )
-            partial.replace(final)
+            if final.exists():
+                final.replace(rollback)
+            try:
+                partial.replace(final)
+            except Exception:
+                if rollback.exists() and not final.exists():
+                    rollback.replace(final)
+                raise
+            shutil.rmtree(rollback, ignore_errors=True)
+        except RuntimeOperationCancelled:
+            shutil.rmtree(partial, ignore_errors=True)
+            raise
         except Exception:
             shutil.rmtree(partial, ignore_errors=True)
             raise
 
-    def repair(self) -> RuntimeLaunch:
-        self._reporter.start("repair", total_steps=7)
+    def repair(self) -> RuntimeLaunch | None:
+        drifted = set(self._drifted_component_ids())
+        requested = set(self._component_ids) if self._component_ids else drifted
+        needs_repair = bool(requested.intersection(drifted))
+        globally_ready = self._integrity_ok() and not drifted
+        effective = () if not needs_repair else self._profile_component_ids()
+        started = self._start_operation(
+            "repair",
+            effective_component_ids=effective,
+        )
+        if not started:
+            return self._launch() if globally_ready else None
         try:
+            if not needs_repair:
+                if globally_ready:
+                    self._save_preference()
+                launch = self._launch() if globally_ready else None
+                self._reporter.succeed(
+                    phase="commit_runtime",
+                    current=7,
+                    total=7,
+                    message_code="runtime.repair_complete",
+                )
+                return launch
             self._reporter.advance(
                 phase="wait_for_lock",
                 current=2,
@@ -641,12 +826,14 @@ class RuntimeInstaller:
                 message_code="runtime.repair_complete",
             )
             return launch
-        except Exception:
-            self._reporter.fail()
+        except RuntimeOperationCancelled:
+            raise
+        except Exception as exc:
+            self._reporter.fail(exc)
             raise
 
     def _launch(self) -> RuntimeLaunch:
-        if not self._integrity_ok():
+        if not self._integrity_ok() or self._drifted_component_ids():
             raise RuntimeInstallError("runtime installation did not verify")
         environment = self._environment()
         directory_keys = {
@@ -690,28 +877,69 @@ def _emit(value: object) -> None:
 def _request(value: object) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RuntimeInstallError("Runtime Host request must be a JSON object")
-    required = {
+    binding_fields = {
         "protocol_version",
-        "operation",
         "product_root",
         "component_lock",
         "runtime_manifest",
     }
-    if set(value).difference(
-        required
-        | {
-            "accelerator",
-            "layout_manifest",
-            "product_id",
-            "accepted_event_streams",
-        }
-    ):
+    common_optional = {
+        "request_kind",
+        "accepted_event_streams",
+    }
+    request_kind = value.get("request_kind", "start")
+    if request_kind == "command":
+        required = binding_fields | {"command", "command_id", "target_operation_id"}
+        allowed = (
+            required
+            | common_optional
+            | {
+                "new_operation_id",
+                "expected_sequence",
+                "accelerator",
+                "layout_manifest",
+                "product_id",
+            }
+        )
+    elif request_kind == "observe":
+        required = binding_fields | {"operation_id", "after_sequence"}
+        allowed = (
+            required
+            | common_optional
+            | {
+                "limit",
+                "accelerator",
+                "layout_manifest",
+                "product_id",
+            }
+        )
+    elif request_kind == "start":
+        required = binding_fields | {"operation"}
+        allowed = (
+            required
+            | common_optional
+            | {
+                "accelerator",
+                "layout_manifest",
+                "product_id",
+                "operation_id",
+                "component_ids",
+                "required_capabilities",
+            }
+        )
+    else:
+        raise RuntimeInstallError("Runtime Host request_kind is invalid")
+    if set(value).difference(allowed):
         raise RuntimeInstallError("Runtime Host request contains unknown fields")
     if not required.issubset(value) or value["protocol_version"] != PROTOCOL_VERSION:
         raise RuntimeInstallError(
             "Runtime Host request is incompatible with Protocol v2"
         )
-    if value["operation"] not in ("inspect", "ensure", "repair"):
+    if request_kind == "start" and value["operation"] not in (
+        "inspect",
+        "ensure",
+        "repair",
+    ):
         raise RuntimeInstallError("Runtime Host operation is invalid")
     for field in ("product_root", "component_lock", "runtime_manifest"):
         if not isinstance(value[field], str) or not value[field]:
@@ -721,10 +949,238 @@ def _request(value: object) -> dict[str, Any]:
         not isinstance(accepted_streams, list)
         or any(not isinstance(stream, str) for stream in accepted_streams)
         or len(set(accepted_streams)) != len(accepted_streams)
-        or any(stream != "ndjson.v1" for stream in accepted_streams)
+        or any(stream not in {"ndjson.v1", "ndjson.v2"} for stream in accepted_streams)
     ):
         raise RuntimeInstallError("Runtime Host accepted_event_streams is invalid")
+    for field in ("component_ids", "required_capabilities"):
+        items = value.get(field, [])
+        if (
+            not isinstance(items, list)
+            or any(not isinstance(item, str) or not item for item in items)
+            or len(set(items)) != len(items)
+        ):
+            raise RuntimeInstallError(f"Runtime Host {field} is invalid")
+    for field in (
+        "operation_id",
+        "command_id",
+        "target_operation_id",
+        "new_operation_id",
+    ):
+        if field in value and (not isinstance(value[field], str) or not value[field]):
+            raise RuntimeInstallError(f"Runtime Host {field} is invalid")
+    if request_kind == "command":
+        if value["command"] not in {"cancel", "retry"}:
+            raise RuntimeInstallError("Runtime Host command is invalid")
+        if value["command"] == "retry" and not value.get("new_operation_id"):
+            raise RuntimeInstallError("Runtime Host retry requires new_operation_id")
+    if request_kind == "observe":
+        if type(value["after_sequence"]) is not int or value["after_sequence"] < 0:
+            raise RuntimeInstallError("Runtime Host after_sequence is invalid")
+        limit = value.get("limit", 128)
+        if type(limit) is not int or limit < 1 or limit > 512:
+            raise RuntimeInstallError("Runtime Host limit is invalid")
     return value
+
+
+def _installer_from_request(
+    request: dict[str, Any],
+    *,
+    event_sink: EventSink | None = None,
+    operation_id: str | None = None,
+    source_operation_id: str | None = None,
+    component_ids: tuple[str, ...] | None = None,
+    required_capabilities: tuple[str, ...] | None = None,
+) -> RuntimeInstaller:
+    return RuntimeInstaller(
+        product_root=request["product_root"],
+        component_lock=request["component_lock"],
+        runtime_manifest=request["runtime_manifest"],
+        accelerator=request.get("accelerator"),
+        layout_manifest=request.get("layout_manifest"),
+        product_id=request.get("product_id"),
+        event_sink=event_sink,
+        operation_id=operation_id
+        if operation_id is not None
+        else request.get("operation_id"),
+        source_operation_id=source_operation_id,
+        component_ids=(
+            component_ids
+            if component_ids is not None
+            else tuple(request.get("component_ids", []))
+        ),
+        required_capabilities=(
+            required_capabilities
+            if required_capabilities is not None
+            else tuple(request.get("required_capabilities", []))
+        ),
+    )
+
+
+def _success_envelope(
+    result: Any,
+    *,
+    operation: str,
+) -> dict[str, Any]:
+    capability_registry = json.loads(
+        files("vibeocr.runtime_contracts")
+        .joinpath("capabilities.json")
+        .read_text(encoding="utf-8")
+    )
+    definitions = capability_registry["definitions"]
+    capability_descriptors = [
+        {
+            "name": name,
+            "lifecycle": definitions[name]["lifecycle"],
+            "introduced_in": definitions[name]["introduced_in"],
+            "deprecated_in": definitions[name]["deprecated_in"],
+            "sunset_at": definitions[name]["sunset_at"],
+            "replacement": definitions[name]["replacement"],
+        }
+        for name in result.available_capabilities
+        if name in definitions
+    ]
+    return {
+        "protocol_version": PROTOCOL_VERSION,
+        "ok": True,
+        "operation": operation,
+        "state": asdict(result.state),
+        "launch": asdict(result.launch) if result.launch is not None else None,
+        "profile": result.profile,
+        "maintenance": result.receipt["snapshot"],
+        "negotiated_capabilities": list(
+            result.receipt.get("negotiated_capabilities", [])
+        ),
+        "capability_descriptors": capability_descriptors,
+    }
+
+
+def _runtime_control_from_request(
+    request: dict[str, Any],
+    *,
+    event_sink: EventSink | None,
+) -> Any:
+    from vibeocr.backend.runtime_control import RuntimeControl
+
+    def installer_factory(**kwargs: Any) -> RuntimeInstaller:
+        return _installer_from_request(request, event_sink=event_sink, **kwargs)
+
+    return RuntimeControl.from_installer_factory(installer_factory)
+
+
+def _command_envelope(
+    request: dict[str, Any],
+    control: Any,
+) -> dict[str, Any]:
+    receipt = control.command(
+        command_id=request["command_id"],
+        command=request["command"],
+        target_operation_id=request["target_operation_id"],
+        new_operation_id=request.get("new_operation_id"),
+        expected_sequence=request.get("expected_sequence"),
+    )
+    snapshot = receipt["snapshot"]
+    operation = str(snapshot["operation"])
+    include_launch = (
+        request["command"] == "retry"
+        and snapshot.get("operation_state") == "succeeded"
+        and operation != "inspect"
+    )
+    return _success_envelope(
+        control.project_receipt(receipt, include_launch=include_launch),
+        operation=operation,
+    )
+
+
+def _failure_envelope(
+    exc: Exception,
+    *,
+    operation: str | None,
+    maintenance: dict[str, Any] | None,
+) -> dict[str, Any]:
+    legacy_code = "install_failed"
+    canonical_code = "RUNTIME_INSTALL_FAILED"
+    category = "backend_unavailable"
+    retryable = False
+    detail: dict[str, Any] = {}
+    if isinstance(exc, RuntimeLockTimeout):
+        legacy_code = "lock_timeout"
+        canonical_code = "RUNTIME_BUSY"
+        category = "transient"
+        retryable = True
+    elif isinstance(exc, OSError):
+        legacy_code = "io_error"
+        canonical_code = "RUNTIME_IO_ERROR"
+        category = "transient"
+        retryable = True
+    elif isinstance(exc, RuntimeOperationNotFound):
+        legacy_code = "invalid_request"
+        canonical_code = "RUNTIME_OPERATION_NOT_FOUND"
+        category = "not_found"
+    elif isinstance(exc, RuntimeCursorExpired):
+        legacy_code = "invalid_request"
+        canonical_code = "RUNTIME_CURSOR_EXPIRED"
+        category = "not_found"
+        detail["oldest_sequence"] = exc.oldest_sequence
+    elif isinstance(exc, RuntimeCommandConflict):
+        legacy_code = "invalid_request"
+        canonical_code = "RUNTIME_COMMAND_ID_CONFLICT"
+        category = "conflict"
+    elif isinstance(exc, RuntimeOperationNotCancellable):
+        legacy_code = "invalid_request"
+        canonical_code = "RUNTIME_OPERATION_NOT_CANCELLABLE"
+        category = "conflict"
+    elif isinstance(exc, RuntimeOperationNotRetryable):
+        legacy_code = "invalid_request"
+        canonical_code = "RUNTIME_OPERATION_NOT_RETRYABLE"
+        category = "conflict"
+    elif isinstance(exc, RuntimeOperationConflict):
+        legacy_code = "invalid_request"
+        canonical_code = "RUNTIME_OPERATION_ID_CONFLICT"
+        category = "conflict"
+    elif isinstance(exc, RuntimeCapabilityError):
+        legacy_code = "invalid_request"
+        canonical_code = "RUNTIME_CAPABILITY_UNAVAILABLE"
+        category = "capability"
+    elif isinstance(exc, RuntimeSourceIdentityMismatch):
+        legacy_code = "invalid_binding"
+        canonical_code = "RUNTIME_IDENTITY_MISMATCH"
+        category = "identity"
+    elif isinstance(exc, RuntimeOperationCancelled):
+        canonical_code = "CANCELLED"
+        category = "cancelled"
+    elif isinstance(exc, ManifestError):
+        legacy_code = "invalid_binding"
+        canonical_code = "RUNTIME_IDENTITY_MISMATCH"
+        category = "identity"
+    elif (
+        isinstance(exc, (json.JSONDecodeError, RuntimeInstallFailure))
+        and operation is None
+    ):
+        legacy_code = "invalid_request"
+        canonical_code = "VALIDATION_ERROR"
+        category = "validation"
+    error: dict[str, Any] = {
+        "code": legacy_code,
+        "canonical_code": canonical_code,
+        "category": category,
+        "message": str(exc),
+        "message_code": "runtime.operation_failed",
+        "retryable": retryable,
+        "detail": detail,
+    }
+    if retryable:
+        error["retry_after"] = 1
+    envelope: dict[str, Any] = {
+        "protocol_version": PROTOCOL_VERSION,
+        "ok": False,
+        "operation": operation,
+        "error": error,
+    }
+    if maintenance is not None:
+        envelope["maintenance"] = maintenance
+    if isinstance(exc, RuntimeCursorExpired):
+        envelope["maintenance"] = exc.snapshot
+    return envelope
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -732,74 +1188,78 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--request-json")
     args = parser.parse_args(argv)
     operation: str | None = None
-    installer: RuntimeInstaller | None = None
+    control: Any | None = None
     try:
         raw_request = (
             args.request_json if args.request_json is not None else sys.stdin.read()
         )
         request = _request(json.loads(raw_request))
-        operation = request["operation"]
+        request_kind = request.get("request_kind", "start")
+        operation = request.get("operation")
         event_sink = (
-            _emit if "ndjson.v1" in request.get("accepted_event_streams", []) else None
+            _emit
+            if {"ndjson.v1", "ndjson.v2"}.intersection(
+                request.get("accepted_event_streams", [])
+            )
+            else None
         )
-        installer = RuntimeInstaller(
-            product_root=request["product_root"],
-            component_lock=request["component_lock"],
-            runtime_manifest=request["runtime_manifest"],
-            accelerator=request.get("accelerator"),
-            layout_manifest=request.get("layout_manifest"),
-            product_id=request.get("product_id"),
+        control = _runtime_control_from_request(
+            request,
             event_sink=event_sink,
         )
-        if operation == "inspect":
-            state = installer.inspect()
-            launch = None
-        else:
-            launch = getattr(installer, operation)()
-            state = installer.inspect(emit=False)
+        if request_kind == "observe":
+            update = control.observe(
+                request["operation_id"],
+                after_sequence=request["after_sequence"],
+                limit=request.get("limit", 128),
+            )
+            _emit(
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "ok": True,
+                    "request_kind": "observe",
+                    **{
+                        key: value
+                        for key, value in update.items()
+                        if key != "schema_version"
+                    },
+                }
+            )
+            return 0
+        if request_kind == "command":
+            _emit(_command_envelope(request, control))
+            return 0
+        assert operation is not None
+        result = control.execute_with_result(
+            operation=operation,
+            operation_id=request.get("operation_id"),
+            component_ids=tuple(request.get("component_ids", [])),
+            required_capabilities=tuple(request.get("required_capabilities", [])),
+            profile_id=request.get("profile_id"),
+        )
     except (
         json.JSONDecodeError,
         ManifestError,
         RuntimeInstallError,
         RuntimeLockTimeout,
+        RuntimeOperationError,
         OSError,
     ) as exc:
-        code = (
-            "lock_timeout"
-            if isinstance(exc, RuntimeLockTimeout)
-            else "io_error"
-            if isinstance(exc, OSError)
-            else "invalid_request"
-            if isinstance(exc, (json.JSONDecodeError, RuntimeInstallError))
-            and operation is None
-            else "invalid_binding"
-            if isinstance(exc, ManifestError)
-            else "install_failed"
+        _emit(
+            _failure_envelope(
+                exc,
+                operation=operation,
+                maintenance=(
+                    control.maintenance_snapshot if control is not None else None
+                ),
+            )
         )
-        envelope: dict[str, Any] = {
-            "protocol_version": PROTOCOL_VERSION,
-            "ok": False,
-            "operation": operation,
-            "error": {
-                "code": code,
-                "message": str(exc),
-                "retryable": code in {"lock_timeout", "io_error"},
-            },
-        }
-        if installer is not None:
-            envelope["maintenance"] = installer.maintenance_snapshot()
-        _emit(envelope)
         return 1
     _emit(
-        {
-            "protocol_version": PROTOCOL_VERSION,
-            "ok": True,
-            "operation": operation,
-            "state": asdict(state),
-            "launch": asdict(launch) if launch is not None else None,
-            "profile": installer.profile_payload(),
-            "maintenance": installer.maintenance_snapshot(),
-        }
+        _success_envelope(
+            result,
+            operation=operation,
+        )
     )
     return 0
 
@@ -810,6 +1270,7 @@ if __name__ == "__main__":
 
 __all__ = [
     "RuntimeState",
+    "RuntimeCapabilityUnavailable",
     "RuntimeInstallError",
     "RuntimeInstaller",
     "RuntimeLaunch",
