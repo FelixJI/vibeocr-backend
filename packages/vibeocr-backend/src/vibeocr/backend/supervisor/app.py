@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from functools import cache
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
@@ -32,6 +33,7 @@ from vibeocr.runtime_contracts.generated import wire_types as wire
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+from vibeocr.backend.runtime_maintenance import runtime_status_from_environment
 from vibeocr.runtime_contracts import (
     SCHEMA_VERSION,
     ErrorCode,
@@ -106,9 +108,15 @@ class _PdfBadRequest(Exception):
     """Raised when a PDF route receives an unparseable/invalid body."""
 
 
-def create_app(module: SupervisorModule, session_token: str) -> FastAPI:
+def create_app(
+    module: SupervisorModule,
+    session_token: str,
+    *,
+    runtime_status_provider: Callable[[str, str], dict[str, Any]] | None = None,
+) -> FastAPI:
     """Build a FastAPI app bound to ``module`` guarded by ``session_token``."""
     instance_id = module.options.instance_id
+    status_provider = runtime_status_provider or runtime_status_from_environment
     app = FastAPI(title="VibeOCR Inference Supervisor", version="2.0.0")
 
     @app.middleware("http")
@@ -259,6 +267,11 @@ def create_app(module: SupervisorModule, session_token: str) -> FastAPI:
     # ------------------------------------------------------------------
     # Runtime / settings
     # ------------------------------------------------------------------
+
+    @app.get("/v2/runtime/status", response_model=wire.RuntimeStatusSnapshot)
+    async def runtime_status() -> dict[str, Any]:
+        service_state = "degraded" if module.draining or module.shutdown else "ready"
+        return status_provider(instance_id, service_state)
 
     @app.get("/v2/runtime/residency", response_model=wire.ResidencyStatus)
     async def residency() -> dict[str, Any]:

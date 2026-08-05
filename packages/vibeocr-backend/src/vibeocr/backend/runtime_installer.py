@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -22,6 +23,11 @@ from typing import Any
 
 from vibeocr.backend.runtime_layout import resolve_runtime_store
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
+from vibeocr.backend.runtime_maintenance import (
+    EventSink,
+    RuntimeMaintenanceReporter,
+    profile_descriptor,
+)
 from vibeocr.backend.runtime_manifest import (
     ManifestError,
     RuntimeManifest,
@@ -63,6 +69,53 @@ class RuntimeLaunch:
 
 
 InstallRunner = Callable[[Path, RuntimeManifest, str], Path]
+
+
+def _run_install_command(
+    command: list[str],
+    *,
+    timeout: float,
+    env: dict[str, str],
+    reporter: RuntimeMaintenanceReporter | None,
+    heartbeat_code: str,
+) -> None:
+    """Run a child without leaking package-manager output into NDJSON stdout."""
+    process = subprocess.Popen(
+        command,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                process.communicate()
+                raise RuntimeInstallError(f"{heartbeat_code} timed out")
+            try:
+                process.communicate(timeout=min(5.0, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                if reporter is not None:
+                    reporter.heartbeat(message_code=heartbeat_code)
+        if process.returncode != 0:
+            raise RuntimeInstallError(
+                f"{heartbeat_code} failed with exit code {process.returncode}"
+            )
+    except BaseException:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        raise
 
 
 def _default_accelerator(component_lock: dict[str, Any]) -> str:
@@ -136,6 +189,7 @@ def _default_install_runner(
     partial_root: Path,
     manifest: RuntimeManifest,
     profile: str,
+    reporter: RuntimeMaintenanceReporter | None = None,
 ) -> Path:
     """Extract bound Python and install only hash-locked dependencies.
 
@@ -167,7 +221,15 @@ def _default_install_runner(
     )
     for directory in portable_env["PIP_CACHE_DIR"], portable_env["TEMP"]:
         Path(directory).mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    if reporter is not None:
+        reporter.advance(
+            phase="install_profile",
+            current=4,
+            total=7,
+            message_code="runtime.install_profile",
+            component_id="ocr_engine",
+        )
+    _run_install_command(
         [
             str(python),
             "-m",
@@ -178,9 +240,10 @@ def _default_install_runner(
             "-r",
             str(lock),
         ],
-        check=True,
         timeout=3600,
         env=portable_env,
+        reporter=reporter,
+        heartbeat_code="runtime.install_profile",
     )
     artifact_root = manifest.path.parent
     protocol_wheel = artifact_root / manifest.protocol_wheel
@@ -189,7 +252,15 @@ def _default_install_runner(
         raise RuntimeInstallError(
             "release directory must contain the bound Protocol and Backend wheels"
         )
-    subprocess.run(
+    if reporter is not None:
+        reporter.advance(
+            phase="install_backend",
+            current=5,
+            total=7,
+            message_code="runtime.install_backend",
+            component_id="runtime_host",
+        )
+    _run_install_command(
         [
             str(python),
             "-m",
@@ -199,11 +270,19 @@ def _default_install_runner(
             str(protocol_wheel),
             str(backend_wheel),
         ],
-        check=True,
         timeout=600,
         env=portable_env,
+        reporter=reporter,
+        heartbeat_code="runtime.install_backend",
     )
-    subprocess.run(
+    if reporter is not None:
+        reporter.advance(
+            phase="verify_runtime",
+            current=6,
+            total=7,
+            message_code="runtime.verify_runtime",
+        )
+    _run_install_command(
         [
             str(python),
             "-c",
@@ -212,9 +291,10 @@ def _default_install_runner(
                 "import vibeocr.backend.supervisor.main"
             ),
         ],
-        check=True,
         timeout=60,
         env=portable_env,
+        reporter=reporter,
+        heartbeat_code="runtime.verify_runtime",
     )
     return python
 
@@ -277,6 +357,7 @@ class RuntimeInstaller:
         layout_manifest: str | Path | None = None,
         product_id: str | None = None,
         install_runner: InstallRunner | None = None,
+        event_sink: EventSink | None = None,
         lock_timeout: float = 60.0,
     ) -> None:
         self.product_root = Path(product_root).resolve()
@@ -291,9 +372,28 @@ class RuntimeInstaller:
         )
         self.accelerator = self._select_accelerator(accelerator)
         self.plan = ACCELERATOR_TO_PLAN[self.accelerator]
-        self._install_runner = install_runner or _default_install_runner
+        self._runner_reports_phases = install_runner is None
+        if install_runner is None:
+            self._install_runner = lambda partial, manifest, profile: (
+                _default_install_runner(
+                    partial,
+                    manifest,
+                    profile,
+                    self._reporter,
+                )
+            )
+        else:
+            self._install_runner = install_runner
         self._lock_timeout = lock_timeout
         self._validate_binding()
+        self._reporter = RuntimeMaintenanceReporter(
+            state_root=self.paths.state_root,
+            profile=profile_descriptor(
+                self.manifest.profiles[self.plan],
+                accelerator=self.accelerator,
+            ),
+            event_sink=event_sink,
+        )
 
     def _preference_path(self) -> Path:
         return self.paths.state_root / "runtime-preference.json"
@@ -370,9 +470,17 @@ class RuntimeInstaller:
             "accelerator": self.accelerator,
         }
 
-    def inspect(self) -> RuntimeState:
+    def profile_payload(self) -> dict[str, Any]:
+        return self._reporter.profile.to_payload()
+
+    def maintenance_snapshot(self) -> dict[str, Any] | None:
+        return self._reporter.snapshot
+
+    def inspect(self, *, emit: bool = True) -> RuntimeState:
+        if emit:
+            self._reporter.start("inspect", total_steps=2)
         ready = self._integrity_ok()
-        return RuntimeState(
+        state = RuntimeState(
             status="ready" if ready else "missing",
             runtime_root=str(self.paths.runtime_root),
             accelerator=self.accelerator,
@@ -380,6 +488,14 @@ class RuntimeInstaller:
             backend_version=self.manifest.backend_version,
             integrity="verified" if ready else "not-installed",
         )
+        if emit:
+            self._reporter.succeed(
+                phase="verify_runtime",
+                current=2,
+                total=2,
+                message_code="runtime.inspect_complete",
+            )
+        return state
 
     def _environment(self) -> dict[str, str]:
         state = self.paths.state_root
@@ -387,6 +503,9 @@ class RuntimeInstaller:
             "VIBEOCR_PRODUCT_ROOT": str(self.product_root),
             "VIBEOCR_RUNTIME_ROOT": str(self.paths.runtime_root),
             "VIBEOCR_MODEL_ROOT": str(self.paths.models_root),
+            "VIBEOCR_RUNTIME_MANIFEST": str(self.manifest.path),
+            "VIBEOCR_RUNTIME_ACCELERATOR": self.accelerator,
+            "VIBEOCR_RUNTIME_STATE_ROOT": str(state),
             "PIP_CACHE_DIR": str(state / "cache" / "pip"),
             "UV_CACHE_DIR": str(state / "cache" / "uv"),
             "HF_HOME": str(state / "cache" / "huggingface"),
@@ -401,18 +520,49 @@ class RuntimeInstaller:
         }
 
     def ensure(self) -> RuntimeLaunch:
-        if not self._integrity_ok():
-            lock = RuntimeStoreLock(
-                self.paths.locks_root / "runtime-store.lock",
-                timeout=self._lock_timeout,
+        self._reporter.start("ensure", total_steps=7)
+        try:
+            if not self._integrity_ok():
+                self._reporter.advance(
+                    phase="wait_for_lock",
+                    current=2,
+                    total=7,
+                    message_code="runtime.wait_for_lock",
+                )
+                lock = RuntimeStoreLock(
+                    self.paths.locks_root / "runtime-store.lock",
+                    timeout=self._lock_timeout,
+                )
+                with lock:
+                    if not self._integrity_ok():
+                        self._install_locked()
+            else:
+                self._reporter.advance(
+                    phase="verify_runtime",
+                    current=6,
+                    total=7,
+                    message_code="runtime.verify_runtime",
+                )
+            self._save_preference()
+            launch = self._launch()
+            self._reporter.succeed(
+                phase="commit_runtime",
+                current=7,
+                total=7,
+                message_code="runtime.ensure_complete",
             )
-            with lock:
-                if not self._integrity_ok():
-                    self._install_locked()
-        self._save_preference()
-        return self._launch()
+            return launch
+        except Exception:
+            self._reporter.fail()
+            raise
 
     def _install_locked(self) -> None:
+        self._reporter.advance(
+            phase="prepare_runtime",
+            current=3,
+            total=7,
+            message_code="runtime.prepare_runtime",
+        )
         final = self.paths.runtime_root
         final.parent.mkdir(parents=True, exist_ok=True)
         partial = final.with_name("runtime.installing")
@@ -422,7 +572,22 @@ class RuntimeInstaller:
             shutil.rmtree(final)
         partial.mkdir(parents=True)
         try:
+            if not self._runner_reports_phases:
+                self._reporter.advance(
+                    phase="install_profile",
+                    current=4,
+                    total=7,
+                    message_code="runtime.install_profile",
+                    component_id="ocr_engine",
+                )
             python = self._install_runner(partial, self.manifest, self.plan)
+            if not self._runner_reports_phases:
+                self._reporter.advance(
+                    phase="verify_runtime",
+                    current=6,
+                    total=7,
+                    message_code="runtime.verify_runtime",
+                )
             try:
                 python.relative_to(partial)
             except ValueError as exc:
@@ -441,26 +606,63 @@ class RuntimeInstaller:
                 json.dumps(marker, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+            self._reporter.advance(
+                phase="commit_runtime",
+                current=7,
+                total=7,
+                message_code="runtime.commit_runtime",
+            )
             partial.replace(final)
         except Exception:
             shutil.rmtree(partial, ignore_errors=True)
             raise
 
     def repair(self) -> RuntimeLaunch:
-        lock = RuntimeStoreLock(
-            self.paths.locks_root / "runtime-store.lock",
-            timeout=self._lock_timeout,
-        )
-        with lock:
-            self._install_locked()
-        self._save_preference()
-        return self._launch()
+        self._reporter.start("repair", total_steps=7)
+        try:
+            self._reporter.advance(
+                phase="wait_for_lock",
+                current=2,
+                total=7,
+                message_code="runtime.wait_for_lock",
+            )
+            lock = RuntimeStoreLock(
+                self.paths.locks_root / "runtime-store.lock",
+                timeout=self._lock_timeout,
+            )
+            with lock:
+                self._install_locked()
+            self._save_preference()
+            launch = self._launch()
+            self._reporter.succeed(
+                phase="commit_runtime",
+                current=7,
+                total=7,
+                message_code="runtime.repair_complete",
+            )
+            return launch
+        except Exception:
+            self._reporter.fail()
+            raise
 
     def _launch(self) -> RuntimeLaunch:
         if not self._integrity_ok():
             raise RuntimeInstallError("runtime installation did not verify")
         environment = self._environment()
-        for directory in environment.values():
+        directory_keys = {
+            "VIBEOCR_PRODUCT_ROOT",
+            "VIBEOCR_RUNTIME_ROOT",
+            "VIBEOCR_MODEL_ROOT",
+            "VIBEOCR_RUNTIME_STATE_ROOT",
+            "PIP_CACHE_DIR",
+            "UV_CACHE_DIR",
+            "HF_HOME",
+            "MODELSCOPE_CACHE",
+            "TEMP",
+            "TMP",
+        }
+        for key in directory_keys:
+            directory = environment[key]
             path = Path(directory)
             if path.is_absolute() and directory.startswith(str(self.paths.store_root)):
                 path.mkdir(parents=True, exist_ok=True)
@@ -496,7 +698,13 @@ def _request(value: object) -> dict[str, Any]:
         "runtime_manifest",
     }
     if set(value).difference(
-        required | {"accelerator", "layout_manifest", "product_id"}
+        required
+        | {
+            "accelerator",
+            "layout_manifest",
+            "product_id",
+            "accepted_event_streams",
+        }
     ):
         raise RuntimeInstallError("Runtime Host request contains unknown fields")
     if not required.issubset(value) or value["protocol_version"] != PROTOCOL_VERSION:
@@ -508,6 +716,14 @@ def _request(value: object) -> dict[str, Any]:
     for field in ("product_root", "component_lock", "runtime_manifest"):
         if not isinstance(value[field], str) or not value[field]:
             raise RuntimeInstallError(f"Runtime Host {field} is invalid")
+    accepted_streams = value.get("accepted_event_streams", [])
+    if (
+        not isinstance(accepted_streams, list)
+        or any(not isinstance(stream, str) for stream in accepted_streams)
+        or len(set(accepted_streams)) != len(accepted_streams)
+        or any(stream != "ndjson.v1" for stream in accepted_streams)
+    ):
+        raise RuntimeInstallError("Runtime Host accepted_event_streams is invalid")
     return value
 
 
@@ -516,12 +732,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--request-json")
     args = parser.parse_args(argv)
     operation: str | None = None
+    installer: RuntimeInstaller | None = None
     try:
         raw_request = (
             args.request_json if args.request_json is not None else sys.stdin.read()
         )
         request = _request(json.loads(raw_request))
         operation = request["operation"]
+        event_sink = (
+            _emit if "ndjson.v1" in request.get("accepted_event_streams", []) else None
+        )
         installer = RuntimeInstaller(
             product_root=request["product_root"],
             component_lock=request["component_lock"],
@@ -529,13 +749,14 @@ def main(argv: list[str] | None = None) -> int:
             accelerator=request.get("accelerator"),
             layout_manifest=request.get("layout_manifest"),
             product_id=request.get("product_id"),
+            event_sink=event_sink,
         )
         if operation == "inspect":
             state = installer.inspect()
             launch = None
         else:
             launch = getattr(installer, operation)()
-            state = installer.inspect()
+            state = installer.inspect(emit=False)
     except (
         json.JSONDecodeError,
         ManifestError,
@@ -555,18 +776,19 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(exc, ManifestError)
             else "install_failed"
         )
-        _emit(
-            {
-                "protocol_version": PROTOCOL_VERSION,
-                "ok": False,
-                "operation": operation,
-                "error": {
-                    "code": code,
-                    "message": str(exc),
-                    "retryable": code in {"lock_timeout", "io_error"},
-                },
-            }
-        )
+        envelope: dict[str, Any] = {
+            "protocol_version": PROTOCOL_VERSION,
+            "ok": False,
+            "operation": operation,
+            "error": {
+                "code": code,
+                "message": str(exc),
+                "retryable": code in {"lock_timeout", "io_error"},
+            },
+        }
+        if installer is not None:
+            envelope["maintenance"] = installer.maintenance_snapshot()
+        _emit(envelope)
         return 1
     _emit(
         {
@@ -575,6 +797,8 @@ def main(argv: list[str] | None = None) -> int:
             "operation": operation,
             "state": asdict(state),
             "launch": asdict(launch) if launch is not None else None,
+            "profile": installer.profile_payload(),
+            "maintenance": installer.maintenance_snapshot(),
         }
     )
     return 0

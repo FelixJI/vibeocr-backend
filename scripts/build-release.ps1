@@ -5,7 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$protocolVersion = '2.1.0'
+$protocolVersion = '2.2.0'
 
 function Get-Sha256([string]$Path) {
     $algorithm = [System.Security.Cryptography.SHA256]::Create()

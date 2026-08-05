@@ -3,7 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$protocolVersion = '2.1.0'
+$protocolVersion = '2.2.0'
 $protocol = Join-Path $root 'build/automation/bootstrap-protocol'
 
 if (Test-Path -LiteralPath $protocol) {

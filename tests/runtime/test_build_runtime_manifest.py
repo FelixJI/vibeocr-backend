@@ -102,7 +102,20 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
         "pdf.edit.v2",
         "qrcode.v2",
         "runtime.settings.v2",
+        "runtime.maintenance.v1",
+        "task.progress.v1",
     }
+    assert [
+        component.component_id
+        for component in manifest.profiles["win-x64-cpu"].components
+    ] == [
+        "ocr_engine",
+        "document_parsing",
+        "pdf_document_tools",
+        "image_code_tools",
+        "runtime_host",
+    ]
+    assert manifest.profiles["win-x64-cpu"].components[0].version is None
 
     checksums = {}
     for line in (first.parent / "SHA256SUMS").read_text().splitlines():

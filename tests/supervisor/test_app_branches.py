@@ -210,6 +210,47 @@ async def test_malformed_authorization_header_is_unauthorized(
     assert resp.json()["code"] == "UNAUTHORIZED"
 
 
+async def test_runtime_status_returns_injected_profile_and_maintenance(
+    pdf_module: SupervisorModule,
+    supervisor_token: str,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def status_provider(instance_id: str, service_state: str) -> dict[str, Any]:
+        calls.append((instance_id, service_state))
+        return {
+            "schema_version": 2,
+            "instance_id": instance_id,
+            "service_state": service_state,
+            "backend_version": "0.8.2",
+            "profile": {
+                "profile_id": "win-x64-cpu",
+                "accelerator": "cpu",
+                "components": [
+                    {
+                        "component_id": "ocr_engine",
+                        "display_name": "OCR engine",
+                        "state": "ready",
+                        "version": "3.7.0",
+                    }
+                ],
+            },
+            "maintenance": None,
+        }
+
+    app = create_app(
+        pdf_module,
+        supervisor_token,
+        runtime_status_provider=status_provider,
+    )
+    async with _http(supervisor_token, app) as http:
+        response = await http.get("/v2/runtime/status")
+
+    assert response.status_code == 200
+    assert response.json()["profile"]["components"][0]["version"] == "3.7.0"
+    assert calls == [(pdf_module.options.instance_id, "ready")]
+
+
 # ---------------------------------------------------------------------------
 # Submit job: content-type / manifest / quota / shutdown / generic error
 # ---------------------------------------------------------------------------
