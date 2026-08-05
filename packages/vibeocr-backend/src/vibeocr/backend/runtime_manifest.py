@@ -87,6 +87,7 @@ class RuntimeManifest:
     backend_wheel: str
     backend_sha256: str
     protocol: str
+    protocol_version: str
     protocol_manifest: str
     protocol_manifest_sha256: str
     protocol_wheel: str
@@ -446,6 +447,7 @@ def load_runtime_manifest(
         backend_wheel=wheel,
         backend_sha256=backend_sha,
         protocol=protocol,
+        protocol_version=protocol_version,
         protocol_manifest=protocol_manifest,
         protocol_manifest_sha256=protocol_manifest_sha,
         protocol_wheel=protocol_wheel,

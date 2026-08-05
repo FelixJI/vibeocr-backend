@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from functools import cache
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
@@ -33,7 +33,21 @@ from vibeocr.runtime_contracts.generated import wire_types as wire
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-from vibeocr.backend.runtime_maintenance import runtime_status_from_environment
+from vibeocr.backend.runtime_control import RuntimeControl
+from vibeocr.backend.runtime_lock import RuntimeLockTimeout
+from vibeocr.backend.runtime_maintenance import (
+    RuntimeCapabilityError,
+    RuntimeCommandConflict,
+    RuntimeCursorExpired,
+    RuntimeInstallFailure,
+    RuntimeOperationCancelled,
+    RuntimeOperationConflict,
+    RuntimeOperationNotCancellable,
+    RuntimeOperationNotFound,
+    RuntimeOperationNotRetryable,
+    RuntimeSourceIdentityMismatch,
+    runtime_status_from_environment,
+)
 from vibeocr.runtime_contracts import (
     SCHEMA_VERSION,
     ErrorCode,
@@ -84,6 +98,7 @@ def _error_response(
     *,
     detail: dict | None = None,
     job_id: str | None = None,
+    retry_after: int | None = None,
 ) -> JSONResponse:
     entry = error_registry[code]
     payload = ErrorPayload(
@@ -93,11 +108,79 @@ def _error_response(
         message=entry.message,
         category=entry.category,
         retryable=entry.retryable,
+        retry_after=retry_after,
         detail=detail or {},
         job_id=job_id,
     )
     body = payload.to_payload()
-    return JSONResponse(status_code=entry.http_status, content=body)
+    headers = {"Retry-After": str(retry_after)} if retry_after is not None else None
+    return JSONResponse(status_code=entry.http_status, content=body, headers=headers)
+
+
+@cache
+def _capability_descriptors() -> list[dict[str, Any]]:
+    registry = json.loads(
+        files("vibeocr.runtime_contracts")
+        .joinpath("capabilities.json")
+        .read_text(encoding="utf-8")
+    )
+    definitions = registry["definitions"]
+    return [
+        {
+            "name": name,
+            "lifecycle": definitions[name]["lifecycle"],
+            "introduced_in": definitions[name]["introduced_in"],
+            "deprecated_in": definitions[name]["deprecated_in"],
+            "sunset_at": definitions[name]["sunset_at"],
+            "replacement": definitions[name]["replacement"],
+        }
+        for name in registry["capabilities"]
+    ]
+
+
+def _runtime_exception_response(exc: Exception, instance_id: str) -> JSONResponse:
+    detail: dict[str, Any] = {"reason": str(exc)}
+    retry_after: int | None = None
+    if isinstance(exc, RuntimeCursorExpired):
+        code = ErrorCode.RUNTIME_CURSOR_EXPIRED
+        detail = {
+            "oldest_sequence": exc.oldest_sequence,
+            "snapshot": exc.snapshot,
+        }
+    elif isinstance(exc, RuntimeOperationNotFound):
+        code = ErrorCode.RUNTIME_OPERATION_NOT_FOUND
+    elif isinstance(exc, RuntimeCommandConflict):
+        code = ErrorCode.RUNTIME_COMMAND_ID_CONFLICT
+    elif isinstance(exc, RuntimeOperationConflict):
+        code = ErrorCode.RUNTIME_OPERATION_ID_CONFLICT
+    elif isinstance(exc, RuntimeOperationNotCancellable):
+        code = ErrorCode.RUNTIME_OPERATION_NOT_CANCELLABLE
+    elif isinstance(exc, RuntimeOperationNotRetryable):
+        code = ErrorCode.RUNTIME_OPERATION_NOT_RETRYABLE
+    elif isinstance(exc, RuntimeCapabilityError):
+        code = ErrorCode.RUNTIME_CAPABILITY_UNAVAILABLE
+    elif isinstance(exc, RuntimeSourceIdentityMismatch):
+        code = ErrorCode.RUNTIME_IDENTITY_MISMATCH
+    elif isinstance(exc, RuntimeOperationCancelled):
+        code = ErrorCode.CANCELLED
+    elif isinstance(exc, RuntimeLockTimeout):
+        code = ErrorCode.RUNTIME_BUSY
+        retry_after = 1
+    elif isinstance(exc, OSError):
+        code = ErrorCode.RUNTIME_IO_ERROR
+        retry_after = 1
+    elif isinstance(exc, RuntimeInstallFailure):
+        code = ErrorCode.RUNTIME_INSTALL_FAILED
+    elif isinstance(exc, (ValueError, TypeError, json.JSONDecodeError)):
+        code = ErrorCode.VALIDATION_ERROR
+    else:
+        code = ErrorCode.INTERNAL_ERROR
+    return _error_response(
+        code,
+        instance_id,
+        detail=detail,
+        retry_after=retry_after,
+    )
 
 
 class _PdfUnavailable(Exception):
@@ -113,10 +196,19 @@ def create_app(
     session_token: str,
     *,
     runtime_status_provider: Callable[[str, str], dict[str, Any]] | None = None,
+    runtime_control: RuntimeControl | None = None,
 ) -> FastAPI:
     """Build a FastAPI app bound to ``module`` guarded by ``session_token``."""
     instance_id = module.options.instance_id
     status_provider = runtime_status_provider or runtime_status_from_environment
+    resolved_runtime_control = runtime_control
+
+    def control() -> RuntimeControl:
+        nonlocal resolved_runtime_control
+        if resolved_runtime_control is None:
+            resolved_runtime_control = RuntimeControl.from_environment()
+        return resolved_runtime_control
+
     app = FastAPI(title="VibeOCR Inference Supervisor", version="2.0.0")
 
     @app.middleware("http")
@@ -149,6 +241,7 @@ def create_app(
             "ready": not module.shutdown,
             "draining": module.draining,
             "capabilities": list(ALL_CAPABILITIES),
+            "capability_descriptors": _capability_descriptors(),
         }
 
     @app.post("/v2/jobs", response_model=wire.JobRef)
@@ -272,6 +365,153 @@ def create_app(
     async def runtime_status() -> dict[str, Any]:
         service_state = "degraded" if module.draining or module.shutdown else "ready"
         return status_provider(instance_id, service_state)
+
+    @app.post(
+        "/v2/runtime/maintenance",
+        response_model=wire.RuntimeMaintenanceReceipt,
+        operation_id="startRuntimeMaintenance",
+    )
+    async def start_runtime_maintenance(request: Request) -> JsonResult:
+        try:
+            body = _strict_wire_payload(
+                await request.json(), wire.RuntimeMaintenanceRequest
+            )
+            return await asyncio.to_thread(
+                control().execute,
+                operation=body["operation"],
+                operation_id=body.get("operation_id"),
+                component_ids=tuple(body.get("component_ids", [])),
+                required_capabilities=tuple(body.get("required_capabilities", [])),
+                profile_id=body.get("profile_id"),
+            )
+        except Exception as exc:
+            return _runtime_exception_response(exc, instance_id)
+
+    @app.post(
+        "/v2/runtime/maintenance/command",
+        response_model=wire.RuntimeMaintenanceReceipt,
+        operation_id="commandRuntimeMaintenance",
+    )
+    async def command_runtime_maintenance(request: Request) -> JsonResult:
+        try:
+            body = _strict_wire_payload(
+                await request.json(), wire.RuntimeMaintenanceCommandRequest
+            )
+            return await asyncio.to_thread(
+                control().command,
+                command_id=body["command_id"],
+                command=body["command"],
+                target_operation_id=body["target_operation_id"],
+                new_operation_id=body.get("new_operation_id"),
+                expected_sequence=body.get("expected_sequence"),
+            )
+        except Exception as exc:
+            return _runtime_exception_response(exc, instance_id)
+
+    @app.get(
+        "/v2/runtime/operations/{operation_id}/observe",
+        response_model=wire.RuntimeMaintenanceUpdate,
+        operation_id="observeRuntimeMaintenance",
+    )
+    async def observe_runtime_maintenance(
+        operation_id: str, after_sequence: int = 0, limit: int = 128
+    ) -> JsonResult:
+        try:
+            return await asyncio.to_thread(
+                control().observe,
+                operation_id,
+                after_sequence=after_sequence,
+                limit=limit,
+            )
+        except Exception as exc:
+            return _runtime_exception_response(exc, instance_id)
+
+    @app.get(
+        "/v2/runtime/operations/{operation_id}/events",
+        operation_id="streamRuntimeMaintenanceEvents",
+        response_model=None,
+    )
+    async def stream_runtime_maintenance_events(
+        request: Request, operation_id: str, after_sequence: int = 0
+    ) -> StreamResult:
+        accept = request.headers.get("accept", "")
+        if "text/event-stream" in accept:
+            media_type = "text/event-stream"
+            last_event_id = request.headers.get("last-event-id")
+            if last_event_id is not None:
+                try:
+                    after_sequence = max(after_sequence, int(last_event_id))
+                except ValueError as exc:
+                    return _runtime_exception_response(exc, instance_id)
+        elif "application/x-ndjson" in accept:
+            media_type = "application/x-ndjson"
+        else:
+            return _error_response(
+                ErrorCode.RUNTIME_CAPABILITY_UNAVAILABLE,
+                instance_id,
+                detail={
+                    "supported_media_types": [
+                        "text/event-stream",
+                        "application/x-ndjson",
+                    ]
+                },
+            )
+
+        try:
+            first = await asyncio.to_thread(
+                control().observe,
+                operation_id,
+                after_sequence=after_sequence,
+                limit=128,
+            )
+        except Exception as exc:
+            return _runtime_exception_response(exc, instance_id)
+
+        async def generate() -> AsyncIterator[str]:
+            update = first
+            cursor = after_sequence
+            while True:
+                for event in update["events"]:
+                    cursor = int(event["sequence"])
+                    encoded = json.dumps(
+                        event, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                    )
+                    if media_type == "text/event-stream":
+                        yield (
+                            f"id: {cursor}\n"
+                            "event: runtime-maintenance\n"
+                            f"data: {encoded}\n\n"
+                        )
+                    else:
+                        yield encoded + "\n"
+                snapshot = update["snapshot"]
+                if (
+                    snapshot["operation_state"]
+                    in {
+                        "succeeded",
+                        "failed",
+                        "cancelled",
+                    }
+                    and not update["more"]
+                ):
+                    return
+                if update["more"]:
+                    update = await asyncio.to_thread(
+                        control().observe,
+                        operation_id,
+                        after_sequence=cursor,
+                        limit=128,
+                    )
+                    continue
+                await asyncio.sleep(0.1)
+                update = await asyncio.to_thread(
+                    control().observe,
+                    operation_id,
+                    after_sequence=cursor,
+                    limit=128,
+                )
+
+        return StreamingResponse(generate(), media_type=media_type)
 
     @app.get("/v2/runtime/residency", response_model=wire.ResidencyStatus)
     async def residency() -> dict[str, Any]:
