@@ -47,6 +47,16 @@ class TestGetCpuThreadCount:
         n = cpu_info.get_cpu_thread_count()
         assert 1 <= n <= cpu_info.CPU_THREADS_CAP
 
+    def test_probe_failure_falls_back(self, monkeypatch: pytest.MonkeyPatch):
+        """系统 CPU 数探针失败时使用保守回退值。"""
+        monkeypatch.delenv("VIBEOCR_CPU_THREADS", raising=False)
+
+        def raise_probe_error() -> int:
+            raise OSError("probe failed")
+
+        monkeypatch.setattr(cpu_info.os, "cpu_count", raise_probe_error)
+        assert cpu_info.get_cpu_thread_count() == cpu_info.FALLBACK_CPU_THREADS
+
 
 class TestVerTuple:
     """_ver_tuple 版本解析。"""
@@ -217,6 +227,32 @@ class TestCanSafelyEnableOnednn:
         safe, reason = cpu_info.can_safely_enable_onednn()
         assert safe is False
         assert "尚未通过" in reason or "验证" in reason
+
+    def test_validated_version_with_avx2_allowed(self, monkeypatch: pytest.MonkeyPatch):
+        """只有显式验证过且支持 AVX2 的 Paddle 版本默认启用 oneDNN。"""
+        monkeypatch.delenv("VIBEOCR_FORCE_ONEDNN", raising=False)
+        monkeypatch.setattr(cpu_info, "_get_paddle_version", lambda: "3.4.1")
+        monkeypatch.setattr(
+            cpu_info,
+            "_ONEDNN_VALIDATED_SAFE_PADDLE_RANGES",
+            [("3.4.0", "3.4.2")],
+        )
+        monkeypatch.setattr(
+            cpu_info,
+            "detect_cpu_features",
+            lambda: {
+                "avx": True,
+                "avx2": True,
+                "avx512": True,
+                "fma": True,
+                "amx": False,
+            },
+        )
+
+        safe, reason = cpu_info.can_safely_enable_onednn()
+
+        assert safe is True
+        assert "已通过验证" in reason
 
 
 class TestDetectCpuFeatures:
