@@ -47,6 +47,10 @@ def test_build_identity_supports_legacy_protocol_manifest(tmp_path: Path) -> Non
             protocol_path.read_bytes()
         ).hexdigest(),
         "wheel_sha256": "c" * 64,
+        "compatibility": {
+            "supported_majors": [2],
+            "minor_compatible": True,
+        },
     }
 
 
@@ -73,3 +77,7 @@ def test_build_identity_reads_canonical_protocol_source(tmp_path: Path) -> None:
     )
     assert identity["protocol"]["version"] == "2.4.0"
     assert identity["protocol"]["source_sha"] == protocol_sha
+    assert identity["protocol"]["compatibility"] == {
+        "supported_majors": [2],
+        "minor_compatible": True,
+    }

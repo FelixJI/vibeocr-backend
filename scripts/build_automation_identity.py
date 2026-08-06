@@ -75,6 +75,10 @@ def build_identity(
             "source_sha": protocol_source_sha,
             "release_manifest_sha256": _sha256(protocol_path),
             "wheel_sha256": runtime["protocol_sha256"],
+            "compatibility": {
+                "supported_majors": [2],
+                "minor_compatible": True,
+            },
         },
     }
     output = artifacts / "build-identity.json"
