@@ -630,6 +630,12 @@ class RuntimeInstaller:
             "VIBEOCR_RUNTIME_MANIFEST": str(self.manifest.path),
             "VIBEOCR_COMPONENT_LOCK": str(self.component_lock_path),
             "VIBEOCR_RUNTIME_ACCELERATOR": self.accelerator,
+            # Backend inference/cache consumers still read this compatibility
+            # flag.  Derive it from the Installer-owned profile instead of
+            # asking a frontend shell to infer or inject the Runtime device.
+            "VIBEOCR_USE_GPU": (
+                "true" if self.accelerator == "nvidia_cuda" else "false"
+            ),
             "VIBEOCR_RUNTIME_STATE_ROOT": str(state),
             "PIP_CACHE_DIR": str(state / "cache" / "pip"),
             "UV_CACHE_DIR": str(state / "cache" / "uv"),

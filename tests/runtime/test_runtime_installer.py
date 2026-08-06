@@ -347,6 +347,27 @@ def test_ensure_is_atomic_and_idempotent(tmp_path: Path) -> None:
     )
     assert first.environment["PIP_CONFIG_FILE"] == os.devnull
     assert first.environment["PYTHONNOUSERSITE"] == "1"
+    assert first.environment["VIBEOCR_RUNTIME_ACCELERATOR"] == "cpu"
+    assert first.environment["VIBEOCR_USE_GPU"] == "false"
+
+
+def test_gpu_launch_environment_is_derived_from_installer_profile(
+    tmp_path: Path,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="nvidia_cuda",
+        install_runner=_fake_install,
+    )
+
+    launch = installer.ensure()
+
+    assert launch is not None
+    assert launch.environment["VIBEOCR_RUNTIME_ACCELERATOR"] == "nvidia_cuda"
+    assert launch.environment["VIBEOCR_USE_GPU"] == "true"
 
 
 def test_failed_install_leaves_no_partial_or_final(tmp_path: Path) -> None:
