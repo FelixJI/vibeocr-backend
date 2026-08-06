@@ -393,13 +393,18 @@ def test_delete_text_layers_stream_proxies() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_save_proxies_with_rewrite_flag() -> None:
+def test_save_proxies_with_rewrite_flag(tmp_path: Path) -> None:
     fake = _FullPdfChild()
     adapter = _adapter(fake)
-    adapter.save("sid-1", "out.pdf", rewrite_text_layers=False)
-    name, _args, kwargs = fake.calls[-1]
+    output_path = tmp_path / "out.pdf"
+
+    adapter.save("sid-1", str(output_path), rewrite_text_layers=False)
+
+    name, args, kwargs = fake.calls[-1]
     assert name == "save"
+    assert args[1] == str(output_path)
     assert kwargs == {"rewrite_text_layers": False}
+    assert output_path.read_bytes() == b"saved"
 
 
 def test_cancel_proxies() -> None:
