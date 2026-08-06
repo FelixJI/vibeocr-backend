@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+
+### Features
+
+- **runtime:** 实现可靠维护控制面 (#26) (a5f95db)
+
 ## 0.9.0
 
 ### Features
