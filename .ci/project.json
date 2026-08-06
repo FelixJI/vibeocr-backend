@@ -13,7 +13,10 @@
     "quality": [["powershell", "-ExecutionPolicy", "Bypass", "-File", "scripts/check-quality.ps1"]],
     "e2e": [["python", "scripts/check_runtime_protocol_conformance.py"]],
     "release_build": [["powershell", "-ExecutionPolicy", "Bypass", "-File", "scripts/build-release.ps1", "-Version", "{version}", "-ArtifactsDir", "{artifacts_dir}"]],
-    "release_smoke": [["python", "scripts/verify_release_assets.py", "{artifacts_dir}", "--require", "SBOM.spdx.json", "--require", "runtime-manifest.json"]]
+    "release_smoke": [
+      ["python", "scripts/verify_release_assets.py", "{artifacts_dir}", "--require", "SBOM.spdx.json", "--require", "runtime-manifest.json"],
+      ["python", "scripts/verify_runtime_installer_artifact.py", "{artifacts_dir}"]
+    ]
   },
   "release": {
     "version_sources": [
