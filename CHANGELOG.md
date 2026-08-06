@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.1
+
+### Bug Fixes
+
+- **runtime:** 修复冻结 Installer 契约资源打包 (#28) (5c6c1fb)
+
 ## 0.10.0
 
 ### Features
