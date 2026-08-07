@@ -3,5 +3,5 @@
   "cutover_commit": "2b8c0e5b6443a74221c04c83161aaa9f4d9d62e5",
   "repository": "FelixJI/vibeocr-backend",
   "schema_version": 1,
-  "version": "0.10.1"
+  "version": "0.11.0"
 }
