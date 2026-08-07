@@ -47,6 +47,10 @@ def test_build_identity_supports_legacy_protocol_manifest(tmp_path: Path) -> Non
             protocol_path.read_bytes()
         ).hexdigest(),
         "wheel_sha256": "c" * 64,
+        "compatibility": {
+            "supported_majors": [2],
+            "minor_compatible": True,
+        },
     }
 
 
@@ -73,3 +77,33 @@ def test_build_identity_reads_canonical_protocol_source(tmp_path: Path) -> None:
     )
     assert identity["protocol"]["version"] == "2.4.0"
     assert identity["protocol"]["source_sha"] == protocol_sha
+    assert identity["protocol"]["compatibility"] == {
+        "supported_majors": [2],
+        "minor_compatible": True,
+    }
+
+
+def test_build_identity_reads_project_compatibility_policy(tmp_path: Path) -> None:
+    source_sha = "a" * 40
+    (tmp_path / "runtime-manifest.json").write_text(
+        json.dumps(_runtime(source_sha, "2.3.0")), encoding="utf-8"
+    )
+    (tmp_path / "protocol-release-manifest.json").write_text(
+        json.dumps({"schema_version": 1, "protocol_version": "2.3.0"}),
+        encoding="utf-8",
+    )
+
+    identity = json.loads(
+        build_identity(tmp_path, version="0.7.2", source_sha=source_sha).read_text(
+            encoding="utf-8"
+        )
+    )
+    project = json.loads(
+        (Path(__file__).resolve().parents[2] / ".ci/project.json").read_text(
+            encoding="utf-8"
+        )
+    )["project"]
+
+    assert identity["project"]["component"] == project["component"]
+    assert identity["project"]["repository"] == project["repository"]
+    assert identity["protocol"]["compatibility"] == project["protocol_compatibility"]

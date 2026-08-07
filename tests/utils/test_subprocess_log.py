@@ -42,6 +42,18 @@ class TestStructuredLineForwarding:
             forwarder.forward("2024-01-15 10:30:45 [CRITICAL] mod: boom")
         assert caplog.records[0].levelno == logging.CRITICAL
 
+    def test_debug_info_and_error_levels_forwarded(self, caplog):
+        """结构化 DEBUG、INFO、ERROR 日志保持原始级别。"""
+        forwarder = _make_forwarder()
+        with caplog.at_level(logging.DEBUG, logger="test.subprocess"):
+            for level in ("DEBUG", "INFO", "ERROR"):
+                forwarder.forward(f"2024-01-15 10:30:45 [{level}] mod: {level.lower()}")
+        assert [record.levelname for record in caplog.records] == [
+            "DEBUG",
+            "INFO",
+            "ERROR",
+        ]
+
 
 class TestWhitespaceAndRaw:
     def test_blank_line_ignored(self, caplog):
@@ -77,6 +89,8 @@ class TestWhitespaceAndRaw:
             forwarder.flush()
         assert len(caplog.records) == 1
         assert "2" in caplog.records[0].message
+        assert "noise one" not in caplog.records[0].message
+        assert "noise two" not in caplog.records[0].message
 
     def test_flush_with_no_accumulated_is_noop(self, caplog):
         forwarder = _make_forwarder()

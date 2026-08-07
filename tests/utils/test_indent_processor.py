@@ -12,6 +12,13 @@ def processor() -> IndentProcessor:
     return IndentProcessor()
 
 
+def test_default_config_matches_markdown_presentation_policy() -> None:
+    """默认处理器使用两字符缩进和 5% 中文判定阈值。"""
+    config = IndentConfig()
+    assert config.chinese_indent == "2em"
+    assert config.chinese_threshold == 0.05
+
+
 class TestIsChineseText:
     """is_chinese_text 边缘用例。"""
 

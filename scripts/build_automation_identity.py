@@ -8,6 +8,8 @@ import json
 import re
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -35,6 +37,26 @@ def _protocol_version(runtime: dict[str, object], release: dict[str, object]) ->
     return match.group(1)
 
 
+def _project_policy() -> tuple[str, str, dict[str, object]]:
+    config = json.loads((ROOT / ".ci/project.json").read_text(encoding="utf-8"))
+    project = config.get("project")
+    if not isinstance(project, dict):
+        raise ValueError("project configuration is missing")
+    component = project.get("component")
+    repository = project.get("repository")
+    compatibility = project.get("protocol_compatibility")
+    if (
+        not isinstance(component, str)
+        or not isinstance(repository, str)
+        or not isinstance(compatibility, dict)
+        or not isinstance(compatibility.get("supported_majors"), list)
+        or not all(isinstance(item, int) for item in compatibility["supported_majors"])
+        or not isinstance(compatibility.get("minor_compatible"), bool)
+    ):
+        raise ValueError("project Protocol compatibility is invalid")
+    return component, repository, compatibility
+
+
 def build_identity(
     artifacts_dir: Path,
     *,
@@ -56,11 +78,12 @@ def build_identity(
     protocol_source_sha = (
         protocol_source.get("sha") if isinstance(protocol_source, dict) else None
     )
+    component, repository, compatibility = _project_policy()
     identity = {
         "schema_version": 1,
         "project": {
-            "component": "backend",
-            "repository": "FelixJI/vibeocr-backend",
+            "component": component,
+            "repository": repository,
             "version": version,
             "source_sha": source_sha,
         },
@@ -75,6 +98,7 @@ def build_identity(
             "source_sha": protocol_source_sha,
             "release_manifest_sha256": _sha256(protocol_path),
             "wheel_sha256": runtime["protocol_sha256"],
+            "compatibility": compatibility,
         },
     }
     output = artifacts / "build-identity.json"

@@ -11,6 +11,14 @@ from vibeocr.backend.utils.markdown_converter import (
 )
 
 
+def test_html_style_preserves_chinese_and_nested_list_indentation() -> None:
+    """正式 HTML 样式包含中文段落和嵌套列表缩进规则。"""
+    assert ".zh-paragraph" in HTML_STYLE
+    assert "text-indent" in HTML_STYLE
+    assert "li p" in HTML_STYLE
+    assert "margin-left" in HTML_STYLE
+
+
 class TestProcessLatexFormulas:
     """_process_latex_formulas 边缘用例。"""
 

@@ -3,7 +3,13 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$protocolVersion = '2.3.0'
+$committedLock = Join-Path $root 'release/protocol.lock.json'
+$packageProject = Join-Path $root 'packages/vibeocr-backend/pyproject.toml'
+$protocolVersion = (
+    python (Join-Path $root 'scripts/resolve_protocol_binding.py') `
+        --lock $committedLock --package $packageProject
+).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Protocol binding validation failed' }
 $protocol = Join-Path $root 'build/automation/bootstrap-protocol'
 
 if (Test-Path -LiteralPath $protocol) {
@@ -27,7 +33,6 @@ python (Join-Path $root 'scripts/bind_component_releases.py') protocol-lock `
     --version $protocolVersion --output $generatedLock
 if ($LASTEXITCODE -ne 0) { throw 'Protocol release verification failed' }
 
-$committedLock = Join-Path $root 'release/protocol.lock.json'
 $generatedLockJson = Get-Content $generatedLock -Raw |
     ConvertFrom-Json | ConvertTo-Json -Depth 100 -Compress
 $committedLockJson = Get-Content $committedLock -Raw |

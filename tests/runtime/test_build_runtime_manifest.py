@@ -95,6 +95,8 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
         second.parent / "SHA256SUMS"
     ).read_bytes()
     manifest = load_runtime_manifest(first)
+    assert manifest.protocol == ">=2.0.0,<3.0.0"
+    assert manifest.protocol_version == "2.0.0"
     assert manifest.protocol_wheel.startswith("vibeocr_runtime_contracts-2.0.0-")
     assert set(manifest.capabilities) == {
         "export.document.v1",
