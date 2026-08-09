@@ -192,6 +192,54 @@ def test_python_archive_reports_actual_uncompressed_bytes(tmp_path: Path) -> Non
     assert samples == [(6, 6)]
 
 
+def test_python_archive_coalesces_dense_progress_without_losing_completion(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "python.tar.gz"
+    with tarfile.open(archive, mode="w:gz") as stream:
+        for index in range(103):
+            info = tarfile.TarInfo(f"python/Lib/module-{index}.py")
+            info.size = 1
+            stream.addfile(info, io.BytesIO(b"x"))
+    destination = tmp_path / "runtime"
+    destination.mkdir()
+    samples: list[tuple[int, int]] = []
+
+    _extract_python_archive(
+        archive,
+        destination,
+        progress=lambda current, total: samples.append((current, total)),
+    )
+
+    assert samples[-1] == (103, 103)
+    assert len(samples) <= 102
+
+
+def test_python_archive_does_not_repeat_completion_for_empty_tail_files(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "python.tar.gz"
+    with tarfile.open(archive, mode="w:gz") as stream:
+        content = tarfile.TarInfo("python/python.exe")
+        content.size = 1
+        stream.addfile(content, io.BytesIO(b"x"))
+        for index in range(3):
+            empty = tarfile.TarInfo(f"python/empty-{index}.txt")
+            empty.size = 0
+            stream.addfile(empty, io.BytesIO())
+    destination = tmp_path / "runtime"
+    destination.mkdir()
+    samples: list[tuple[int, int]] = []
+
+    _extract_python_archive(
+        archive,
+        destination,
+        progress=lambda current, total: samples.append((current, total)),
+    )
+
+    assert samples == [(1, 1)]
+
+
 def test_python_archive_rejects_traversal(tmp_path: Path) -> None:
     archive = tmp_path / "python.tar.gz"
     _tar_with(archive, "python/../escape.exe")

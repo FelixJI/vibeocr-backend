@@ -361,6 +361,7 @@ def _extract_python_archive(
             raise RuntimeInstallError("Python archive is empty")
         total_bytes = sum(member.size for member in members if member.isfile())
         extracted_bytes = 0
+        reported_percent = -1
         for member in members:
             parts = Path(member.name.replace("\\", "/")).parts
             if not parts or parts[0] != "python" or ".." in parts:
@@ -402,7 +403,10 @@ def _extract_python_archive(
                 shutil.copyfileobj(source, output)
             extracted_bytes += member.size
             if progress is not None and total_bytes > 0:
-                progress(extracted_bytes, total_bytes)
+                percent = min(100, extracted_bytes * 100 // total_bytes)
+                if percent != reported_percent:
+                    progress(extracted_bytes, total_bytes)
+                    reported_percent = percent
 
 
 class RuntimeInstaller:
