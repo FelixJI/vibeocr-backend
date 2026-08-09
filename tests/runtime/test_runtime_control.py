@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,6 +34,26 @@ def _snapshot(operation_id: str, sequence: int, state: str = "running") -> dict:
         "profile_id": "win-x64-cpu",
         "updated_at": "2026-08-05T12:00:00Z",
     }
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows sharing violation contract")
+def test_atomic_json_waits_for_transient_windows_reader(tmp_path: Path) -> None:
+    metadata_path = tmp_path / "metadata.json"
+    runtime_maintenance._atomic_json(metadata_path, {"value": 1})
+    opened = threading.Event()
+
+    def hold_target_open() -> None:
+        with metadata_path.open("r", encoding="utf-8"):
+            opened.set()
+            time.sleep(0.05)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        reader = executor.submit(hold_target_open)
+        assert opened.wait(timeout=1)
+        runtime_maintenance._atomic_json(metadata_path, {"value": 2})
+        reader.result(timeout=1)
+
+    assert json.loads(metadata_path.read_text(encoding="utf-8")) == {"value": 2}
 
 
 def test_operation_id_is_durable_and_bound_to_normalized_intent(tmp_path: Path) -> None:

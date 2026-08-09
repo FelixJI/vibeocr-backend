@@ -46,6 +46,7 @@ _COMPONENT_IMPORTS = {
     "gpu_runtime": "torch",
 }
 _COMPONENT_PROBE_CACHE_TTL_SECONDS = 10.0
+_WINDOWS_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.04, 0.08)
 _component_probe_cache_lock = threading.Lock()
 _component_probe_cache: dict[
     tuple[str, tuple[str, ...], int | None], tuple[float, dict[str, bool]]
@@ -126,9 +127,30 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        _replace_transient_windows_lock(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _replace_transient_windows_lock(source: Path, destination: Path) -> None:
+    try:
+        os.replace(source, destination)
+        return
+    except PermissionError as exc:
+        if os.name != "nt" or exc.winerror not in {5, 32}:
+            raise
+        last_error = exc
+
+    for delay in _WINDOWS_REPLACE_RETRY_DELAYS:
+        time.sleep(delay)
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError as exc:
+            if exc.winerror not in {5, 32}:
+                raise
+            last_error = exc
+    raise last_error
 
 
 def _command_error(exc: Exception) -> dict[str, Any]:
