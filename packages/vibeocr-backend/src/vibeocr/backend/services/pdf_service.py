@@ -33,17 +33,14 @@ logger = logging.getLogger(__name__)
 # （窄/高块文字横向大幅溢出到无关区域 → 「严重偏离」）。
 _LINE_LEADING = 1.6
 
-# insert_text 单点写入的 ink（实际墨迹像素）几何系数（CJK 子集字体实测）：
+# insert_text 单点写入的 ink（实际墨迹像素）回退几何系数（CJK 字体实测）：
 #   ink_height / fontsize ≈ 0.955  （墨迹高度，OCR bbox 检测的就是这个）
 #   (baseline_y - ink_top) / fontsize ≈ 0.83   （基线在墨迹顶部下方 0.83×fs）
 #   (ink_bottom - baseline_y) / fontsize ≈ 0.125（基线下方少许下伸部分）
-# 用这些系数可把 ink 区域精确对齐到 OCR bbox：fontsize = bbox_height/INK_RATIO，
-# 基线 y = bbox.y0 + ASCENT_RATIO×fontsize，使 ink 顶部 = bbox 顶部、ink 高度 = bbox 高度。
-# 相比 insert_textbox（行距预算 1.319×fs 把字号压到 bbox 的 ~73%），insert_text 能让
-# 文字层 ink 区域与 OCR bbox 匹配，解决『区域太小』问题。
-_INK_RATIO = 0.955
-_ASCENT_RATIO = 0.83
-_DESCENT_RATIO = 0.125
+# 仅在无法取得真实字体时使用；正常子集字体必须按 glyph bbox 计算。拉丁大写字母的
+# ink_height / fontsize 约为 0.78，若误用 CJK 的 0.955，实际字形只会覆盖 OCR 框约 82%。
+_FALLBACK_INK_RATIO = 0.955
+_FALLBACK_ASCENT_RATIO = 0.83
 
 
 class SaveResult(NamedTuple):
@@ -884,28 +881,13 @@ class PdfService:
             def _derotate_to_mediabox(rect: fitz.Rect) -> fitz.Rect:
                 return rect
 
-        # CropBox 偏移补偿：page.rect 返回『归零的 CropBox』（原点强制为 0,0，
-        # 尺寸 = CropBox 宽高），OCR 渲染图（get_pixmap）也是 CropBox 区域，故
-        # 归一化 bbox 经 _denormalize_and_unrotate_bbox + derotate 后得到的是
-        # 『以 CropBox 左上角为原点』的坐标。但 insert_textbox/insert_text 写入
-        # 『MediaBox 空间』，原点是 MediaBox 左上角。当 CropBox != MediaBox
-        # （扫描件常见：trim/bleed 区域、非零原点 MediaBox）时，必须补上
-        # CropBox 原点偏移 (cropbox.x0, cropbox.y0)，否则文字层整体偏移到
-        # CropBox 原点处（『部分文字层离文字很远』）。该偏移在所有旋转角度下
-        # 一致（derotation_matrix 不含 CropBox 平移，见 e2e 标记测试验证）。
-        cropbox = page.cropbox
-        cb_ox = cropbox.x0
-        cb_oy = cropbox.y0
-
-        def _to_mediabox(rect: fitz.Rect) -> fitz.Rect:
-            """显示空间（CropBox 归零 + 旋转）→ MediaBox 写入空间。
-
-            先 derotate 旋转补偿，再 + CropBox 原点平移到 MediaBox 空间。
-            """
-            r = _derotate_to_mediabox(rect)
-            if cb_ox != 0.0 or cb_oy != 0.0:
-                return fitz.Rect(r.x0 + cb_ox, r.y0 + cb_oy, r.x1 + cb_ox, r.y1 + cb_oy)
-            return r
+        # PyMuPDF 的插入坐标与 get_text 坐标都以未旋转的可见页面（CropBox）
+        # 左上角为原点，而不是以 MediaBox 原点为基准。page.rect 和 OCR 渲染图
+        # 同样使用归零后的 CropBox，因此这里只需消除 /Rotate；若再加
+        # page.cropbox.x0/y0，会把文字层整体重复平移一个 CropBox 原点距离。
+        def _to_page_space(rect: fitz.Rect) -> fitz.Rect:
+            """显示空间（旋转后的 CropBox）→ PyMuPDF 未旋转页面空间。"""
+            return _derotate_to_mediabox(rect)
 
         # 字形方向（rotate 参数）：页面 /Rotate=90/270 时，derotate 后的 mediabox
         # 矩形宽高互换（宽框→瘦高框），若仍以默认 0°（横向）写入，insert_textbox
@@ -966,6 +948,31 @@ class PdfService:
                     units += 0.5
             return units * fs
 
+        def _vertical_ink_metrics(text: str) -> tuple[float, float]:
+            """返回 ``(ink_height_ratio, baseline_from_top_ratio)``。
+
+            PyMuPDF 的 glyph bbox 使用字体单位：y1 是基线上方高度，y0 为负时
+            表示基线下方的下伸量。合并本段所有非空白字形后，可以同时得到让
+            实际墨迹覆盖 OCR bbox 所需的字号和基线，而不是套用 CJK 固定比例。
+            """
+            if _measure_font is None:
+                return _FALLBACK_INK_RATIO, _FALLBACK_ASCENT_RATIO
+
+            glyph_boxes = [
+                _measure_font.glyph_bbox(ord(ch))
+                for ch in text
+                if not ch.isspace() and _measure_font.has_glyph(ord(ch))
+            ]
+            if not glyph_boxes:
+                return _FALLBACK_INK_RATIO, _FALLBACK_ASCENT_RATIO
+
+            ink_bottom = min(box.y0 for box in glyph_boxes)
+            ink_top = max(box.y1 for box in glyph_boxes)
+            ink_height = ink_top - ink_bottom
+            if ink_height <= 0:
+                return _FALLBACK_INK_RATIO, _FALLBACK_ASCENT_RATIO
+            return ink_height, ink_top
+
         written = 0
         skipped = 0
         for block in text_blocks:
@@ -986,7 +993,7 @@ class PdfService:
             disp_rect = PdfService._denormalize_and_unrotate_bbox(
                 bbox, preproc_angle, page_rect
             )
-            rect = _to_mediabox(disp_rect)
+            rect = _to_page_space(disp_rect)
             # 仅当矩形退化（宽或高 ≤ 0）才整体跳过；
             # 矮行/窄框不丢弃：字号由 min_font_size 兜底，再交给下方
             # insert_textbox 重试 + insert_text 兜底，保证文字进入文字层。
@@ -1001,11 +1008,12 @@ class PdfService:
                 continue
 
             # 字号与写入策略：
-            # OCR bbox 检测的是『墨迹像素高度』(ink height ≈ fontsize × _INK_RATIO)。
-            # 要让文字层 ink 区域匹配 bbox 高度，需 fontsize = bbox_height / _INK_RATIO。
+            # OCR bbox 检测的是『墨迹像素高度』。不同字体/字符的 ink height 比例
+            # 差异明显（拉丁大写约 0.78×fs，CJK 约 0.98×fs），因此必须用当前
+            # 子集字体的 glyph bbox 求字号和基线，不能套用单一 CJK 常量。
             #
             # 水平页（page_rotation ∈ {0,180}，最常见扫描件）：用 insert_text 单点写入，
-            # fontsize = height / _INK_RATIO，基线 y = rect.y0 + _ASCENT_RATIO×fontsize，
+            # fontsize = height / ink_ratio，基线 y = rect.y0 + ascent_ratio×fontsize，
             # 使 ink 顶部对齐 bbox 顶部、ink 高度 ≈ bbox 高度。insert_textbox 因行距开销
             # (1.319×fs) 会把字号压到 bbox 的 ~73%（『区域太小』），故不作为主路径。
             #
@@ -1043,14 +1051,15 @@ class PdfService:
             use_insert_text = page_rotation in (0, 90) and is_horizontal
 
             if use_insert_text:
-                # 在『显示空间』算基线（ink 顶部 = disp_rect.y0）：
-                #   baseline_disp = (disp_rect.x0, disp_rect.y0 + ASCENT×fs)
-                # 再经 derotation_matrix + cropbox 平移到 mediabox 写入空间。
-                fontsize = max(disp_rect.height / _INK_RATIO, settings.min_font_size)
+                # 在『显示空间』按真实 glyph bbox 算字号和基线，使 ink 顶部 =
+                # disp_rect.y0、ink 底部 = disp_rect.y1，再经 derotation_matrix
+                # 转到 PyMuPDF 未旋转页面空间。
+                ink_ratio, ascent_ratio = _vertical_ink_metrics(text)
+                fontsize = max(disp_rect.height / ink_ratio, settings.min_font_size)
                 baseline_disp_x = disp_rect.x0
-                baseline_disp_y = disp_rect.y0 + _ASCENT_RATIO * fontsize
-                # 经 _to_mediabox 同款变换（derotate + cropbox 平移）到 mediabox
-                dpt = _to_mediabox(
+                baseline_disp_y = disp_rect.y0 + ascent_ratio * fontsize
+                # 经 _to_page_space 同款变换（derotate）到未旋转页面空间。
+                dpt = _to_page_space(
                     fitz.Rect(
                         baseline_disp_x,
                         baseline_disp_y,
