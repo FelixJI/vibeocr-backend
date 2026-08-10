@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import fitz
+import numpy as np
 import pytest
 from vibeocr.backend.models.ocr_result import OCRResult, TextBlock
+from vibeocr.backend.models.pdf_ocr_options import PdfGlobalSettings
 from vibeocr.backend.services.pdf_service import PdfService
 
 
@@ -62,4 +64,63 @@ def test_cropped_page_text_layer_uses_visible_page_origin(tmp_path, rotation) ->
         (expected.y0 + expected.y1) / 2,
         abs=expected.height * 0.2,
     )
+    assert actual.height >= expected.height * 0.95, (
+        f"rotation={rotation}: 文字层高度 {actual.height:.2f}pt "
+        f"未覆盖 OCR bbox 高度 {expected.height:.2f}pt"
+    )
+    document.close()
+
+
+@pytest.mark.parametrize("text", ["ALIGN", "glyph", "测试文字"])
+def test_visible_text_ink_height_covers_ocr_bbox(tmp_path, text) -> None:
+    """文字字形的实际渲染墨迹高度应覆盖 OCR 检测框，而不只是 span bbox。"""
+    source = tmp_path / "visible-ink.pdf"
+    document = fitz.open()
+    document.new_page(width=400, height=550)
+    document.save(source)
+    document.close()
+
+    document, model = PdfService.open_doc(str(source))
+    page_rect = document[0].rect
+    normalized_bbox = (100.0, 100.0, 500.0, 180.0)
+    expected = PdfService._denormalize_and_unrotate_bbox(
+        normalized_bbox,
+        0,
+        page_rect,
+    )
+    result = OCRResult(
+        raw_text=text,
+        text_blocks=[TextBlock(text=text, score=0.99, bbox=normalized_bbox)],
+        preproc_angle=0,
+    )
+    settings = PdfGlobalSettings(text_layer_visible=True)
+
+    written, skipped = PdfService.add_text_layer(
+        document,
+        model,
+        0,
+        result,
+        settings,
+    )
+
+    assert (written, skipped) == (1, 0)
+    scale = 2
+    pixmap = document[0].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+    pixels = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
+        pixmap.height,
+        pixmap.width,
+        pixmap.n,
+    )
+    ink_y, _ink_x = np.where(np.min(pixels[:, :, :3], axis=2) < 128)
+    assert ink_y.size > 0
+    actual_ink_height = int(ink_y.max() - ink_y.min() + 1)
+    expected_ink_height = expected.height * scale
+    assert actual_ink_height == pytest.approx(expected_ink_height, abs=4), (
+        f"text={text!r}: 字形墨迹高度 {actual_ink_height}px "
+        f"未覆盖 OCR bbox 高度 {expected_ink_height:.1f}px"
+    )
+    actual_top = int(ink_y.min()) / scale
+    actual_bottom = int(ink_y.max() + 1) / scale
+    assert actual_top == pytest.approx(expected.y0, abs=2)
+    assert actual_bottom == pytest.approx(expected.y1, abs=2)
     document.close()
