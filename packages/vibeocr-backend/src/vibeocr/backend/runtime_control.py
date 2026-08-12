@@ -10,6 +10,7 @@ from typing import Any
 
 from vibeocr.backend.runtime_installer import (
     RuntimeIdentityMismatch,
+    RuntimeInspection,
     RuntimeInstaller,
     RuntimeLaunch,
     RuntimeState,
@@ -185,15 +186,21 @@ class RuntimeControl:
             raise ValueError("requested Runtime profile is unavailable")
         try:
             launch: RuntimeLaunch | None
+            inspection: RuntimeInspection | None = None
             if operation == "inspect":
-                installer.inspect()
+                inspection = installer.inspect_snapshot()
                 launch = None
             else:
                 launch = getattr(installer, operation)()
         finally:
             self._active_snapshot = installer.maintenance_snapshot()
         receipt = self._receipt(installer, required_capabilities)
-        return self._project_result(installer, receipt, launch)
+        return self._project_result(
+            installer,
+            receipt,
+            launch,
+            inspection=inspection,
+        )
 
     def project_receipt(
         self,
@@ -203,11 +210,18 @@ class RuntimeControl:
     ) -> RuntimeControlResult:
         """Project a replayed command receipt without leaking installer details."""
         installer = self._installer()
-        state = installer.inspect(emit=False)
+        inspection = installer.inspect_snapshot(emit=False)
         launch = (
-            installer._launch() if include_launch and state.status == "ready" else None
+            installer._launch()
+            if include_launch and inspection.state.status == "ready"
+            else None
         )
-        return self._project_result(installer, receipt, launch, state=state)
+        return self._project_result(
+            installer,
+            receipt,
+            launch,
+            inspection=inspection,
+        )
 
     @staticmethod
     def _project_result(
@@ -215,12 +229,13 @@ class RuntimeControl:
         receipt: dict[str, Any],
         launch: RuntimeLaunch | None,
         *,
-        state: RuntimeState | None = None,
+        inspection: RuntimeInspection | None = None,
     ) -> RuntimeControlResult:
+        inspection = inspection or installer.inspect_snapshot(emit=False)
         return RuntimeControlResult(
             receipt=receipt,
-            state=state or installer.inspect(emit=False),
-            profile=installer.profile_payload(),
+            state=inspection.state,
+            profile=inspection.profile,
             launch=launch,
             available_capabilities=tuple(installer.manifest.capabilities),
         )

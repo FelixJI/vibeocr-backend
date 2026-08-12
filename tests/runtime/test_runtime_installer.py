@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from vibeocr.backend import runtime_maintenance
+from vibeocr.backend.runtime_control import RuntimeControl
 from vibeocr.backend.runtime_installer import (
     RuntimeInstaller,
     RuntimeInstallError,
@@ -513,6 +514,47 @@ def test_component_import_probe_reports_integrity_failed_drift(
     assert component_status["repairable"] is True
     assert inspection.status == "missing"
     assert inspection.integrity == "not-installed"
+
+
+def test_runtime_control_inspect_probes_components_once(tmp_path: Path) -> None:
+    manifest, component = _release(tmp_path / "release")
+    initial = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+    )
+    initial.ensure()
+    probe_calls: list[tuple[Path, tuple[str, ...]]] = []
+
+    def probe(runtime_root: Path, component_ids: tuple[str, ...]) -> dict[str, bool]:
+        probe_calls.append((runtime_root, component_ids))
+        return {component_id: True for component_id in component_ids}
+
+    inspected = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+        component_probe=probe,
+        operation_id="inspect-once",
+    )
+    control = object.__new__(RuntimeControl)
+    control._installer_factory = lambda **_kwargs: inspected
+    control._active_snapshot = None
+
+    result = control.execute_with_result(operation="inspect")
+
+    assert result.state.integrity == "verified"
+    assert result.profile["profile_id"] == "win-x64-cpu"
+    assert len(probe_calls) == 1
+    assert probe_calls[0][0] == inspected.paths.runtime_root
+    assert all(
+        component["actual_state"] == "ready"
+        for component in result.profile["components"]
+    )
 
 
 def test_repair_of_in_sync_component_succeeds_without_claiming_global_ready(
