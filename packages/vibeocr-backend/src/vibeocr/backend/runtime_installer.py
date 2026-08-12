@@ -84,6 +84,12 @@ class RuntimeState:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeInspection:
+    state: RuntimeState
+    profile: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeLaunch:
     python_executable: str
     supervisor_module: str
@@ -584,9 +590,13 @@ class RuntimeInstaller:
         )
 
     def _drifted_component_ids(self) -> tuple[str, ...]:
+        return self._drifted_component_ids_from(self.profile_payload())
+
+    @staticmethod
+    def _drifted_component_ids_from(profile: dict[str, Any]) -> tuple[str, ...]:
         return tuple(
             str(component["component_id"])
-            for component in self.profile_payload()["components"]
+            for component in profile["components"]
             if component.get("actual_state") != "ready"
         )
 
@@ -604,9 +614,10 @@ class RuntimeInstaller:
             required_capabilities=self._required_capabilities,
         )
 
-    def inspect(self, *, emit: bool = True) -> RuntimeState:
+    def inspect_snapshot(self, *, emit: bool = True) -> RuntimeInspection:
         started = self._start_operation("inspect") if emit else False
-        ready = self._integrity_ok() and not self._drifted_component_ids()
+        profile = self.profile_payload()
+        ready = self._integrity_ok() and not self._drifted_component_ids_from(profile)
         state = RuntimeState(
             status="ready" if ready else "missing",
             runtime_root=str(self.paths.runtime_root),
@@ -623,7 +634,10 @@ class RuntimeInstaller:
                 total=2,
                 message_code="runtime.inspect_complete",
             )
-        return state
+        return RuntimeInspection(state=state, profile=profile)
+
+    def inspect(self, *, emit: bool = True) -> RuntimeState:
+        return self.inspect_snapshot(emit=emit).state
 
     def _environment(self) -> dict[str, str]:
         state = self.paths.state_root
