@@ -775,6 +775,48 @@ class TestRecognizeBatch:
         assert type(service)._onednn_runtime_disabled is False
         assert type(service)._onednn_safe_cache is True
 
+    def test_generator_failure_from_real_ocr_spec_is_propagated(self):
+        """模型 generator 中途失败不能伪装成空识别成功。"""
+        import numpy as np
+
+        class FailingPipeline:
+            def predict(self, **_kwargs):
+                def results():
+                    yield {"rec_texts": ["partial"], "rec_scores": [1.0]}
+                    raise RuntimeError("generator decode failed")
+
+                return results()
+
+        service = OCRService()
+        service._pipelines = {"OCR": FailingPipeline()}
+
+        with pytest.raises(RuntimeError, match="generator decode failed"):
+            service.recognize_batch(
+                [np.zeros((50, 100, 3), dtype=np.uint8)],
+                OCROptions(pipeline=OCRPipeline.OCR),
+            )
+
+    def test_generator_failure_from_real_structure_spec_is_propagated(self):
+        """结构识别 generator 中途失败也必须作为请求失败传播。"""
+        import numpy as np
+
+        class FailingPipeline:
+            def predict(self, **_kwargs):
+                def results():
+                    yield {"parsing_res_list": []}
+                    raise RuntimeError("structure generator failed")
+
+                return results()
+
+        service = OCRService()
+        service._pipelines = {"PP-StructureV3": FailingPipeline()}
+
+        with pytest.raises(RuntimeError, match="structure generator failed"):
+            service.recognize_batch(
+                [np.zeros((50, 100, 3), dtype=np.uint8)],
+                OCROptions(pipeline=OCRPipeline.PP_STRUCTURE_V3),
+            )
+
     def test_known_onednn_failure_on_retry_is_propagated_without_loop(self):
         """禁用重建后若仍失败，第二次异常原样抛出且不继续循环。"""
         import numpy as np

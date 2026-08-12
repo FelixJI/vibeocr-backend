@@ -6,6 +6,9 @@
 import sys
 from pathlib import Path
 
+from vibeocr.backend.dependency_spec import OCR_CHECK_LEAF_MODULES
+from vibeocr.backend.runtime_layout import resolve_app_paths
+
 # Python 版本（仅保留短版本；完整版本由 PYTHON_VERSION_SHORT + PATCH 拼出）
 PYTHON_VERSION_SHORT = "3.13"
 
@@ -203,27 +206,6 @@ OCR_DIST_NAME_ALIASES: dict[str, tuple[str, ...]] = {
     "paddlepaddle": ("paddlepaddle-gpu", "paddlepaddle-cpu"),
 }
 
-# paddlex[ocr] extra 的 leaf 包——表格识别管道 (TableRecognitionPipelineV2) 经
-# @pipeline_requires_extra("ocr") 强制要求，但顶层 paddleocr 的 import 不触发其检查
-# （装饰器仅在管道实例化时检查），形成探测盲区：便携环境若 paddleocr[doc-parser]
-# 安装事务中途失败（镜像 404/超时），这些 leaf 包会漏装，而 import paddleocr 仍成功 →
-# cache 误标已装 → 直到用户跑表格识别实例化时才爆炸为无信息的 DependencyError。
-# 纳入检测让漏装能在启动期/设置页暴露。
-# 注意 sklearn 的 import 名与 pip 包名不一致（scikit-learn）。
-OCR_CHECK_LEAF_MODULES: dict[str, str] = {
-    "bs4": "beautifulsoup4",
-    "einops": "einops",
-    "ftfy": "ftfy",
-    "latex2mathml": "latex2mathml",
-    "premailer": "premailer",
-    "regex": "regex",
-    "sklearn": "scikit-learn",
-    "scipy": "scipy",
-    "sentencepiece": "sentencepiece",
-    "tiktoken": "tiktoken",
-    "tokenizers": "tokenizers",
-}
-
 # leaf→承载顶层包映射（pip 包名）。
 # 这些 leaf 全部由 paddleocr[doc-parser] → paddlex[ocr] 的传递依赖拉入，
 # 故承载顶层包统一是 paddleocr。leaf 缺失时，补装应重装承载顶层包以重新解析
@@ -405,21 +387,9 @@ def is_macos() -> bool:
 
 
 def get_project_root() -> Path:
-    """获取项目根目录
+    """Return the install root while preserving the legacy interface."""
 
-    委托 env_manager.get_project_root()，保持单一实现源（SSOT）。
-    判断逻辑：打包态锚定 exe 所在目录；开发态定位四包 workspace 根。
-    统一调用避免两份实现在非标准布局下返回不同结果。
-
-    .. deprecated::
-        新代码应使用 ``vibeocr.backend.runtime_layout.resolve_app_paths()`` 获取完整的
-        AppPaths（含 data_root/runtime_root/model_cache_root/output_root/config_file）。
-        本函数仅返回 install_root，保留供旧调用方兼容。
-    """
-    # 延迟导入打破循环依赖（env_manager 反向依赖本模块的常量）
-    from vibeocr.backend.env_manager import get_project_root as _get_root
-
-    return _get_root()
+    return resolve_app_paths().install_root
 
 
 def get_config_dir() -> Path:

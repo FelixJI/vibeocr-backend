@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.request import Request, urlopen
 
+from vibeocr.backend.runtime_layout import resolve_app_paths
 from vibeocr.backend.runtime_state import (
     create_cache_entry,
     is_cache_valid,
@@ -3154,42 +3155,9 @@ def switch_paddle_backend(
 
 
 def get_project_root() -> Path:
-    """获取项目根目录
+    """Return the install root while preserving the legacy interface."""
 
-    打包态（PyInstaller --onedir）直接锚定 exe 所在目录：
-    python/、config/、resources/、logs/ 等运行时目录都位于 exe 同级，
-    不依赖目录树向上查找（打包产物里没有 src/vibeocr 目录）。
-
-    源码开发态只在当前模块确实位于 Backend source root 时返回仓库根；普通
-    wheel 安装态返回当前 Python 环境根（``sys.prefix``），使依赖检测、安装和
-    WorkerHost 始终使用安装 VibeOCR 的同一个解释器。
-
-    Returns:
-        项目根目录路径
-    """
-    if getattr(sys, "frozen", False):
-        # 打包态：exe 所在目录 = 应用根（onedir 布局）
-        return Path(sys.executable).resolve().parent
-    # 开发态：物理拆包后源码位于 packages/*/src 或 apps/*/src，使用工作区
-    # 标志定位仓库根，不能再依赖旧的根 src/vibeocr。
-    module_path = Path(__file__).resolve()
-    current = module_path
-    while current.parent != current:
-        if (
-            (current / "pyproject.toml").exists()
-            and (current / "packages" / "vibeocr-backend").exists()
-            and (current / "packages" / "vibeocr-runtime-client-py").exists()
-            and (current / "apps" / "vibeocr-pyside").exists()
-        ):
-            backend_source = current / "packages" / "vibeocr-backend" / "src"
-            try:
-                module_path.relative_to(backend_source)
-            except ValueError:
-                pass
-            else:
-                return current
-        current = current.parent
-    return Path(sys.prefix).resolve()
+    return resolve_app_paths().install_root
 
 
 def get_workspace_source_paths() -> tuple[Path, ...]:
@@ -3197,59 +3165,16 @@ def get_workspace_source_paths() -> tuple[Path, ...]:
     return ()
 
 
-def _get_meipass() -> Path | None:
-    """获取 PyInstaller 打包态的解包目录（_internal/），非打包态返回 None。
-
-    onedir 布局下 ``sys._MEIPASS`` 指向 exe 同级的 ``_internal/``，所有
-    ``--add-data`` 捆绑进来的只读资源（resources/、CHANGELOG.md、vibeocr
-    源码）都平铺于此。它与 exe 同级目录（python/、config、logs/ 等运行时
-    可写目录所在）是两个不同的目录，不可混用。
-    """
-    meipass = getattr(sys, "_MEIPASS", None)
-    return Path(meipass) if meipass else None
-
-
 def get_bundled_resources_dir() -> Path:
-    """获取 resources 目录路径（打包态/开发态通用，SSOT）。
+    """Return bundled resources while preserving the legacy interface."""
 
-    打包态（PyInstaller --onedir）：resources 由 ``--add-data`` 打入
-    ``sys._MEIPASS``（即 ``_internal/resources``），而非 exe 同级——
-    exe 同级只有运行时创建的可写目录（python/、config、logs/）。
-    故打包态必须用 ``_MEIPASS`` 定位，否则图标/CHANGELOG/KaTeX 全部读不到。
-
-    开发态：resources 位于仓库根。
-
-    Returns:
-        resources 目录路径（不保证存在，调用方按需判断）
-    """
-    meipass = _get_meipass()
-    if meipass is not None:
-        return meipass / "resources"
-    return get_project_root() / "resources"
+    return resolve_app_paths().resources_root
 
 
 def get_bundled_changelog_path() -> Path | None:
-    """获取 CHANGELOG.md 路径，找不到返回 None。
+    """Return the bundled changelog while preserving the legacy interface."""
 
-    按优先级查找：
-    1. 打包态 ``_MEIPASS/CHANGELOG.md``（``--add-data`` 捆绑位置）
-    2. 打包态 exe 同级 ``CHANGELOG.md``（用户手动放入的兜底）
-    3. 开发态仓库根 ``CHANGELOG.md``
-
-    Returns:
-        CHANGELOG.md 路径；三处都不存在时返回 None，调用方回退占位文案。
-    """
-    candidates: list[Path] = []
-    meipass = _get_meipass()
-    if meipass is not None:
-        candidates.append(meipass / "CHANGELOG.md")
-        candidates.append(Path(sys.executable).resolve().parent / "CHANGELOG.md")
-    else:
-        candidates.append(get_project_root() / "CHANGELOG.md")
-    for cand in candidates:
-        if cand.exists():
-            return cand
-    return None
+    return resolve_app_paths().changelog_path
 
 
 def ensure_mineru_models(

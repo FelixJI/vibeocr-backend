@@ -64,14 +64,11 @@ def _html_table_to_markdown(html: str) -> str:
 
 
 def _consume_generator_safely(output) -> list:
-    """安全地消费 generator（禁用 GC 避免 CUDA 内存管理冲突）"""
+    """Consume model output while restoring the caller's GC state."""
     gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
         return list(output)
-    except Exception as e:
-        _logger.error("[安全消费] 消费 generator 时出错: %s", e, exc_info=True)
-        return []
     finally:
         if gc_was_enabled:
             gc.enable()

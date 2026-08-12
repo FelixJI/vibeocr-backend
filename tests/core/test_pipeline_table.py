@@ -142,7 +142,7 @@ class TestCheckTableDeps:
         import builtins
 
         from vibeocr.backend.core.pipelines import pipeline_table
-        from vibeocr.backend.services.env_config import OCR_CHECK_LEAF_MODULES
+        from vibeocr.backend.dependency_spec import OCR_CHECK_LEAF_MODULES
 
         real_import = builtins.__import__
 
