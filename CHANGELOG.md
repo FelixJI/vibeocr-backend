@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.2
+
+### Bug Fixes
+
+- **runtime:** 修复依赖边界与失败语义 (#38) (3eebfb7)
+
+### Dependencies
+
+- **protocol:** 升级 Runtime Protocol 至 2.5.0 (#41) (802da7a)
+
 ## 0.11.1
 
 ### Bug Fixes
