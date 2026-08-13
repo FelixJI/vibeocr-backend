@@ -11,7 +11,6 @@ import gc
 import html
 import io
 import logging
-import re as _re
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -26,41 +25,10 @@ from vibeocr.backend.tables.projections import (
     table_model_to_plain_text,
 )
 from vibeocr.backend.tables.reducer import rebuild_result_projections
+from vibeocr.backend.utils.html_tables import extract_table_html
 from vibeocr.runtime_contracts.contracts.tables import TableProvenanceV1
 
 _logger = logging.getLogger(__name__)
-
-# 表格 HTML 解析正则
-_RE_TABLE = _re.compile(r"(<table\b.*?</table>)", _re.DOTALL | _re.IGNORECASE)
-_RE_TR = _re.compile(r"<tr[^>]*>(.*?)</tr>", _re.DOTALL | _re.IGNORECASE)
-_RE_TD = _re.compile(r"<t[dh][^>]*>(.*?)</t[dh]>", _re.DOTALL | _re.IGNORECASE)
-
-
-def _extract_table_html(html_str: str) -> str:
-    """从 HTML 字符串中提取第一个 <table>...</table>"""
-    match = _RE_TABLE.search(html_str)
-    return match.group(1) if match else html_str
-
-
-def _html_table_to_markdown(html: str) -> str:
-    """将 HTML 表格转换为 Markdown 格式"""
-    rows: list[list[str]] = []
-    for tr_match in _RE_TR.finditer(html):
-        cells = [
-            _re.sub(r"<[^>]+>", "", td.group(1)).strip().replace("|", "\\|")
-            for td in _RE_TD.finditer(tr_match.group(1))
-        ]
-        if cells:
-            rows.append(cells)
-    if not rows:
-        return ""
-    max_cols = max(len(r) for r in rows)
-    for r in rows:
-        r.extend("" for _ in range(max_cols - len(r)))
-    header = "| " + " | ".join(rows[0]) + " |"
-    sep = "| " + " | ".join("---" for _ in range(max_cols)) + " |"
-    body = "\n".join("| " + " | ".join(row) + " |" for row in rows[1:])
-    return "\n".join(part for part in (header, sep, body) if part)
 
 
 def _consume_generator_safely(output) -> list:
@@ -231,7 +199,7 @@ def _recognize_pp_structure(
             )
 
             if label == "table":
-                table_html = _extract_table_html(content)
+                table_html = extract_table_html(content)
                 table_id = f"pp-structure-v3-table-{table_sequence}"
                 table_sequence += 1
                 canonical_block = canonicalize_table_block(
