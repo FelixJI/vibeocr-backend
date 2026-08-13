@@ -22,7 +22,7 @@ def _write_package(path: Path, requirement: str) -> Path:
     return path
 
 
-def _write_lock(path: Path, version: str = "2.3.0") -> Path:
+def _write_lock(path: Path, version: str = "2.5.0") -> Path:
     path.write_text(
         json.dumps(
             {
@@ -46,18 +46,18 @@ def test_resolves_exact_lock_inside_package_major_range(tmp_path: Path) -> None:
     lock = _write_lock(tmp_path / "protocol.lock.json")
     package = _write_package(
         tmp_path / "pyproject.toml",
-        "vibeocr-runtime-contracts>=2.3.0,<3.0.0",
+        "vibeocr-runtime-contracts>=2.5.0,<3.0.0",
     )
 
-    assert resolve_protocol_binding(lock, package) == "2.3.0"
+    assert resolve_protocol_binding(lock, package) == "2.5.0"
 
 
 @pytest.mark.parametrize(
     "requirement",
     [
-        "vibeocr-runtime-contracts==2.3.0",
-        "vibeocr-runtime-contracts>=2.4.0,<3.0.0",
-        "vibeocr-runtime-contracts>=2.3.0,<4.0.0",
+        "vibeocr-runtime-contracts==2.5.0",
+        "vibeocr-runtime-contracts>=2.6.0,<3.0.0",
+        "vibeocr-runtime-contracts>=2.5.0,<4.0.0",
     ],
 )
 def test_rejects_requirement_that_does_not_cover_exact_lock_and_major(
@@ -78,7 +78,7 @@ def test_rejects_lock_without_exact_contracts_wheel(tmp_path: Path) -> None:
     lock.write_text(json.dumps(value), encoding="utf-8")
     package = _write_package(
         tmp_path / "pyproject.toml",
-        "vibeocr-runtime-contracts>=2.3.0,<3.0.0",
+        "vibeocr-runtime-contracts>=2.5.0,<3.0.0",
     )
 
     with pytest.raises(ValueError, match="exactly one contracts wheel"):
