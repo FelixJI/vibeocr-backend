@@ -100,12 +100,13 @@ class TestConsumeGeneratorSafely:
     def test_list_input(self):
         assert _consume_generator_safely([10, 20]) == [10, 20]
 
-    def test_exception_returns_empty_list(self):
+    def test_exception_is_propagated(self):
         def bad_gen():
             yield 1
             raise RuntimeError("boom")
 
-        assert _consume_generator_safely(bad_gen()) == []
+        with pytest.raises(RuntimeError, match="boom"):
+            _consume_generator_safely(bad_gen())
 
     def test_gc_reenabled_after_consumption(self):
         """消费完成后 GC 应恢复原状态。"""
@@ -120,7 +121,8 @@ class TestConsumeGeneratorSafely:
             yield 1
             raise RuntimeError("boom")
 
-        _consume_generator_safely(bad_gen())
+        with pytest.raises(RuntimeError, match="boom"):
+            _consume_generator_safely(bad_gen())
         assert gc.isenabled()
 
 

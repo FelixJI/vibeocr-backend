@@ -111,12 +111,16 @@ class TestConsumeGeneratorSafely:
 
         assert _consume_generator_safely(gen()) == [1, 2]
 
-    def test_exception_returns_empty(self):
+    def test_exception_is_propagated(self):
+        gc.enable()
+
         def bad_gen():
             yield 1
             raise ValueError("err")
 
-        assert _consume_generator_safely(bad_gen()) == []
+        with pytest.raises(ValueError, match="err"):
+            _consume_generator_safely(bad_gen())
+        assert gc.isenabled()
 
     def test_gc_reenabled(self):
         gc.enable()

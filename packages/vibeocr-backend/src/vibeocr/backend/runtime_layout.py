@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any
@@ -25,6 +26,66 @@ class RuntimeStorePaths:
     runtime_root: Path
     model_root: Path
     shared: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AppPaths:
+    """Read-only application paths derived from the active Python environment."""
+
+    install_root: Path
+    resources_root: Path
+    changelog_path: Path | None
+
+
+def _backend_repository_root(module_path: Path) -> Path | None:
+    for candidate in module_path.parents:
+        backend_source = candidate / "packages" / "vibeocr-backend" / "src"
+        if not (candidate / "pyproject.toml").is_file() or not backend_source.is_dir():
+            continue
+        try:
+            module_path.relative_to(backend_source)
+        except ValueError:
+            continue
+        return candidate.resolve()
+    return None
+
+
+def resolve_app_paths() -> AppPaths:
+    """Resolve install, bundled-resource and changelog paths once.
+
+    Frozen onedir builds are anchored at the executable directory. Backend source
+    checkouts are recognized by their package layout. A regular wheel is anchored
+    at ``sys.prefix`` so runtime state stays with its active Python environment.
+    """
+
+    frozen = bool(getattr(sys, "frozen", False))
+    executable_root = Path(sys.executable).resolve().parent
+    if frozen:
+        install_root = executable_root
+    else:
+        module_path = Path(__file__).resolve()
+        install_root = (
+            _backend_repository_root(module_path) or Path(sys.prefix).resolve()
+        )
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    resources_root = (
+        Path(meipass).resolve() / "resources" if meipass else install_root / "resources"
+    )
+    changelog_candidates = (
+        (Path(meipass).resolve() / "CHANGELOG.md", executable_root / "CHANGELOG.md")
+        if meipass
+        else (install_root / "CHANGELOG.md",)
+    )
+    changelog_path = next(
+        (candidate for candidate in changelog_candidates if candidate.is_file()),
+        None,
+    )
+    return AppPaths(
+        install_root=install_root,
+        resources_root=resources_root,
+        changelog_path=changelog_path,
+    )
 
 
 def _safe_relative(value: object, *, field: str) -> Path:
@@ -157,8 +218,10 @@ def resolve_model_path(
 
 
 __all__ = [
+    "AppPaths",
     "LayoutError",
     "RuntimeStorePaths",
+    "resolve_app_paths",
     "resolve_model_path",
     "resolve_runtime_store",
 ]

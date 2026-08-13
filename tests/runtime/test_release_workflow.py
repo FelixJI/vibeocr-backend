@@ -42,3 +42,13 @@ def test_release_build_hashes_runtime_without_shell_module_autoloading() -> None
     assert "System.Security.Cryptography.SHA256" in script
     assert "ComputeHash" in script
     assert "Get-FileHash" not in script
+
+
+def test_release_build_fails_immediately_when_build_tool_installation_fails() -> None:
+    script = (ROOT / "scripts/build-release.ps1").read_text(encoding="utf-8")
+
+    install = script.index("python -m pip install build==")
+    failure = script.index("Release build dependency installation failed")
+    build = script.index("python -m build --wheel")
+
+    assert install < failure < build

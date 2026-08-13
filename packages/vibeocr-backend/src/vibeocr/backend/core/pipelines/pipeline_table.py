@@ -16,6 +16,7 @@ from typing import Any
 
 from vibeocr.backend.core.pipelines.base_options import BasePipelineOptions
 from vibeocr.backend.core.pipelines.registry import PipelineSpec
+from vibeocr.backend.dependency_spec import OCR_CHECK_LEAF_MODULES
 from vibeocr.backend.tables.blocks import (
     canonicalize_table_block,
     table_model_from_block,
@@ -30,6 +31,7 @@ from vibeocr.backend.tables.projections import (
     table_model_to_plain_text,
 )
 from vibeocr.backend.tables.reducer import rebuild_result_projections
+from vibeocr.backend.utils.html_tables import extract_table_html
 from vibeocr.runtime_contracts.contracts.tables import (
     CoordinateSpace,
     TableProvenanceV1,
@@ -70,8 +72,6 @@ def _check_table_deps() -> None:
         # paddlex 未安装（极端残缺环境）：回退到本项目的 leaf 清单兜底探测，
         # 总比静默放过、让 PaddleX 抛无信息 RuntimeError 强。
         import importlib.util
-
-        from vibeocr.backend.services.env_config import OCR_CHECK_LEAF_MODULES
 
         missing = [
             pkg
@@ -346,9 +346,7 @@ def _recognize_table(service: Any, image: Any, options: TableRecognitionOptions)
                         max(box[3] for box in valid_cell_boxes),
                     )
 
-            from vibeocr.backend.services.ocr_service import _extract_table_html
-
-            table_html = _extract_table_html(pred_html)
+            table_html = extract_table_html(pred_html)
             original_table_html = table_html
             cl_idx = len(content_list)
             table_id = f"table-recognition-table-{table_sequence}"

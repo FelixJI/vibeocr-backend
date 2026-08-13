@@ -83,6 +83,7 @@ if ((Get-Sha256 $pythonArchive) -ne $runtimeLock.sha256) {
     throw 'standalone Python archive hash mismatch'
 }
 python -m pip install build==1.5.0 hatchling==1.27.0 pyinstaller==6.21.0
+if ($LASTEXITCODE -ne 0) { throw 'Release build dependency installation failed' }
 python -m build --wheel --no-isolation (Join-Path $root 'packages/vibeocr-backend') --outdir $build
 if ($LASTEXITCODE -ne 0) { throw 'Backend wheel build failed' }
 python (Join-Path $root 'scripts/build_runtime_installer.py') `
