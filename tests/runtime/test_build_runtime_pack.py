@@ -104,7 +104,7 @@ def test_pack_build_two_phase_download_wheel_and_zip(
         work_dir=tmp_path / "work",
         output=output,
     )
-    assert first == output
+    assert first == [output]
     download_command = calls[0]
     assert "--require-hashes" in download_command
     assert str(lock) in download_command
@@ -265,3 +265,69 @@ def test_pack_cli_reports_failures(
     )
     assert code == 1
     assert "runtime pack build failed" in capsys.readouterr().err
+
+
+def test_pack_build_splits_into_parts_under_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """max_part_bytes 触发贪心分片:清单只在第一片,命名 partNN 确定性。"""
+    payload_len = len(_WHEEL_BYTES)
+    wheels = {
+        # 上限等于单 wheel 大小:贪心装箱下每个 wheel 独占一片。
+        "alpha-1.0-py3-none-any.whl": _WHEEL_BYTES,
+        "beta-2.0-py3-none-any.whl": _WHEEL_BYTES,
+        "gamma-3.0-py3-none-any.whl": _WHEEL_BYTES,
+    }
+    calls = _install_fake_pip(monkeypatch, dict(wheels))
+    lock = tmp_path / "requirements-win-x64-base.lock"
+    lock.write_text(
+        "--index-url https://pypi.org/simple\n"
+        f"alpha==1.0 \\n    --hash=sha256:{_LOCK_HASH}\n"
+        f"beta==2.0 \\n    --hash=sha256:{_LOCK_HASH}\n"
+        f"gamma==3.0 \\n    --hash=sha256:{_LOCK_HASH}\n",
+        encoding="utf-8",
+    )
+    # 用 win-x64-base 之外的 profile 校验规则(cpu 无 base 必备项约束)。
+    output = tmp_path / "out" / "pack.zip"
+    parts = build_runtime_pack(
+        lock=lock,
+        profile="win-x64-cpu",
+        work_dir=tmp_path / "work",
+        output=output,
+        max_part_bytes=payload_len,
+    )
+    assert [part.name for part in parts] == [
+        "pack.part01.zip",
+        "pack.part02.zip",
+        "pack.part03.zip",
+    ]
+    with zipfile.ZipFile(parts[0]) as archive:
+        names = archive.namelist()
+        # 清单只在第一片。
+        assert "pack-requirements.txt" in names
+        assert archive.read("pack-requirements.txt").decode("utf-8").splitlines() == [
+            "alpha==1.0",
+            "beta==2.0",
+            "gamma==3.0",
+        ]
+        assert "alpha-1.0-py3-none-any.whl" in names
+    with zipfile.ZipFile(parts[1]) as archive:
+        assert archive.namelist() == ["beta-2.0-py3-none-any.whl"]
+    with zipfile.ZipFile(parts[2]) as archive:
+        assert archive.namelist() == ["gamma-3.0-py3-none-any.whl"]
+    # 下载阶段仍是完整闭包 hash 校验。
+    assert "--require-hashes" in calls[0]
+
+
+def test_pack_build_rejects_non_positive_part_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_pip(monkeypatch, {})
+    with pytest.raises(ValueError, match="max_part_bytes must be positive"):
+        build_runtime_pack(
+            lock=_base_lock(tmp_path),
+            profile="win-x64-base",
+            work_dir=tmp_path / "work",
+            output=tmp_path / "pack.zip",
+            max_part_bytes=0,
+        )

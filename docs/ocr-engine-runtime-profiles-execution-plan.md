@@ -6,8 +6,17 @@
 > 三 profile 绑定(base 可选 runtime_pack + SHA-256)、installer 离线安装
 > 路径(manifest 绑定 pack 时 `--no-index --find-links`,幂等解压,
 > pack 缺失 fail closed)与 `scripts/build_runtime_pack.py`(确定性 zip,
-> 下载即校验)。B5 剩余(full pack 附加下载/校验/移除流程、full 锁的
-> OpenCV 去重)与 B6(正式 release)待后续工作包。本文只定义
+> 下载即校验)。B5 第二片(同日):manifest 的 runtime_pack 升级为分片
+> 文件名列表,CPU pack 实测 350 MiB(138 wheels)随 Release 资产发布并
+> manifest 绑定;full 闭包 pack 未到位时 installer 回退在线安装(base 仍
+> fail closed)。两个实测约束记录:(1) full 锁的 OpenCV 双套是结构性的
+> ——paddlex(经 paddleocr extras)精确锁 opencv-contrib-python==4.10.0.84、
+> mineru 要求 opencv-python>=4.11,两者都是传递强制依赖,除非上游变更
+> 否则无法去重(计划 §4.3 的单 OpenCV 要求本就限定 base pack,已满足);
+> (2) cu126 的 torch 单 wheel 实测 ~2.44 GiB,超过 GitHub Release 单资产
+> 2 GiB 上限,cu126 长期保持在线直链安装(--require-hashes 锁定),不构建
+> 离线 pack。B6(正式 release)与 B0.3(Windows 隔离机验证)待后续工作包。
+> 本文只定义
 > `vibeocr-backend` 仓库的工作包;不在 Backend 添加 UI。
 >
 > 许可决策记录(维护者拍板,2026-08-15):项目定位为开源、非商业分发。

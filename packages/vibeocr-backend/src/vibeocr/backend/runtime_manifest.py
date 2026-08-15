@@ -65,9 +65,9 @@ class RuntimeProfile:
     name: str
     lock_path: Path
     sha256: str
-    runtime_pack: str | None
+    runtime_pack: tuple[str, ...]
     components: tuple[RuntimeComponent, ...]
-    runtime_pack_sha256: str | None = None
+    runtime_pack_sha256: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,17 +377,37 @@ def load_runtime_manifest(
         filename = _relative_filename(record.get("lock"), field=f"profiles.{name}.lock")
         lock_path = manifest_path.parent / filename
         lock_sha = _sha256(record.get("sha256"), field=f"profiles.{name}.sha256")
-        runtime_pack = record.get("runtime_pack")
-        runtime_pack_sha: str | None = None
-        if runtime_pack is not None:
-            runtime_pack = _relative_filename(
-                runtime_pack,
-                field=f"profiles.{name}.runtime_pack",
+        raw_pack = record.get("runtime_pack")
+        runtime_pack: tuple[str, ...] = ()
+        runtime_pack_shas: tuple[str, ...] = ()
+        if raw_pack is not None:
+            # 离线 pack 是一个或多个分片 zip(cu126 的 torch 单 wheel 即超
+            # GitHub 2 GiB 资产上限)。每个分片必须绑定字节哈希：installer
+            # 禁网安装完全信任该闭包。
+            if (
+                not isinstance(raw_pack, list)
+                or not raw_pack
+                or not all(isinstance(item, str) and item for item in raw_pack)
+            ):
+                raise ManifestError(
+                    f"profiles.{name}.runtime_pack must be a non-empty filename list"
+                )
+            runtime_pack = tuple(
+                _relative_filename(item, field=f"profiles.{name}.runtime_pack")
+                for item in raw_pack
             )
-            # 离线 pack 必须绑定字节哈希：installer 禁网安装完全信任该闭包。
-            runtime_pack_sha = _sha256(
-                record.get("runtime_pack_sha256"),
-                field=f"profiles.{name}.runtime_pack_sha256",
+            raw_shas = record.get("runtime_pack_sha256")
+            if (
+                not isinstance(raw_shas, list)
+                or len(raw_shas) != len(runtime_pack)
+                or not all(isinstance(item, str) and item for item in raw_shas)
+            ):
+                raise ManifestError(
+                    f"profiles.{name}.runtime_pack_sha256 must parallel runtime_pack"
+                )
+            runtime_pack_shas = tuple(
+                _sha256(item, field=f"profiles.{name}.runtime_pack_sha256")
+                for item in raw_shas
             )
         elif record.get("runtime_pack_sha256") is not None:
             raise ManifestError(
@@ -429,8 +449,10 @@ def load_runtime_manifest(
             if sha256_file(lock_path) != lock_sha:
                 raise ManifestError(f"{name} lock SHA-256 mismatch")
             validate_requirements_lock(lock_path, profile=name)
-            if runtime_pack is not None and runtime_pack_sha is not None:
-                if sha256_file(manifest_path.parent / runtime_pack) != runtime_pack_sha:
+            for pack_name, pack_sha in zip(
+                runtime_pack, runtime_pack_shas, strict=True
+            ):
+                if sha256_file(manifest_path.parent / pack_name) != pack_sha:
                     raise ManifestError(f"{name} runtime pack SHA-256 mismatch")
         profiles[name] = RuntimeProfile(
             name,
@@ -438,7 +460,7 @@ def load_runtime_manifest(
             lock_sha,
             runtime_pack,
             components,
-            runtime_pack_sha256=runtime_pack_sha,
+            runtime_pack_sha256=runtime_pack_shas,
         )
     capabilities = data.get("capabilities")
     if (

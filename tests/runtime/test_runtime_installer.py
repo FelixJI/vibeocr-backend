@@ -106,8 +106,8 @@ def _release(root: Path, *, with_base_pack: bool = False) -> tuple[Path, Path]:
             archive.writestr(
                 "onnxruntime-1.28.0-cp313-cp313-win_amd64.whl", b"ort-wheel"
             )
-        profiles["win-x64-base"]["runtime_pack"] = pack.name
-        profiles["win-x64-base"]["runtime_pack_sha256"] = _sha(pack.read_bytes())
+        profiles["win-x64-base"]["runtime_pack"] = [pack.name]
+        profiles["win-x64-base"]["runtime_pack_sha256"] = [_sha(pack.read_bytes())]
     manifest = {
         "schema_version": 1,
         "backend_version": "0.7.0",
@@ -1183,13 +1183,13 @@ def test_extract_runtime_pack_rejects_unsafe_members(tmp_path: Path) -> None:
     with zipfile.ZipFile(pack, mode="w") as archive:
         archive.writestr("../evil.whl", b"evil")
     with pytest.raises(RuntimeInstallError, match="unsafe runtime pack member"):
-        installer._extract_runtime_pack(pack, tmp_path / "cache")
+        installer._extract_runtime_pack([pack], tmp_path / "cache")
 
     pack2 = tmp_path / "pack2.zip"
     with zipfile.ZipFile(pack2, mode="w") as archive:
         archive.writestr("payload.txt", b"not a wheel")
     with pytest.raises(RuntimeInstallError, match="unsafe runtime pack member"):
-        installer._extract_runtime_pack(pack2, tmp_path / "cache2")
+        installer._extract_runtime_pack([pack2], tmp_path / "cache2")
 
 
 def test_base_accelerator_maps_to_base_profile() -> None:
@@ -1205,4 +1205,63 @@ def test_extract_runtime_pack_requires_pack_requirements(tmp_path: Path) -> None
     with zipfile.ZipFile(pack, mode="w") as archive:
         archive.writestr("rapidocr-3.9.2-py3-none-any.whl", b"wheel")
     with pytest.raises(RuntimeInstallError, match="lacks pack-requirements.txt"):
-        installer._extract_runtime_pack(pack, tmp_path / "cache")
+        installer._extract_runtime_pack([pack], tmp_path / "cache")
+
+
+def test_full_profile_without_pack_falls_back_online(tmp_path: Path) -> None:
+    """full 闭包绑定的 pack 未下载到位时回退在线安装,不 fail closed。"""
+    from vibeocr.backend import runtime_installer as installer
+
+    manifest_path, _ = _release(tmp_path / "release")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["profiles"]["win-x64-cpu"]["runtime_pack"] = ["not-yet-downloaded.zip"]
+    raw["profiles"]["win-x64-cpu"]["runtime_pack_sha256"] = ["0" * 64]
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    # 绑定的 pack 文件不存在:component lock 的 manifest 哈希已失配,直接
+    # 构造 manifest 对象驱动 runner(绕过 _validate_binding)。
+    manifest = load_runtime_manifest(manifest_path, verify_artifacts=False)
+    partial_root = tmp_path / "runtimes" / "runtime-0" / "partial"
+    partial_root.mkdir(parents=True)
+    commands: list[list[str]] = []
+
+    def fake_run(command, *, timeout, env, reporter, heartbeat_code):  # type: ignore[no-untyped-def]
+        commands.append(list(command))
+
+    def fake_extract_python(archive_path, destination, *, progress=None):  # type: ignore[no-untyped-def]
+        (destination / "python.exe").write_bytes(b"python")
+
+    original_run = installer._run_install_command
+    original_extract = installer._extract_python_archive
+    installer._run_install_command = fake_run  # type: ignore[assignment]
+    installer._extract_python_archive = fake_extract_python  # type: ignore[assignment]
+    try:
+        installer._default_install_runner(partial_root, manifest, "win-x64-cpu")
+    finally:
+        installer._run_install_command = original_run  # type: ignore[assignment]
+        installer._extract_python_archive = original_extract  # type: ignore[assignment]
+    # 回退在线:require-hashes + lock,而非 --no-index。
+    assert "--require-hashes" in commands[0]
+    assert "--no-index" not in commands[0]
+    assert commands[0][-1].endswith("requirements-win-x64-cpu.lock")
+
+
+def test_multi_part_pack_extracts_into_one_directory(tmp_path: Path) -> None:
+    from vibeocr.backend import runtime_installer as installer
+
+    part1 = tmp_path / "vibeocr-runtime-pack-win-x64-cpu-0.7.0.part01.zip"
+    part2 = tmp_path / "vibeocr-runtime-pack-win-x64-cpu-0.7.0.part02.zip"
+    with zipfile.ZipFile(part1, mode="w") as archive:
+        archive.writestr("pack-requirements.txt", "rapidocr==3.9.2\n")
+        archive.writestr("rapidocr-3.9.2-py3-none-any.whl", b"rapidocr-wheel")
+    with zipfile.ZipFile(part2, mode="w") as archive:
+        archive.writestr("onnxruntime-1.28.0-cp313-cp313-win_amd64.whl", b"ort")
+
+    pack_dir = installer._extract_runtime_pack([part1, part2], tmp_path / "cache")
+    assert pack_dir.name == "vibeocr-runtime-pack-win-x64-cpu-0.7.0"
+    assert (pack_dir / "pack-requirements.txt").is_file()
+    assert (pack_dir / "rapidocr-3.9.2-py3-none-any.whl").is_file()
+    assert (pack_dir / "onnxruntime-1.28.0-cp313-cp313-win_amd64.whl").is_file()
+    assert (pack_dir / ".complete").is_file()
+    # 幂等:完整标记存在时直接复用。
+    again = installer._extract_runtime_pack([part1, part2], tmp_path / "cache")
+    assert again == pack_dir

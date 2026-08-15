@@ -97,29 +97,50 @@ $protocolWheel = Get-ChildItem -LiteralPath $protocol `
   Select-Object -First 1
 $installerArchive = Get-ChildItem -LiteralPath $build -Filter "vibeocr-runtime-installer-$Version.zip" |
   Select-Object -First 1
-# base-offline 离线 wheel 闭包：从精确 hash lock 下载并校验，随 Release 资产
-# 发布，供 Portable 禁网安装 base profile（计划 §4.2）。
+# 离线 wheel 闭包：从精确 hash lock 下载并校验，随 Release 资产发布。
+# base 随 Portable 携带禁网安装；cpu 是用户显式选择后下载的附加 pack
+# （计划 §4.2）。cu126 不构建 pack：其 torch 单 wheel ~2.44 GiB 超过
+# GitHub Release 单资产 2 GiB 上限，保持在线直链安装路径。
+# 分片上限 1.7 GiB：当前均为单片，未来单 wheel 增长时自动分片。
 python (Join-Path $root 'scripts/build_runtime_pack.py') `
   --lock (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-base/requirements-win-x64-base.lock') `
   --profile win-x64-base `
-  --work-dir (Join-Path $build 'runtime-pack-work') `
+  --work-dir (Join-Path $build 'runtime-pack-work-base') `
+  --max-part-bytes 1825361100 `
   --output (Join-Path $build "vibeocr-runtime-pack-win-x64-base-$Version.zip")
 if ($LASTEXITCODE -ne 0) { throw 'Runtime pack build failed' }
-$baseRuntimePack = Join-Path $build "vibeocr-runtime-pack-win-x64-base-$Version.zip"
-python (Join-Path $root 'scripts/build_runtime_manifest.py') `
-  --backend-wheel $backendWheel.FullName `
-  --protocol-wheel $protocolWheel.FullName `
-  --protocol-manifest (Join-Path $protocol 'release-manifest.json') `
-  --base-lock (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-base/requirements-win-x64-base.lock') `
-  --cpu-lock (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements-win-x64-cpu.lock') `
-  --cu126-lock (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-cu126/requirements-win-x64-cu126.lock') `
-  --python-archive $pythonArchive --python-version $runtimeLock.version `
-  --python-source-url $runtimeLock.source_url `
-  --installer-archive $installerArchive.FullName --backend-version $Version `
-  --base-runtime-pack $baseRuntimePack `
-  --source-commit (git -C $root rev-parse HEAD).Trim() `
-  --build-workflow 'github.com/FelixJI/vibeocr-backend/.github/workflows/release.yml' `
-  --output-dir $artifacts
+$basePackArgs = @()
+Get-ChildItem -LiteralPath $build -Filter "vibeocr-runtime-pack-win-x64-base-$Version.part*.zip" |
+  Sort-Object Name |
+  ForEach-Object { $basePackArgs += @('--base-runtime-pack', $_.FullName) }
+python (Join-Path $root 'scripts/build_runtime_pack.py') `
+  --lock (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements-win-x64-cpu.lock') `
+  --profile win-x64-cpu `
+  --work-dir (Join-Path $build 'runtime-pack-work-cpu') `
+  --max-part-bytes 1825361100 `
+  --output (Join-Path $build "vibeocr-runtime-pack-win-x64-cpu-$Version.zip")
+if ($LASTEXITCODE -ne 0) { throw 'Runtime pack build failed' }
+$cpuPackArgs = @()
+Get-ChildItem -LiteralPath $build -Filter "vibeocr-runtime-pack-win-x64-cpu-$Version.part*.zip" |
+  Sort-Object Name |
+  ForEach-Object { $cpuPackArgs += @('--cpu-runtime-pack', $_.FullName) }
+$manifestArgs = @(
+  (Join-Path $root 'scripts/build_runtime_manifest.py'),
+  '--backend-wheel', $backendWheel.FullName,
+  '--protocol-wheel', $protocolWheel.FullName,
+  '--protocol-manifest', (Join-Path $protocol 'release-manifest.json'),
+  '--base-lock', (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-base/requirements-win-x64-base.lock'),
+  '--cpu-lock', (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements-win-x64-cpu.lock'),
+  '--cu126-lock', (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-cu126/requirements-win-x64-cu126.lock'),
+  '--python-archive', $pythonArchive, '--python-version', $runtimeLock.version,
+  '--python-source-url', $runtimeLock.source_url,
+  '--installer-archive', $installerArchive.FullName, '--backend-version', $Version
+) + $basePackArgs + $cpuPackArgs + @(
+  '--source-commit', (git -C $root rev-parse HEAD).Trim(),
+  '--build-workflow', 'github.com/FelixJI/vibeocr-backend/.github/workflows/release.yml',
+  '--output-dir', $artifacts
+)
+python @manifestArgs
 if ($LASTEXITCODE -ne 0) { throw 'Runtime manifest build failed' }
 Remove-Item -LiteralPath (Join-Path $artifacts 'SHA256SUMS') -Force
 python (Join-Path $root 'scripts/build_automation_identity.py') `

@@ -98,11 +98,14 @@ def build_runtime_pack(
     profile: str,
     work_dir: Path,
     output: Path,
-) -> Path:
+    max_part_bytes: int | None = None,
+) -> list[Path]:
     lock = lock.resolve(strict=True)
     validate_requirements_lock(lock, profile=profile)
     if output.suffix != ".zip":
         raise ValueError("runtime pack output must be a .zip archive")
+    if max_part_bytes is not None and max_part_bytes <= 0:
+        raise ValueError("max_part_bytes must be positive")
 
     downloads = work_dir / "downloads"
     wheels = work_dir / "wheels"
@@ -173,27 +176,59 @@ def build_runtime_pack(
     if missing:
         raise RuntimeError(f"runtime pack is missing wheels for: {missing}")
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    if output.exists():
-        output.unlink()
+    # 分片:单 wheel 不可再分,超过 max_part_bytes 的 wheel 独占一片。
+    # wheel 本身已是 deflate 容器,直接以文件大小做贪心装箱即可。
+    parts: list[list[Path]] = []
+    if max_part_bytes is None:
+        parts.append(list(wheel_files))
+    else:
+        current: list[Path] = []
+        current_bytes = 0
+        for wheel in wheel_files:
+            size = wheel.stat().st_size
+            if current and current_bytes + size > max_part_bytes:
+                parts.append(current)
+                current = []
+                current_bytes = 0
+            current.append(wheel)
+            current_bytes += size
+        if current:
+            parts.append(current)
+
     # pack 内附无哈希需求清单:离线安装以它为解析输入(原 lock 含 sdist
     # 哈希行,pip 会对 sdist 构建的 wheel 报哈希不匹配);pack 整体字节
-    # 完整性由 manifest 的 runtime_pack_sha256 绑定。
+    # 完整性由 manifest 的 runtime_pack_sha256 绑定。清单固定放在第一片。
+    newline = chr(10)
     pack_requirements = (
-        "\n".join(f"{name}=={version}" for name, version in sorted(requirement_set))
-        + "\n"
+        newline.join(f"{name}=={version}" for name, version in sorted(requirement_set))
+        + newline
     )
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        requirements_info = zipfile.ZipInfo(
-            "pack-requirements.txt", date_time=_FIXED_ZIP_DATE_TIME
+    output.parent.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    width = max(2, len(str(len(parts))))
+    for index, part_files in enumerate(parts, start=1):
+        part_path = (
+            output
+            if max_part_bytes is None
+            else output.with_name(f"{output.stem}.part{index:0{width}d}.zip")
         )
-        requirements_info.compress_type = zipfile.ZIP_DEFLATED
-        archive.writestr(requirements_info, pack_requirements.encode("utf-8"))
-        for wheel in wheel_files:
-            info = zipfile.ZipInfo(wheel.name, date_time=_FIXED_ZIP_DATE_TIME)
-            info.compress_type = zipfile.ZIP_DEFLATED
-            archive.writestr(info, wheel.read_bytes())
-    return output
+        if part_path.exists():
+            part_path.unlink()
+        with zipfile.ZipFile(part_path, "w", compression=zipfile.ZIP_DEFLATED) as (
+            archive
+        ):
+            if index == 1:
+                requirements_info = zipfile.ZipInfo(
+                    "pack-requirements.txt", date_time=_FIXED_ZIP_DATE_TIME
+                )
+                requirements_info.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(requirements_info, pack_requirements.encode("utf-8"))
+            for wheel in part_files:
+                info = zipfile.ZipInfo(wheel.name, date_time=_FIXED_ZIP_DATE_TIME)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(info, wheel.read_bytes())
+        written.append(part_path)
+    return written
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -202,18 +237,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--profile", required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--max-part-bytes",
+        type=int,
+        default=None,
+        help=(
+            "Split the pack into partNN.zip archives whose uncompressed size "
+            "stays under this limit (single wheels may exceed it)."
+        ),
+    )
     args = parser.parse_args(argv)
     try:
-        path = build_runtime_pack(
+        paths = build_runtime_pack(
             lock=args.lock,
             profile=args.profile,
             work_dir=args.work_dir,
             output=args.output,
+            max_part_bytes=args.max_part_bytes,
         )
     except (ManifestError, ValueError, RuntimeError) as exc:
         print(f"runtime pack build failed: {exc}", file=sys.stderr)
         return 1
-    print(path)
+    for path in paths:
+        print(path)
     return 0
 
 

@@ -158,7 +158,7 @@ def build_runtime_manifest(
     build_workflow: str,
     output_dir: Path,
     capabilities: tuple[str, ...] = DEFAULT_CAPABILITIES,
-    base_runtime_pack: Path | None = None,
+    runtime_packs: dict[str, list[Path]] | None = None,
 ) -> Path:
     if not _STABLE_SEMVER.fullmatch(backend_version):
         raise ValueError("backend_version must be stable SemVer")
@@ -199,11 +199,15 @@ def build_runtime_manifest(
     )
     copied_python = _copy_exact(python_archive, output_dir)
     copied_installer = _copy_exact(installer_archive, output_dir)
-    copied_pack = (
-        _copy_exact(base_runtime_pack, output_dir)
-        if base_runtime_pack is not None
-        else None
-    )
+    pack_inputs = runtime_packs or {}
+    copied_packs: dict[str, list[Path]] = {
+        profile: [_copy_exact(pack, output_dir) for pack in packs]
+        for profile, packs in pack_inputs.items()
+        if packs
+    }
+    for profile in copied_packs:
+        if profile not in PROFILE_NAMES:
+            raise ValueError(f"unknown runtime pack profile: {profile}")
     copied_profiles = {
         profile: _copy_exact(profile_sources[profile], output_dir)
         for profile in PROFILE_NAMES
@@ -239,15 +243,15 @@ def build_runtime_manifest(
         "profiles": {
             profile: {
                 "lock": copied_profiles[profile].name,
-                "runtime_pack": (
-                    copied_pack.name
-                    if profile == "win-x64-base" and copied_pack is not None
-                    else None
-                ),
                 **(
-                    {"runtime_pack_sha256": sha256_file(copied_pack)}
-                    if profile == "win-x64-base" and copied_pack is not None
-                    else {}
+                    {
+                        "runtime_pack": [pack.name for pack in copied_packs[profile]],
+                        "runtime_pack_sha256": [
+                            sha256_file(pack) for pack in copied_packs[profile]
+                        ],
+                    }
+                    if copied_packs.get(profile)
+                    else {"runtime_pack": None}
                 ),
                 "sha256": sha256_file(copied_profiles[profile]),
                 "components": _profile_components(copied_profiles[profile], profile),
@@ -268,7 +272,7 @@ def build_runtime_manifest(
         copied_protocol_manifest,
         copied_python,
         copied_installer,
-        *([copied_pack] if copied_pack is not None else []),
+        *(pack for packs in copied_packs.values() for pack in packs),
         *(copied_profiles[profile] for profile in PROFILE_NAMES),
         manifest_path,
     ]
@@ -307,8 +311,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--base-runtime-pack",
         type=Path,
+        action="append",
         default=None,
-        help="Optional offline wheel-closure archive bound to the base profile.",
+        help="Offline wheel-closure archive bound to the base profile (repeatable).",
+    )
+    parser.add_argument(
+        "--cpu-runtime-pack",
+        type=Path,
+        action="append",
+        default=None,
+        help="Offline pack part bound to the CPU profile (repeatable for splits).",
+    )
+    parser.add_argument(
+        "--cu126-runtime-pack",
+        type=Path,
+        action="append",
+        default=None,
+        help="Offline pack part bound to the cu126 profile (repeatable for splits).",
     )
     parser.add_argument("--backend-version", required=True)
     parser.add_argument("--source-commit", default=None)
@@ -337,7 +356,11 @@ def main(argv: list[str] | None = None) -> int:
         build_workflow=args.build_workflow,
         output_dir=args.output_dir,
         capabilities=tuple(args.capabilities or DEFAULT_CAPABILITIES),
-        base_runtime_pack=args.base_runtime_pack,
+        runtime_packs={
+            "win-x64-base": args.base_runtime_pack or [],
+            "win-x64-cpu": args.cpu_runtime_pack or [],
+            "win-x64-cu126": args.cu126_runtime_pack or [],
+        },
     )
     print(path)
     return 0

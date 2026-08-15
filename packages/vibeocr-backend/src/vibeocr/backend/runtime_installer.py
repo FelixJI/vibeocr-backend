@@ -296,14 +296,22 @@ def _default_install_runner(
         "install",
         "--only-binary=:all:",
     ]
-    if runtime_pack is not None:
+    pack_files = [manifest.path.parent / name for name in runtime_pack]
+    pack_present = bool(pack_files) and all(path.is_file() for path in pack_files)
+    if runtime_pack and not pack_present and profile == "win-x64-base":
+        # base 是随 Portable 携带的必备闭包：缺失即产品不完整，fail closed
+        # 而不是静默联网安装（计划 §4.1）。full 闭包的 pack 由用户按需下载，
+        # 未到位时回退在线安装是合法状态（cu126 因 torch 单 wheel 超过
+        # Release 资产上限，长期保持在线直链路径）。
+        raise RuntimeInstallError(f"runtime pack is missing: {runtime_pack[0]}")
+    if pack_present:
         # 离线路径（计划 §4.2）：manifest 绑定的 runtime pack 提供完整
         # wheel 闭包，安装禁止回退公网。pack 整体字节完整性由
         # runtime_pack_sha256 在 manifest 加载时验证；解析输入用 pack 自带
         # 的无哈希 requirements 清单——原 lock 的哈希行覆盖 sdist 工件，
         # 对 pack 内由 sdist 构建的 wheel 必然不匹配。
         pack_dir = _extract_runtime_pack(
-            manifest.path.parent / runtime_pack,
+            pack_files,
             cache / "runtime-packs",
             reporter=reporter,
         )
@@ -440,41 +448,50 @@ def _extract_python_archive(
 
 
 def _extract_runtime_pack(
-    archive_path: Path,
+    archive_paths: list[Path],
     cache_root: Path,
     *,
     reporter: RuntimeMaintenanceReporter | None = None,
 ) -> Path:
-    """Idempotently extract a manifest-bound runtime pack into the cache.
+    """Idempotently extract manifest-bound runtime pack parts into the cache.
 
-    The pack is a flat zip of wheels plus its hash-free requirements
-    manifest (``pack-requirements.txt``). The archive SHA-256 has already
-    been verified by ``load_runtime_manifest``; extraction is guarded
-    against unsafe members and only re-runs when the destination marker is
-    missing, so repeated ensure/repair installs stay offline and cheap.
+    A pack is one or more flat zips of wheels; the first part also carries
+    the hash-free requirements manifest (``pack-requirements.txt``). Each
+    archive's SHA-256 has already been verified by ``load_runtime_manifest``;
+    extraction is guarded against unsafe members and only re-runs when the
+    destination marker is missing, so repeated ensure/repair installs stay
+    offline and cheap.
     """
-    destination = cache_root / archive_path.stem
+    if not archive_paths:
+        raise RuntimeInstallError("runtime pack binding is empty")
+    # 分片名形如 <pack>.part01.zip:缓存目录按去掉分片后缀的公共 stem。
+    stem = re.sub(r"\.part\d+$", "", archive_paths[0].stem)
+    destination = cache_root / stem
     marker = destination / ".complete"
     if marker.is_file():
         return destination
-    if not archive_path.is_file():
-        raise RuntimeInstallError(f"runtime pack is missing: {archive_path.name}")
+    for archive_path in archive_paths:
+        if not archive_path.is_file():
+            raise RuntimeInstallError(f"runtime pack is missing: {archive_path.name}")
     if destination.exists():
         shutil.rmtree(destination)
     destination.mkdir(parents=True)
     try:
-        with zipfile.ZipFile(archive_path) as archive:
-            for name in archive.namelist():
-                parts = Path(name.replace("\\", "/")).parts
-                if (
-                    not parts
-                    or ".." in parts
-                    or Path(name).is_absolute()
-                    or len(parts) != 1
-                    or not (name.endswith(".whl") or name == "pack-requirements.txt")
-                ):
-                    raise RuntimeInstallError(f"unsafe runtime pack member: {name}")
-                archive.extract(name, destination)
+        for archive_path in archive_paths:
+            with zipfile.ZipFile(archive_path) as archive:
+                for name in archive.namelist():
+                    parts = Path(name.replace("\\", "/")).parts
+                    if (
+                        not parts
+                        or ".." in parts
+                        or Path(name).is_absolute()
+                        or len(parts) != 1
+                        or not (
+                            name.endswith(".whl") or name == "pack-requirements.txt"
+                        )
+                    ):
+                        raise RuntimeInstallError(f"unsafe runtime pack member: {name}")
+                    archive.extract(name, destination)
     except zipfile.BadZipFile as exc:
         raise RuntimeInstallError("runtime pack archive is invalid") from exc
     if not (destination / "pack-requirements.txt").is_file():

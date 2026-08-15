@@ -190,7 +190,7 @@ def test_build_binds_base_profile_and_runtime_pack(tmp_path: Path) -> None:
         source_commit="a" * 40,
         build_workflow="tests/runtime-manifest",
         output_dir=tmp_path / "output",
-        base_runtime_pack=pack,
+        runtime_packs={"win-x64-base": [pack]},
     )
     manifest = load_runtime_manifest(manifest_path)
     base = manifest.profiles["win-x64-base"]
@@ -204,13 +204,37 @@ def test_build_binds_base_profile_and_runtime_pack(tmp_path: Path) -> None:
     versions = {c.component_id: c.version for c in base.components}
     assert versions["ocr_engine"] == "3.9.2"
     assert versions["image_code_tools"] == "5.0.0.93"
-    assert base.runtime_pack == pack.name
-    assert base.runtime_pack_sha256 == hashlib.sha256(pack.read_bytes()).hexdigest()
+    assert base.runtime_pack == (pack.name,)
+    assert base.runtime_pack_sha256 == (hashlib.sha256(pack.read_bytes()).hexdigest(),)
     # 篡改输出目录中绑定的 pack 副本后 loader fail closed。
     (manifest_path.parent / pack.name).write_bytes(b"tampered")
     from vibeocr.backend.runtime_manifest import ManifestError
 
     with pytest.raises(ManifestError, match="runtime pack SHA-256 mismatch"):
+        load_runtime_manifest(manifest_path)
+
+
+def test_loader_rejects_legacy_string_pack(tmp_path: Path) -> None:
+    """runtime_pack 必须是分片文件名列表:旧单字符串形态 fail closed。"""
+    manifest_path = _build(tmp_path / "input", tmp_path / "output")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["profiles"]["win-x64-base"]["runtime_pack"] = "pack.zip"
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    from vibeocr.backend.runtime_manifest import ManifestError
+
+    with pytest.raises(ManifestError, match="must be a non-empty filename list"):
+        load_runtime_manifest(manifest_path)
+
+
+def test_loader_rejects_mismatched_pack_sha_length(tmp_path: Path) -> None:
+    manifest_path = _build(tmp_path / "input", tmp_path / "output")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["profiles"]["win-x64-base"]["runtime_pack"] = ["p1.zip", "p2.zip"]
+    raw["profiles"]["win-x64-base"]["runtime_pack_sha256"] = ["0" * 64]
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    from vibeocr.backend.runtime_manifest import ManifestError
+
+    with pytest.raises(ManifestError, match="parallel runtime_pack"):
         load_runtime_manifest(manifest_path)
 
 
