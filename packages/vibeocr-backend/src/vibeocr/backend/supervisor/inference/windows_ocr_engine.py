@@ -4,7 +4,7 @@
 
 * adapter 随 base 运行时携带；系统 OCR/语言包由 Windows 动态探测，
   未通过探测时必须显示 unavailable，不能伪造成空识别结果。
-* WinRT projection（winsdk）全部惰性导入；不可用环境的导入失败映射
+* WinRT projection（pywinrt winrt-runtime）全部惰性导入；导入失败映射
   为结构化 unavailable，而不是让进程崩溃。
 * 行级 bbox 归一化到 [0,1000]；Windows OCR 不提供置信度，
   契约策略为固定 score=1.0（缺失置信度不等于低置信度），由本模块
@@ -124,13 +124,13 @@ class WindowsMediaOcrEngine:
 
     @staticmethod
     def _import_ocr_engine_cls() -> Any:
-        from winsdk.windows.media.ocr import OcrEngine
+        from winrt.windows.media.ocr import OcrEngine
 
         return OcrEngine
 
     @staticmethod
     def _import_language_cls() -> Any:
-        from winsdk.windows.globalization import Language
+        from winrt.windows.globalization import Language
 
         return Language
 
@@ -180,12 +180,12 @@ class WindowsMediaOcrEngine:
         return self._result_to_payload(result, width, height)
 
     async def _decode_bitmap(self, raw: bytes) -> tuple[Any, int, int]:
-        from winsdk.windows.graphics.imaging import (
+        from winrt.windows.graphics.imaging import (
             BitmapDecoder,
             BitmapPixelFormat,
             SoftwareBitmap,
         )
-        from winsdk.windows.storage.streams import (
+        from winrt.windows.storage.streams import (
             DataWriter,
             InMemoryRandomAccessStream,
         )

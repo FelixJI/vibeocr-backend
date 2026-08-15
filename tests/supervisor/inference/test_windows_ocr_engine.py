@@ -1,6 +1,6 @@
-"""WindowsMediaOcrEngine adapter 测试：fake WinRT 对象驱动，不依赖 winsdk。
+"""WindowsMediaOcrEngine adapter 测试：fake WinRT 对象驱动，不依赖 pywinrt。
 
-覆盖计划 §B0.3/§B3 的可测部分：descriptor 探测（无 winsdk / 无语言包 /
+覆盖计划 §B0.3/§B3 的可测部分：descriptor 探测（无 pywinrt / 无语言包 /
 就绪）、行级 bbox 归一化、无 score 契约策略（固定 1.0）、指定语言缺
 语言包时 OCR_ENGINE_LANGUAGE_UNAVAILABLE 且不回退其他语言。
 """
@@ -34,7 +34,7 @@ class _SyncRunner:
 
 
 class _FakeWinrtOcrEngine:
-    """winsdk.windows.media.ocr.OcrEngine 的最小 fake。"""
+    """winrt.windows.media.ocr.OcrEngine 的最小 fake。"""
 
     user_profile_engine: Any = "engine-object"
     language_engines: dict[str, Any] = {}
@@ -92,9 +92,11 @@ def _input(item_id: str = "w-1") -> InputItem:
 
 
 class TestDescriptor:
-    def test_unavailable_without_winsdk(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 强制 winsdk 导入失败（模块缓存置 None 即 ImportError）。
-        monkeypatch.setitem(sys.modules, "winsdk", None)
+    def test_unavailable_without_projection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 强制 winrt 导入失败（模块缓存置 None 即 ImportError）。
+        monkeypatch.setitem(sys.modules, "winrt", None)
         descriptor = WindowsMediaOcrEngine().descriptor()
         assert descriptor.availability is EngineAvailability.UNAVAILABLE
         assert descriptor.reason_code == REASON_ENGINE_NOT_INSTALLED

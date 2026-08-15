@@ -1,0 +1,39 @@
+# Resolved for CPython 3.13 / Windows x64 by scripts/build_runtime_manifest.py.
+#
+# base-offline 闭包（docs/ocr-engine-runtime-profiles-execution-plan.md §4.1）：
+# 随 Classic/Next Portable 携带、禁网可安装的必备闭包。只含 Backend/Protocol
+# 运行时、通用文本 OCR 缺省引擎与图片编解码；Paddle/MinerU/CUDA 等重型组件
+# 属于 full-cpu / full-cu126 附加闭包，不进入 base。
+pillow>=12.3.0
+numpy>=2.3.5
+httpx>=0.28.1
+jsonschema>=4.25.0
+pymupdf>=1.28.0
+pydantic>=2.13.4
+fastapi>=0.139.0
+uvicorn>=0.51.0
+fonttools>=4.63.0
+markdown>=3.10.2
+python-docx>=1.2.0
+openpyxl>=3.1.5
+qrcode[pil]>=8.2
+python-barcode>=0.16.1
+pyzbar>=0.1.9
+pynvml>=11.5.0
+packaging>=26.0
+python-multipart>=0.0.32
+# base 只保留一套 OpenCV 发行物（rapidocr 硬依赖 opencv-python，本仓不使用
+# contrib 专用模块），消除 opencv-python/opencv-contrib-python 并存风险。
+opencv-python>=4.10.0.84
+# RapidOCR：缺省引擎，wheel 内置 PP-OCRv6 模型。onnxruntime 由本仓显式
+# 锁定——rapidocr 的 metadata 不声明它，运行时动态导入。
+rapidocr>=3.9.2,<4
+onnxruntime>=1.22
+# Windows Media OCR adapter（pywinrt projection）；系统 OCR/语言包由
+# Windows 动态提供。winsdk 是 sdist-only 的 scikit-build 包，不适合离线
+# wheel 闭包；改用带 win_amd64 wheel 的 winrt-runtime + 组件包。
+winrt-runtime>=3.2,<4
+winrt-Windows.Media.Ocr>=3.2,<4
+winrt-Windows.Globalization>=3.2,<4
+winrt-Windows.Graphics.Imaging>=3.2,<4
+winrt-Windows.Storage.Streams>=3.2,<4

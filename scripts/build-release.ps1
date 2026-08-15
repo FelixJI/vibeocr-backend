@@ -82,7 +82,7 @@ Invoke-WebRequest -Uri $runtimeLock.source_url -OutFile $pythonArchive
 if ((Get-Sha256 $pythonArchive) -ne $runtimeLock.sha256) {
     throw 'standalone Python archive hash mismatch'
 }
-python -m pip install build==1.5.0 hatchling==1.27.0 pyinstaller==6.21.0
+python -m pip install build==1.5.0 hatchling==1.27.0 pyinstaller==6.21.0 setuptools==84.0.0
 if ($LASTEXITCODE -ne 0) { throw 'Release build dependency installation failed' }
 python -m build --wheel --no-isolation (Join-Path $root 'packages/vibeocr-backend') --outdir $build
 if ($LASTEXITCODE -ne 0) { throw 'Backend wheel build failed' }
@@ -97,15 +97,26 @@ $protocolWheel = Get-ChildItem -LiteralPath $protocol `
   Select-Object -First 1
 $installerArchive = Get-ChildItem -LiteralPath $build -Filter "vibeocr-runtime-installer-$Version.zip" |
   Select-Object -First 1
+# base-offline 离线 wheel 闭包：从精确 hash lock 下载并校验，随 Release 资产
+# 发布，供 Portable 禁网安装 base profile（计划 §4.2）。
+python (Join-Path $root 'scripts/build_runtime_pack.py') `
+  --lock (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-base/requirements-win-x64-base.lock') `
+  --profile win-x64-base `
+  --work-dir (Join-Path $build 'runtime-pack-work') `
+  --output (Join-Path $build "vibeocr-runtime-pack-win-x64-base-$Version.zip")
+if ($LASTEXITCODE -ne 0) { throw 'Runtime pack build failed' }
+$baseRuntimePack = Join-Path $build "vibeocr-runtime-pack-win-x64-base-$Version.zip"
 python (Join-Path $root 'scripts/build_runtime_manifest.py') `
   --backend-wheel $backendWheel.FullName `
   --protocol-wheel $protocolWheel.FullName `
   --protocol-manifest (Join-Path $protocol 'release-manifest.json') `
+  --base-lock (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-base/requirements-win-x64-base.lock') `
   --cpu-lock (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements-win-x64-cpu.lock') `
   --cu126-lock (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-cu126/requirements-win-x64-cu126.lock') `
   --python-archive $pythonArchive --python-version $runtimeLock.version `
   --python-source-url $runtimeLock.source_url `
   --installer-archive $installerArchive.FullName --backend-version $Version `
+  --base-runtime-pack $baseRuntimePack `
   --source-commit (git -C $root rev-parse HEAD).Trim() `
   --build-workflow 'github.com/FelixJI/vibeocr-backend/.github/workflows/release.yml' `
   --output-dir $artifacts

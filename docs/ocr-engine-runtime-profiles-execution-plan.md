@@ -1,18 +1,34 @@
 # OCR 引擎与离线运行时执行计划
 
-> 状态:部分实施(2026-08-15)。B1–B4 已在 `codex/ocr-engines` 分支完成并通过
-> 质量门与协议一致性;B5(profile/pack/installer 重构)与 B6(正式 release)
-> 待后续工作包。本文只定义 `vibeocr-backend` 仓库的工作包;不在 Backend 添加 UI。
+> 状态:部分实施(2026-08-15,PR #43)。B1–B4 已完成并通过质量门与协议
+> 一致性;B5 第一片已落地:新增 `win-x64-base` 离线 profile(RapidOCR +
+> 显式 onnxruntime + pywinrt(winrt-runtime 及组件包) + 单套 opencv-python 的 hash lock)、manifest
+> 三 profile 绑定(base 可选 runtime_pack + SHA-256)、installer 离线安装
+> 路径(manifest 绑定 pack 时 `--no-index --find-links`,幂等解压,
+> pack 缺失 fail closed)与 `scripts/build_runtime_pack.py`(确定性 zip,
+> 下载即校验)。B5 剩余(full pack 附加下载/校验/移除流程、full 锁的
+> OpenCV 去重)与 B6(正式 release)待后续工作包。本文只定义
+> `vibeocr-backend` 仓库的工作包;不在 Backend 添加 UI。
 >
 > 许可决策记录(维护者拍板,2026-08-15):项目定位为开源、非商业分发。
 > RapidOCR wheel/PP-OCRv6 ONNX 权重与 PyMuPDF(AGPL-3.0)按开源非商业口径
 > 接受,B0.1/B0.2 不再作为实施阻塞;正式发布(B6)前仍需在 Release 资产中
 > 完成 NOTICE/SPDX SBOM 记录,B0.3 的隔离机验证仍待执行。
 >
+> B5 第一片已真实验证(2026-08-15 本机):从 base hash lock 构建出
+> 59-wheel/134 MiB 离线 pack(单 ORT、单 OpenCV、antlr sdist 离线 wheel 化),
+> `--no-index --find-links` 全新目录安装成功,rapidocr/onnxruntime/winrt
+> projection 全部可导入,并完成一次真实识别冒烟(`Hello VibeOCR 123`,
+> score 0.96,bbox 归一化正确,模型来自 wheel 内置,零网络下载)。
+> 附带发现并绕开两个生态事实:rapidocr 依赖的 omegaconf→antlr4-python3-runtime
+> 4.9.3 只有 sdist;winsdk 是 scikit-build sdist——Windows adapter 改用带
+> win_amd64 wheel 的 winrt-runtime + 组件包。
+>
 > 实施备注:Protocol 2.6.0 的 stdlib parser 尚不接受 wire `engine` 字段
 > (OpenAPI schema 已允许);Backend 在 `supervisor/app.py` 的提交边界以
 > `_extract_engine_selection` seam 严格解析并 fail closed,Protocol parser
-> 修复后可移除该 seam。
+> 修复后可移除该 seam。rapidocr 3.9.2 的 metadata 不声明 onnxruntime
+> (运行时动态导入),因此 base lock 由本仓显式锁定 ORT(§4.3)。
 
 ## 1. 目标与边界
 

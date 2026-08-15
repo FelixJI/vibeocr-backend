@@ -10,8 +10,16 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any
 
-PROFILE_NAMES = ("win-x64-cpu", "win-x64-cu126")
+PROFILE_NAMES = ("win-x64-base", "win-x64-cpu", "win-x64-cu126")
 PROFILE_COMPONENTS = {
+    # base-offline 必备闭包：随 Portable 携带、禁网可安装（计划 §4.1）。
+    # 缺省 OCR 引擎是 RapidOCR（ocr_engine 组件）；不含 MinerU/CUDA。
+    "win-x64-base": (
+        ("ocr_engine", "Default offline OCR engine"),
+        ("pdf_document_tools", "PDF and document tools"),
+        ("image_code_tools", "Image, QR, and barcode tools"),
+        ("runtime_host", "Runtime HTTP host"),
+    ),
     "win-x64-cpu": (
         ("ocr_engine", "OCR engine"),
         ("document_parsing", "Document parsing"),
@@ -59,6 +67,7 @@ class RuntimeProfile:
     sha256: str
     runtime_pack: str | None
     components: tuple[RuntimeComponent, ...]
+    runtime_pack_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,7 +222,23 @@ def validate_requirements_lock(path: Path, *, profile: str) -> None:
             raise ManifestError(f"runtime requirement has no SHA-256: {declaration}")
 
     lowered = "\n".join(lines).lower()
-    if profile == "win-x64-cpu":
+    if profile == "win-x64-base":
+        # base 闭包必须自带缺省引擎（RapidOCR + 显式 ORT + Windows adapter），
+        # 且不得混入 full 闭包的重型组件或第二套 OpenCV。
+        for required in ("rapidocr", "onnxruntime", "winrt-runtime", "opencv-python"):
+            if required not in lowered:
+                raise ManifestError(f"base lock is missing {required}")
+        for forbidden in (
+            "paddlepaddle",
+            "paddleocr",
+            "mineru",
+            "torch",
+            "cu126",
+            "opencv-contrib-python",
+        ):
+            if forbidden in lowered:
+                raise ManifestError(f"base lock contains {forbidden}")
+    elif profile == "win-x64-cpu":
         if "paddlepaddle-gpu" in lowered or "cu126" in lowered:
             raise ManifestError("CPU lock contains a GPU/cu126 artifact")
     elif profile == "win-x64-cu126":
@@ -341,7 +366,9 @@ def load_runtime_manifest(
     )
     profiles_data = data.get("profiles")
     if not isinstance(profiles_data, dict) or set(profiles_data) != set(PROFILE_NAMES):
-        raise ManifestError("runtime manifest must define CPU and cu126 profiles")
+        raise ManifestError(
+            "runtime manifest must define base, CPU, and cu126 profiles"
+        )
     profiles: dict[str, RuntimeProfile] = {}
     for name in PROFILE_NAMES:
         record = profiles_data[name]
@@ -351,10 +378,20 @@ def load_runtime_manifest(
         lock_path = manifest_path.parent / filename
         lock_sha = _sha256(record.get("sha256"), field=f"profiles.{name}.sha256")
         runtime_pack = record.get("runtime_pack")
+        runtime_pack_sha: str | None = None
         if runtime_pack is not None:
             runtime_pack = _relative_filename(
                 runtime_pack,
                 field=f"profiles.{name}.runtime_pack",
+            )
+            # 离线 pack 必须绑定字节哈希：installer 禁网安装完全信任该闭包。
+            runtime_pack_sha = _sha256(
+                record.get("runtime_pack_sha256"),
+                field=f"profiles.{name}.runtime_pack_sha256",
+            )
+        elif record.get("runtime_pack_sha256") is not None:
+            raise ManifestError(
+                f"profiles.{name}.runtime_pack_sha256 requires runtime_pack"
             )
         expected = default_profile_components(name)
         components_data = record.get("components")
@@ -392,12 +429,16 @@ def load_runtime_manifest(
             if sha256_file(lock_path) != lock_sha:
                 raise ManifestError(f"{name} lock SHA-256 mismatch")
             validate_requirements_lock(lock_path, profile=name)
+            if runtime_pack is not None and runtime_pack_sha is not None:
+                if sha256_file(manifest_path.parent / runtime_pack) != runtime_pack_sha:
+                    raise ManifestError(f"{name} runtime pack SHA-256 mismatch")
         profiles[name] = RuntimeProfile(
             name,
             lock_path,
             lock_sha,
             runtime_pack,
             components,
+            runtime_pack_sha256=runtime_pack_sha,
         )
     capabilities = data.get("capabilities")
     if (
