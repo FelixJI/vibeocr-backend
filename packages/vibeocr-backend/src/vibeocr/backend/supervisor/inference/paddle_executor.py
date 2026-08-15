@@ -39,6 +39,7 @@ from vibeocr.runtime_contracts import (
 )
 
 from .budgets import AdapterCapability, BudgetPlanner, InputItem
+from .ocr_engines import OcrEngineError
 from .recovery import FailureClass, RecoveryAction, RecoveryPolicy
 from .scheduler import DeviceScheduler
 
@@ -207,6 +208,24 @@ class AdapterExecutor:
             return
         try:
             payloads = self.adapter.recognize_many(items, options=options)
+        except OcrEngineError as exc:
+            # 引擎选择失败是确定性错误：直接按协议错误码标记本批 item，
+            # 不进入 bisect/backoff 恢复路径，也不切换引擎。
+            record.append_event(
+                "ocr_engine_rejected",
+                detail={
+                    "code": exc.code.value,
+                    "engine": exc.engine,
+                    "reason_code": exc.reason_code,
+                },
+            )
+            self._fail_items(
+                record,
+                items,
+                error_code=exc.code.value,
+                error=str(exc),
+            )
+            return
         except Exception as exc:
             failure = policy.classify(
                 str(exc), cancelled=record.cancel_requested_at is not None

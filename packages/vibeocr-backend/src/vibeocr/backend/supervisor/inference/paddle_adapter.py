@@ -31,10 +31,21 @@ from vibeocr.runtime_contracts import (
     ResidencyStatus,
     SettingsSnapshot,
 )
+from vibeocr.runtime_contracts.dtos import OcrEngine
 
 from .budgets import AdapterCapability, ComputeBatch, InputItem
+from .ocr_engines import (
+    REASON_ENGINE_INIT_FAILED,
+    REASON_ENGINE_NOT_INSTALLED,
+    EngineAvailability,
+    EngineDescriptor,
+)
 
 logger = logging.getLogger(__name__)
+
+# PaddleOCR 属于用户显式准备的重型组件（full-cpu/full-cu126 pack），
+# 不随 base-offline 运行时携带。
+PADDLE_REQUIRED_COMPONENT = "full-cpu"
 
 
 class _OCRServiceLike(Protocol):
@@ -49,13 +60,55 @@ class _OCRServiceLike(Protocol):
 
 @dataclass
 class PaddlePipelineAdapter:
-    """Wraps an OCRService-like object behind ``recognize_many``."""
+    """Wraps an OCRService-like object behind ``recognize_many``.
+
+    同时以 ``engine_id=paddleocr`` 实现 GeneralTextOcrEngine 契约；
+    其他 Paddle 管道（表格/公式/版面）继续经本 adapter 的
+    ``pipeline_name`` 路由，不经过 engine resolver。
+    """
 
     service: _OCRServiceLike
     pipeline_name: str = "OCR"
     # Capability is cached per semantic pipeline, never globally.
     _capabilities: dict[str, AdapterCapability] = field(default_factory=dict)
     _settings: SettingsSnapshot = field(default_factory=SettingsSnapshot)
+
+    engine_id = OcrEngine.PADDLEOCR
+    included_in_base = False
+
+    # ------------------------------------------------------------------
+    # Engine contract
+    # ------------------------------------------------------------------
+
+    def descriptor(self) -> EngineDescriptor:
+        return self._probe_descriptor()
+
+    @staticmethod
+    def _probe_descriptor() -> EngineDescriptor:
+        """探测 paddle 可导入性；不触发模型加载。"""
+        try:
+            __import__("paddle")
+        except ImportError:
+            return EngineDescriptor(
+                engine_id=OcrEngine.PADDLEOCR,
+                availability=EngineAvailability.PREPARATION_REQUIRED,
+                included_in_base=False,
+                reason_code=REASON_ENGINE_NOT_INSTALLED,
+                required_component=PADDLE_REQUIRED_COMPONENT,
+            )
+        except Exception:
+            logger.exception("[Supervisor][PaddleOCR] probe import failed")
+            return EngineDescriptor(
+                engine_id=OcrEngine.PADDLEOCR,
+                availability=EngineAvailability.UNAVAILABLE,
+                included_in_base=False,
+                reason_code=REASON_ENGINE_INIT_FAILED,
+            )
+        return EngineDescriptor(
+            engine_id=OcrEngine.PADDLEOCR,
+            availability=EngineAvailability.READY,
+            included_in_base=False,
+        )
 
     # ------------------------------------------------------------------
     # Capability

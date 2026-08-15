@@ -9,6 +9,7 @@ session-scoped temp directory under the OS temp or a portable location).
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -76,20 +77,65 @@ class _NullExecutor:
         return
 
 
-def _build_paddle_executor(*, scheduler: Any = None) -> Executor:
-    """Construct a real PaddleExecutor backed by the singleton OCRService.
+def _paddle_adapter_factory() -> Any:
+    """惰性构建 Paddle adapter：导入 OCRService 延迟到首次使用。"""
+    from vibeocr.backend.services.ocr_service import OCRService
 
-    The heavy model load is deferred: OCRService is a lazy singleton, so the
-    first ``recognize_many`` call (not import) pays the model-load cost.
-    """
     from .inference.paddle_adapter import PaddlePipelineAdapter
+
+    return PaddlePipelineAdapter(service=OCRService())
+
+
+def _build_ocr_engine_registry(
+    paddle_adapter_factory: Callable[[], Any],
+) -> Any:
+    """构建引擎 registry：rapidocr / windows / paddleocr 全部注册。
+
+    目录探测来自实际探针（importability/语言包），未安装的稳定 id 以
+    unavailable descriptor 占位。Paddle 以 LazyEngineHandle 注册，保持
+    重依赖导入惰性。
+    """
+    from vibeocr.runtime_contracts.dtos import OcrEngine
+
+    from .inference.ocr_engines import LazyEngineHandle, OcrEngineRegistry
+    from .inference.rapidocr_engine import RapidOcrEngine
+    from .inference.windows_ocr_engine import WindowsMediaOcrEngine
+
+    def paddle_descriptor() -> Any:
+        from .inference.paddle_adapter import PaddlePipelineAdapter
+
+        return PaddlePipelineAdapter._probe_descriptor()
+
+    return OcrEngineRegistry(
+        [
+            RapidOcrEngine(),
+            WindowsMediaOcrEngine(),
+            LazyEngineHandle(
+                engine_id=OcrEngine.PADDLEOCR,
+                descriptor_probe=paddle_descriptor,
+                factory=paddle_adapter_factory,
+            ),
+        ]
+    )
+
+
+def _build_paddle_executor(
+    *,
+    scheduler: Any = None,
+    engine_registry: Any = None,
+) -> Executor:
+    """Construct the RECOGNITION executor backed by real OCR engines.
+
+    The heavy model load is deferred: adapter factories are lazy, so the
+    first ``recognize_many`` call (not import) pays the model-load cost.
+    When ``engine_registry`` is provided the paddle adapter is wrapped in an
+    :class:`OcrEngineRoutingAdapter`: plain-text ``OCR`` jobs route through
+    the engine resolver (default rapidocr, fail closed), while every other
+    Paddle pipeline keeps the direct adapter path.
+    """
+    from .inference.ocr_engine_router import OcrEngineRoutingAdapter
+    from .inference.ocr_engines import OcrEngineResolver
     from .inference.paddle_executor import PaddleExecutor
-
-    def factory() -> PaddlePipelineAdapter:
-        # Imported lazily so importing composition.py never pulls paddle.
-        from vibeocr.backend.services.ocr_service import OCRService
-
-        return PaddlePipelineAdapter(service=OCRService())
 
     def clear_cache() -> None:
         try:
@@ -100,8 +146,18 @@ def _build_paddle_executor(*, scheduler: Any = None) -> Executor:
         except Exception:
             pass
 
+    adapter_factory: Any = _paddle_adapter_factory
+    if engine_registry is not None:
+        resolver = OcrEngineResolver(registry=engine_registry)
+
+        def routing_factory() -> Any:
+            return OcrEngineRoutingAdapter(
+                fallback_factory=_paddle_adapter_factory, resolver=resolver
+            )
+
+        adapter_factory = routing_factory
     return PaddleExecutor(
-        adapter_factory=factory,
+        adapter_factory=adapter_factory,
         scheduler=scheduler,
         clear_cache=clear_cache,
     )
@@ -190,12 +246,18 @@ def _mineru_available() -> bool:
     return True
 
 
-def _build_composite_executor(*, use_paddle: bool, use_mineru: bool) -> Executor:
+def _build_composite_executor(
+    *,
+    use_paddle: bool,
+    use_mineru: bool,
+    engine_registry: Any = None,
+) -> Executor:
     """Build a CompositeExecutor over whichever real backends are available.
 
-    Paddle handles ``RECOGNITION`` jobs; MinerU handles ``MINERU_PARSE`` jobs.
-    If only one is available the composite still routes correctly; if neither
-    is, the caller falls back to ``_NullExecutor``.
+    Paddle handles ``RECOGNITION`` jobs (optionally behind the OCR engine
+    router); MinerU handles ``MINERU_PARSE`` jobs. If only one is available
+    the composite still routes correctly; if neither is, the caller falls
+    back to ``_NullExecutor``.
     """
     from vibeocr.runtime_contracts import JobKind
 
@@ -207,7 +269,9 @@ def _build_composite_executor(*, use_paddle: bool, use_mineru: bool) -> Executor
     if use_paddle:
         children.append(
             (
-                _build_paddle_executor(scheduler=scheduler),
+                _build_paddle_executor(
+                    scheduler=scheduler, engine_registry=engine_registry
+                ),
                 frozenset({JobKind.RECOGNITION}),
             )
         )
@@ -231,6 +295,7 @@ def build_supervisor(
     use_real_paddle: bool | None = None,
     use_mineru: bool | None = None,
     with_pdf_adapter: bool = False,
+    engine_registry: Any = None,
 ) -> tuple[SupervisorModule, BootstrapHandle]:
     """Assemble a supervisor module + bootstrap handle (token out of band).
 
@@ -270,17 +335,25 @@ def build_supervisor(
         )
         want_mineru = use_mineru is True or (use_mineru is None and _mineru_available())
         if want_paddle or want_mineru:
+            if want_paddle and engine_registry is None:
+                # 只有真实 RECOGNITION 后端存在时才构建引擎目录；
+                # Null/fake executor 场景由调用方显式注入 registry。
+                engine_registry = _build_ocr_engine_registry(_paddle_adapter_factory)
             exec_impl = _build_composite_executor(
-                use_paddle=want_paddle, use_mineru=want_mineru
+                use_paddle=want_paddle,
+                use_mineru=want_mineru,
+                engine_registry=engine_registry,
             )
         else:
             exec_impl = _NullExecutor()
+            engine_registry = None
     pdf_adapter = _build_pdf_adapter() if with_pdf_adapter else None
     module = SupervisorModule(
         options=opts,
         stager_root=root,
         executor=exec_impl,
         pdf_adapter=pdf_adapter,
+        engine_registry=engine_registry,
     )
     # Clean stale staging left by a previous crashed instance (plan Phase 2).
     # At startup no jobs are known yet, so every existing dir is stale.

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from functools import cache
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
@@ -58,9 +59,22 @@ from vibeocr.runtime_contracts import (
     parse_pipeline_spec,
     parse_submit_request,
 )
+from vibeocr.runtime_contracts.dtos import OcrEngine
 from vibeocr.runtime_contracts.errors import error_registry
+from vibeocr.runtime_contracts.generated.capabilities import (
+    OCR_ENGINE_SELECTION_V1,
+)
 
 from .auth import check_bearer_token, check_loopback, is_bootstrap_path
+from .inference.ocr_engines import (
+    REASON_ENGINE_NOT_INSTALLED,
+    EngineAvailability,
+    EngineDescriptor,
+    OcrEngineError,
+    OcrEngineResolver,
+    ensure_engine_valid_for_pipeline,
+    parse_wire_engine,
+)
 from .jobs.registry import JobNotFoundError
 from .jobs.staging import InputExpiredError, StagingQuotaError
 from .module import ShutdownRequested, SupervisorModule
@@ -118,15 +132,43 @@ def _error_response(
 
 
 @cache
-def _capability_descriptors() -> list[dict[str, Any]]:
-    registry = json.loads(
+def _capability_registry_json() -> dict[str, Any]:
+    return json.loads(
         files("vibeocr.runtime_contracts")
         .joinpath("capabilities.json")
         .read_text(encoding="utf-8")
     )
+
+
+def _fallback_engine_catalog() -> dict[str, Any]:
+    """无真实推理后端（Null/fake executor）时的诚实目录：全部不可用。"""
+    return {
+        "engines": [
+            EngineDescriptor(
+                engine_id=engine,
+                availability=EngineAvailability.UNAVAILABLE,
+                reason_code=REASON_ENGINE_NOT_INSTALLED,
+            ).to_payload()
+            for engine in OcrEngine
+        ]
+    }
+
+
+def _engine_catalog_for(module: SupervisorModule) -> dict[str, Any]:
+    registry = getattr(module, "engine_registry", None)
+    if registry is None:
+        return _fallback_engine_catalog()
+    return registry.catalog_payload()
+
+
+def _capability_descriptors(
+    engine_catalog: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    registry = _capability_registry_json()
     definitions = registry["definitions"]
-    return [
-        {
+    descriptors: list[dict[str, Any]] = []
+    for name in registry["capabilities"]:
+        descriptor = {
             "name": name,
             "lifecycle": definitions[name]["lifecycle"],
             "introduced_in": definitions[name]["introduced_in"],
@@ -134,8 +176,39 @@ def _capability_descriptors() -> list[dict[str, Any]]:
             "sunset_at": definitions[name]["sunset_at"],
             "replacement": definitions[name]["replacement"],
         }
-        for name in registry["capabilities"]
-    ]
+        if name == OCR_ENGINE_SELECTION_V1:
+            # 目录来自实际探针；协议要求 advertise 该 capability 时
+            # 每个稳定 engine id 恰好一个 descriptor。
+            descriptor["ocr_engine_catalog"] = engine_catalog or (
+                _fallback_engine_catalog()
+            )
+        descriptors.append(descriptor)
+    return descriptors
+
+
+def _engine_error_response(exc: OcrEngineError, instance_id: str) -> JSONResponse:
+    detail: dict[str, Any] = {"reason_code": exc.reason_code}
+    if exc.engine is not None:
+        detail["engine"] = exc.engine
+    if exc.selectable_engines:
+        detail["selectable_engines"] = list(exc.selectable_engines)
+    detail.update(exc.detail)
+    return _error_response(exc.code, instance_id, detail=detail)
+
+
+def _extract_engine_selection(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], OcrEngine | None]:
+    """从 wire pipeline selection 中抽出 engine 字段并严格解析。
+
+    Protocol 2.6.0 的 stdlib parser 尚不接受 ``engine`` 字段（wire schema
+    已允许）；本 seam 在边界处抽取、校验后回填 DTO，parser 升级后可移除。
+    """
+    pipeline = payload.get("pipeline")
+    if not isinstance(pipeline, dict) or "engine" not in pipeline:
+        return payload, None
+    engine = parse_wire_engine(pipeline.pop("engine"))
+    return payload, engine
 
 
 def _runtime_exception_response(exc: Exception, instance_id: str) -> JSONResponse:
@@ -202,6 +275,13 @@ def create_app(
     instance_id = module.options.instance_id
     status_provider = runtime_status_provider or runtime_status_from_environment
     resolved_runtime_control = runtime_control
+    # 每个 app 实例复用同一个 resolver：探针缓存在 component 修复后由
+    # runtime maintenance 显式失效，而不是每个请求重建。
+    engine_resolver = (
+        OcrEngineResolver(registry=module.engine_registry)
+        if module.engine_registry is not None
+        else None
+    )
 
     def control() -> RuntimeControl:
         nonlocal resolved_runtime_control
@@ -241,7 +321,9 @@ def create_app(
             "ready": not module.shutdown,
             "draining": module.draining,
             "capabilities": list(ALL_CAPABILITIES),
-            "capability_descriptors": _capability_descriptors(),
+            "capability_descriptors": _capability_descriptors(
+                _engine_catalog_for(module)
+            ),
         }
 
     @app.post("/v2/jobs", response_model=wire.JobRef)
@@ -259,7 +341,31 @@ def create_app(
             raw_manifest = form.get("manifest")
             if not isinstance(raw_manifest, str):
                 raise ValueError("manifest must be a JSON form field")
-            manifest = parse_submit_request(json.loads(raw_manifest))
+            payload = json.loads(raw_manifest)
+            if not isinstance(payload, dict):
+                raise ValueError("manifest must be a JSON object")
+            payload, engine = _extract_engine_selection(payload)
+            manifest = parse_submit_request(payload)
+            pipeline = manifest.pipeline
+            if pipeline is not None and pipeline.pipeline_id == "OCR":
+                # 显式 engine：先验 pipeline 合法性，再验可用性；
+                # 缺省 engine：同样 fail closed 地校验默认引擎可用性。
+                if engine is not None:
+                    ensure_engine_valid_for_pipeline(engine, pipeline.pipeline_id)
+                if engine_resolver is not None:
+                    engine_resolver.validate(engine)
+                if engine is not None:
+                    manifest = replace(
+                        manifest, pipeline=replace(pipeline, engine=engine)
+                    )
+            elif engine is not None:
+                # engine 来自 pipeline dict，理论上 pipeline 一定存在；
+                # 防御性兜底仍然显式拒绝而不是静默丢弃。
+                raise OcrEngineError(
+                    ErrorCode.OCR_ENGINE_NOT_VALID_FOR_PIPELINE,
+                    reason_code="engine_only_valid_for_ocr_pipeline",
+                    engine=engine.value,
+                )
             attachments: dict[str, tuple[str | None, bytes]] = {}
             for item in manifest.items:
                 if item.source.get("type") != "upload.v1":
@@ -276,6 +382,8 @@ def create_app(
                     await upload.read(),
                 )
             ref = module.submit_request(manifest, attachments)
+        except OcrEngineError as exc:
+            return _engine_error_response(exc, instance_id)
         except StagingQuotaError as exc:
             return _error_response(
                 ErrorCode.QUOTA_EXCEEDED,
