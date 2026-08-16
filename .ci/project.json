@@ -101,8 +101,7 @@
       "vibeocr_backend-*.whl",
       "vibeocr_runtime_contracts-2.*.whl",
       "vibeocr-runtime-installer-*.zip",
-      "vibeocr-runtime-pack-win-x64-base-*.zip",
-      "vibeocr-runtime-pack-win-x64-cpu-*.zip"
+      "vibeocr-runtime-pack-win-x64-base-*.zip"
     ],
     "mirrors": [
       {

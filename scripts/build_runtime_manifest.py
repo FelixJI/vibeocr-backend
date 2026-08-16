@@ -315,20 +315,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Offline wheel-closure archive bound to the base profile (repeatable).",
     )
-    parser.add_argument(
-        "--cpu-runtime-pack",
-        type=Path,
-        action="append",
-        default=None,
-        help="Offline pack part bound to the CPU profile (repeatable for splits).",
-    )
-    parser.add_argument(
-        "--cu126-runtime-pack",
-        type=Path,
-        action="append",
-        default=None,
-        help="Offline pack part bound to the cu126 profile (repeatable for splits).",
-    )
+
     parser.add_argument("--backend-version", required=True)
     parser.add_argument("--source-commit", default=None)
     parser.add_argument("--build-workflow", required=True)
@@ -356,11 +343,7 @@ def main(argv: list[str] | None = None) -> int:
         build_workflow=args.build_workflow,
         output_dir=args.output_dir,
         capabilities=tuple(args.capabilities or DEFAULT_CAPABILITIES),
-        runtime_packs={
-            "win-x64-base": args.base_runtime_pack or [],
-            "win-x64-cpu": args.cpu_runtime_pack or [],
-            "win-x64-cu126": args.cu126_runtime_pack or [],
-        },
+        runtime_packs={"win-x64-base": args.base_runtime_pack or []},
     )
     print(path)
     return 0
