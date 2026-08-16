@@ -52,13 +52,24 @@ DEFAULT_CAPABILITIES = (
 )
 
 _COMPONENT_VERSION_PACKAGES = {
-    "ocr_engine": "paddleocr",
+    # base 的 ocr_engine 组件是缺省引擎 RapidOCR；full 闭包是 PaddleOCR。
+    # base 只保留一套 OpenCV 发行物（opencv-python）。
+    ("win-x64-base", "ocr_engine"): "rapidocr",
+    ("win-x64-base", "image_code_tools"): "opencv-python",
+    ("win-x64-cpu", "ocr_engine"): "paddleocr",
+    ("win-x64-cu126", "ocr_engine"): "paddleocr",
     "document_parsing": "mineru",
     "pdf_document_tools": "pymupdf",
     "image_code_tools": "opencv-contrib-python",
     "runtime_host": "fastapi",
     "gpu_runtime": "torch",
 }
+
+
+def _component_version_package(profile: str, component_id: str) -> str | None:
+    if (profile, component_id) in _COMPONENT_VERSION_PACKAGES:
+        return _COMPONENT_VERSION_PACKAGES[(profile, component_id)]
+    return _COMPONENT_VERSION_PACKAGES.get(component_id)
 
 
 def _git_sha() -> str:
@@ -119,7 +130,7 @@ def _profile_components(path: Path, profile: str) -> list[dict[str, str]]:
     for descriptor in default_profile_components(profile):
         version = _locked_version(
             path,
-            _COMPONENT_VERSION_PACKAGES[descriptor.component_id],
+            _component_version_package(profile, descriptor.component_id),
         )
         result.append(
             {
@@ -135,6 +146,7 @@ def build_runtime_manifest(
     backend_wheel: Path,
     protocol_wheel: Path,
     protocol_manifest: Path,
+    base_lock: Path,
     cpu_lock: Path,
     cu126_lock: Path,
     python_archive: Path,
@@ -146,6 +158,7 @@ def build_runtime_manifest(
     build_workflow: str,
     output_dir: Path,
     capabilities: tuple[str, ...] = DEFAULT_CAPABILITIES,
+    runtime_packs: dict[str, list[Path]] | None = None,
 ) -> Path:
     if not _STABLE_SEMVER.fullmatch(backend_version):
         raise ValueError("backend_version must be stable SemVer")
@@ -169,6 +182,7 @@ def build_runtime_manifest(
         raise ValueError("Protocol manifest must be named release-manifest.json")
 
     profile_sources = {
+        "win-x64-base": base_lock.resolve(strict=True),
         "win-x64-cpu": cpu_lock.resolve(strict=True),
         "win-x64-cu126": cu126_lock.resolve(strict=True),
     }
@@ -185,6 +199,15 @@ def build_runtime_manifest(
     )
     copied_python = _copy_exact(python_archive, output_dir)
     copied_installer = _copy_exact(installer_archive, output_dir)
+    pack_inputs = runtime_packs or {}
+    copied_packs: dict[str, list[Path]] = {
+        profile: [_copy_exact(pack, output_dir) for pack in packs]
+        for profile, packs in pack_inputs.items()
+        if packs
+    }
+    for profile in copied_packs:
+        if profile not in PROFILE_NAMES:
+            raise ValueError(f"unknown runtime pack profile: {profile}")
     copied_profiles = {
         profile: _copy_exact(profile_sources[profile], output_dir)
         for profile in PROFILE_NAMES
@@ -220,7 +243,16 @@ def build_runtime_manifest(
         "profiles": {
             profile: {
                 "lock": copied_profiles[profile].name,
-                "runtime_pack": None,
+                **(
+                    {
+                        "runtime_pack": [pack.name for pack in copied_packs[profile]],
+                        "runtime_pack_sha256": [
+                            sha256_file(pack) for pack in copied_packs[profile]
+                        ],
+                    }
+                    if copied_packs.get(profile)
+                    else {"runtime_pack": None}
+                ),
                 "sha256": sha256_file(copied_profiles[profile]),
                 "components": _profile_components(copied_profiles[profile], profile),
             }
@@ -240,6 +272,7 @@ def build_runtime_manifest(
         copied_protocol_manifest,
         copied_python,
         copied_installer,
+        *(pack for packs in copied_packs.values() for pack in packs),
         *(copied_profiles[profile] for profile in PROFILE_NAMES),
         manifest_path,
     ]
@@ -260,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--backend-wheel", type=Path, required=True)
     parser.add_argument("--protocol-wheel", type=Path, required=True)
     parser.add_argument("--protocol-manifest", type=Path, required=True)
+    parser.add_argument("--base-lock", type=Path, required=True)
     parser.add_argument("--cpu-lock", type=Path, required=True)
     parser.add_argument("--cu126-lock", type=Path, required=True)
     parser.add_argument("--python-archive", type=Path, required=True)
@@ -274,6 +308,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--installer-archive", type=Path, required=True)
+    parser.add_argument(
+        "--base-runtime-pack",
+        type=Path,
+        action="append",
+        default=None,
+        help="Offline wheel-closure archive bound to the base profile (repeatable).",
+    )
+
     parser.add_argument("--backend-version", required=True)
     parser.add_argument("--source-commit", default=None)
     parser.add_argument("--build-workflow", required=True)
@@ -289,6 +331,7 @@ def main(argv: list[str] | None = None) -> int:
         backend_wheel=args.backend_wheel,
         protocol_wheel=args.protocol_wheel,
         protocol_manifest=args.protocol_manifest,
+        base_lock=args.base_lock,
         cpu_lock=args.cpu_lock,
         cu126_lock=args.cu126_lock,
         python_archive=args.python_archive,
@@ -300,6 +343,7 @@ def main(argv: list[str] | None = None) -> int:
         build_workflow=args.build_workflow,
         output_dir=args.output_dir,
         capabilities=tuple(args.capabilities or DEFAULT_CAPABILITIES),
+        runtime_packs={"win-x64-base": args.base_runtime_pack or []},
     )
     print(path)
     return 0

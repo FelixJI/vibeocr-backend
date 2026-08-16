@@ -155,46 +155,67 @@ def test_build_supervisor_explicit_executor_wins(
 def test_build_supervisor_picks_composite_when_paddle_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    captured: dict[str, bool] = {}
+    captured: dict[str, Any] = {}
 
-    def fake_composite(*, use_paddle, use_mineru):  # type: ignore[no-untyped-def]
+    def fake_composite(
+        *,
+        use_paddle,
+        use_mineru,
+        engine_registry=None,  # type: ignore[no-untyped-def]
+    ):
         captured.update(use_paddle=use_paddle, use_mineru=use_mineru)
         return _NullExecutor()
 
     monkeypatch.setattr(composition, "_paddle_available", lambda: True)
     monkeypatch.setattr(composition, "_mineru_available", lambda: False)
     monkeypatch.setattr(composition, "_build_composite_executor", fake_composite)
-    build_supervisor(instance_id="comp-test", stager_root=tmp_path / "stage")
+    module, _ = build_supervisor(
+        instance_id="comp-test", stager_root=tmp_path / "stage"
+    )
     assert captured == {"use_paddle": True, "use_mineru": False}
+    # paddle 存在时引擎目录随 module 暴露。
+    assert module.engine_registry is not None
 
 
 def test_build_supervisor_picks_composite_when_mineru_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    captured: dict[str, bool] = {}
+    captured: dict[str, Any] = {}
 
-    def fake_composite(*, use_paddle, use_mineru):  # type: ignore[no-untyped-def]
+    def fake_composite(
+        *,
+        use_paddle,
+        use_mineru,
+        engine_registry=None,  # type: ignore[no-untyped-def]
+    ):
         captured.update(use_paddle=use_paddle, use_mineru=use_mineru)
         return _NullExecutor()
 
     monkeypatch.setattr(composition, "_paddle_available", lambda: False)
     monkeypatch.setattr(composition, "_mineru_available", lambda: True)
     monkeypatch.setattr(composition, "_build_composite_executor", fake_composite)
-    build_supervisor(
+    module, _ = build_supervisor(
         instance_id="comp-test",
         stager_root=tmp_path / "stage",
         use_real_paddle=False,
     )
     assert captured == {"use_paddle": False, "use_mineru": True}
+    # 无 RECOGNITION 后端时不构建引擎目录。
+    assert module.engine_registry is None
 
 
 def test_build_supervisor_force_paddle_overrides_availability(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """use_real_paddle=True forces the composite even if paddle is unavailable."""
-    captured: dict[str, bool] = {}
+    captured: dict[str, Any] = {}
 
-    def fake_composite(*, use_paddle, use_mineru):  # type: ignore[no-untyped-def]
+    def fake_composite(
+        *,
+        use_paddle,
+        use_mineru,
+        engine_registry=None,  # type: ignore[no-untyped-def]
+    ):
         captured.update(use_paddle=use_paddle, use_mineru=use_mineru)
         return _NullExecutor()
 
@@ -280,6 +301,59 @@ def test_build_paddle_executor_wires_factory_and_clear_cache(
     # not raise regardless of whether paddle is importable / CUDA-compiled.
     assert callable(executor._clear_cache)
     executor._clear_cache()
+
+
+# ---------------------------------------------------------------------------
+# OCR engine registry wiring（计划 §3.2/§4.1）
+# ---------------------------------------------------------------------------
+
+
+def test_build_ocr_engine_registry_registers_all_stable_engines() -> None:
+    from vibeocr.backend.supervisor.inference.ocr_engines import LazyEngineHandle
+    from vibeocr.runtime_contracts.dtos import OcrEngine
+
+    registry = composition._build_ocr_engine_registry(lambda: object())
+    descriptors = registry.probe_descriptors()
+    assert [d.engine_id for d in descriptors] == [
+        OcrEngine.RAPIDOCR,
+        OcrEngine.WINDOWS,
+        OcrEngine.PADDLEOCR,
+    ]
+    # Paddle 必须以惰性句柄注册（导入成本推迟）。
+    paddle_engine = registry.get(OcrEngine.PADDLEOCR)
+    assert isinstance(paddle_engine, LazyEngineHandle)
+
+
+def test_build_paddle_executor_with_registry_wraps_router(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from vibeocr.backend.supervisor.inference.ocr_engine_router import (
+        OcrEngineRoutingAdapter,
+    )
+
+    fake_ocr_module = types.ModuleType("vibeocr.backend.services.ocr_service")
+    fake_ocr_module.OCRService = lambda: object()  # type: ignore[assignment]
+    monkeypatch.setitem(
+        sys.modules, "vibeocr.backend.services.ocr_service", fake_ocr_module
+    )
+
+    registry = composition._build_ocr_engine_registry(
+        composition._paddle_adapter_factory
+    )
+    executor = composition._build_paddle_executor(engine_registry=registry)
+    adapter = executor._adapter_factory()
+    assert isinstance(adapter, OcrEngineRoutingAdapter)
+
+
+def test_build_supervisor_null_path_exposes_no_engine_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(composition, "_paddle_available", lambda: False)
+    monkeypatch.setattr(composition, "_mineru_available", lambda: False)
+    module, _ = build_supervisor(
+        instance_id="comp-test", stager_root=tmp_path / "stage"
+    )
+    assert module.engine_registry is None
 
 
 def test_paddle_clear_cache_runs_empty_cache_when_cuda_compiled(
@@ -395,7 +469,7 @@ def test_build_composite_executor_routes_to_each_backend(
     paddle_exec = _NullExecutor()
     mineru_exec = _NullExecutor()
 
-    def fake_paddle(*, scheduler=None):  # type: ignore[no-untyped-def]
+    def fake_paddle(*, scheduler=None, engine_registry=None):  # type: ignore[no-untyped-def]
         return paddle_exec
 
     def fake_mineru(*, scheduler=None):  # type: ignore[no-untyped-def]
@@ -411,7 +485,9 @@ def test_build_composite_executor_routes_to_each_backend(
 def test_build_composite_executor_paddle_only(monkeypatch: pytest.MonkeyPatch) -> None:
     paddle_exec = _NullExecutor()
     monkeypatch.setattr(
-        composition, "_build_paddle_executor", lambda *, scheduler=None: paddle_exec
+        composition,
+        "_build_paddle_executor",
+        lambda *, scheduler=None, engine_registry=None: paddle_exec,
     )
     composite = composition._build_composite_executor(use_paddle=True, use_mineru=False)
     assert len(composite._children) == 1

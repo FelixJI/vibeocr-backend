@@ -112,6 +112,7 @@ class SupervisorModule:
         stager_root: Any,
         executor: Executor,
         pdf_adapter: Any = None,
+        engine_registry: Any = None,
     ) -> None:
         self.options = options
         self.registry = JobRegistry(options.instance_id)
@@ -133,6 +134,11 @@ class SupervisorModule:
         # PdfBackendClient singleton. Tests / supervisor builds without PDF
         # support pass None and the routes return 503.
         self.pdf_adapter = pdf_adapter
+        # Optional OCR engine registry (plan §3.2). When present, submit-time
+        # engine validation and the ready-envelope engine catalog come from
+        # its live probes; None means this module has no real recognition
+        # backend (tests/fakes) and engine validation stays value-only.
+        self.engine_registry = engine_registry
         self._lock = threading.RLock()
         self._draining = False
         self._shutdown = False

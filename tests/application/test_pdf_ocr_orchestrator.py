@@ -160,6 +160,81 @@ def test_run_ocr_writes_all_pages_and_compresses(isolated_sidecar):
     assert all(result.page_states[i][1] is LayerSource.OCR for i in range(4))
 
 
+def test_blank_pages_are_not_written_but_marked_done(isolated_sidecar):
+    """空白页（无 text/blocks）不进入写层，但按完成计且不报错。"""
+
+    class BlankPageBackend(FakeBackend):
+        def recognize_pages(
+            self, session_id: str, images: list[bytes], cancel_check: Any
+        ) -> list[OcrPageResult]:
+            self.recognize_calls.append(len(images))
+            return [
+                OcrPageResult(page_index=i, text=None, blocks=None)
+                if i % 2 == 0
+                else OcrPageResult(
+                    page_index=i, text=f"text-{i}", blocks=[{"text": f"text-{i}"}]
+                )
+                for i, _ in enumerate(images)
+            ]
+
+    backend = BlankPageBackend()
+    orch = PdfOcrOrchestrator(backend, batch_size=8)
+    result = orch.run_ocr(
+        session_id="sess-1",
+        file_path=str(isolated_sidecar),
+        page_indices=[0, 1, 2, 3],
+    )
+    # 只有有内容的页进入写层。
+    assert backend.write_calls == [[1, 3]]
+    assert result.completed == 4
+    assert result.failed == 0
+    assert all(result.page_states[i][0] is PageState.DONE for i in range(4))
+    # 空白页没有 OCR 层；有内容的页为 OCR 层。
+    assert result.page_states[0][1] is LayerSource.NONE
+    assert result.page_states[1][1] is LayerSource.OCR
+
+
+def test_preproc_angle_flows_to_write_batch(isolated_sidecar):
+    """旋转页：recognize 返回的 preproc_angle 必须原样进入写层。"""
+    seen_angles: list[int] = []
+
+    class RotatedBackend(FakeBackend):
+        def recognize_pages(
+            self, session_id: str, images: list[bytes], cancel_check: Any
+        ) -> list[OcrPageResult]:
+            self.recognize_calls.append(len(images))
+            return [
+                OcrPageResult(
+                    page_index=i,
+                    text=f"text-{i}",
+                    blocks=[{"text": f"text-{i}"}],
+                    preproc_angle=90 if i == 0 else 0,
+                )
+                for i, _ in enumerate(images)
+            ]
+
+        def write_batch(self, session_id, pages, *, overwrite, save, cancel_check):
+            seen_angles.extend(res.preproc_angle for _, res in pages)
+            return super().write_batch(
+                session_id,
+                pages,
+                overwrite=overwrite,
+                save=save,
+                cancel_check=cancel_check,
+            )
+
+    backend = RotatedBackend()
+    orch = PdfOcrOrchestrator(backend, batch_size=8)
+    result = orch.run_ocr(
+        session_id="sess-1",
+        file_path=str(isolated_sidecar),
+        page_indices=[0, 1],
+    )
+    assert seen_angles == [90, 0]
+    assert result.completed == 2
+    assert result.failed == 0
+
+
 def test_overwrite_false_filters_already_saved_pages(isolated_sidecar, monkeypatch):
     import vibeocr.backend.utils.ocr_sidecar as sidecar_mod
 

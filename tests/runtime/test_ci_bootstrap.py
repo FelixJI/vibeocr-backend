@@ -19,15 +19,15 @@ def test_ci_bootstrap_restores_verified_protocol_and_backend_dependencies() -> N
             ROOT / "release/protocol.lock.json",
             ROOT / "packages/vibeocr-backend/pyproject.toml",
         )
-        == "2.5.0"
+        == "2.6.0"
     )
 
     assert "scripts/resolve_protocol_binding.py" in script
     assert "scripts/resolve_protocol_binding.py" in release_script
-    assert '"vibeocr-runtime-contracts>=2.5.0,<3.0.0"' in package_config
-    assert lock["version"] == "2.5.0"
-    assert "vibeocr_runtime_client-2.5.0-py3-none-any.whl" in lock["artifacts"]
-    assert "vibeocr_runtime_contracts-2.5.0-py3-none-any.whl" in lock["artifacts"]
+    assert '"vibeocr-runtime-contracts>=2.6.0,<3.0.0"' in package_config
+    assert lock["version"] == "2.6.0"
+    assert "vibeocr_runtime_client-2.6.0-py3-none-any.whl" in lock["artifacts"]
+    assert "vibeocr_runtime_contracts-2.6.0-py3-none-any.whl" in lock["artifacts"]
     assert 'gh release download "v$protocolVersion"' in script
     assert 'gh release download "v$protocolVersion"' in release_script
     assert '"vibeocr_runtime_contracts-$protocolVersion-*.whl"' in script

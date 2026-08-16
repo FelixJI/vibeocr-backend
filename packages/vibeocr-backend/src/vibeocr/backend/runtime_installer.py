@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import zipfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from importlib.resources import files
@@ -67,6 +68,9 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 PROTOCOL_VERSION = 2
 ACCELERATOR_TO_PLAN = {
+    # base：随 Portable 携带的离线必备闭包（win-x64-base）；full 闭包由
+    # cpu / nvidia_cuda 显式选择（计划 §4.1）。
+    "base": "win-x64-base",
     "cpu": "win-x64-cpu",
     "nvidia_cuda": "win-x64-cu126",
 }
@@ -257,6 +261,7 @@ def _default_install_runner(
     if not python.is_file():
         raise RuntimeInstallError("Python archive has no python.exe")
     lock = manifest.profiles[profile].lock_path
+    runtime_pack = manifest.profiles[profile].runtime_pack
     portable_env = os.environ.copy()
     cache = partial_root.parent.parent / "state" / "installer-cache"
     portable_env.update(
@@ -284,17 +289,44 @@ def _default_install_runner(
             message_code="runtime.install_profile",
             component_id="ocr_engine",
         )
-    _run_install_command(
-        [
-            str(python),
-            "-m",
-            "pip",
-            "install",
-            "--require-hashes",
-            "--only-binary=:all:",
+    install_command = [
+        str(python),
+        "-m",
+        "pip",
+        "install",
+        "--only-binary=:all:",
+    ]
+    pack_files = [manifest.path.parent / name for name in runtime_pack]
+    pack_present = bool(pack_files) and all(path.is_file() for path in pack_files)
+    if runtime_pack and not pack_present and profile == "win-x64-base":
+        # base 是随 Portable 携带的必备闭包：缺失即产品不完整，fail closed
+        # 而不是静默联网安装（计划 §4.1）。full 闭包的 pack 由用户按需下载，
+        # 未到位时回退在线安装是合法状态（cu126 因 torch 单 wheel 超过
+        # Release 资产上限，长期保持在线直链路径）。
+        raise RuntimeInstallError(f"runtime pack is missing: {runtime_pack[0]}")
+    if pack_present:
+        # 离线路径（计划 §4.2）：manifest 绑定的 runtime pack 提供完整
+        # wheel 闭包，安装禁止回退公网。pack 整体字节完整性由
+        # runtime_pack_sha256 在 manifest 加载时验证；解析输入用 pack 自带
+        # 的无哈希 requirements 清单——原 lock 的哈希行覆盖 sdist 工件，
+        # 对 pack 内由 sdist 构建的 wheel 必然不匹配。
+        pack_dir = _extract_runtime_pack(
+            pack_files,
+            cache / "runtime-packs",
+            reporter=reporter,
+        )
+        requirements_file = pack_dir / "pack-requirements.txt"
+        install_command += [
+            "--no-index",
+            "--find-links",
+            str(pack_dir),
             "-r",
-            str(lock),
-        ],
+            str(requirements_file),
+        ]
+    else:
+        install_command += ["--require-hashes", "-r", str(lock)]
+    _run_install_command(
+        install_command,
         timeout=3600,
         env=portable_env,
         reporter=reporter,
@@ -413,6 +445,67 @@ def _extract_python_archive(
                 if percent != reported_percent:
                     progress(extracted_bytes, total_bytes)
                     reported_percent = percent
+
+
+def _extract_runtime_pack(
+    archive_paths: list[Path],
+    cache_root: Path,
+    *,
+    reporter: RuntimeMaintenanceReporter | None = None,
+) -> Path:
+    """Idempotently extract manifest-bound runtime pack parts into the cache.
+
+    A pack is one or more flat zips of wheels; the first part also carries
+    the hash-free requirements manifest (``pack-requirements.txt``). Each
+    archive's SHA-256 has already been verified by ``load_runtime_manifest``;
+    extraction is guarded against unsafe members and only re-runs when the
+    destination marker is missing, so repeated ensure/repair installs stay
+    offline and cheap.
+    """
+    if not archive_paths:
+        raise RuntimeInstallError("runtime pack binding is empty")
+    # 分片名形如 <pack>.part01.zip:缓存目录按去掉分片后缀的公共 stem。
+    stem = re.sub(r"\.part\d+$", "", archive_paths[0].stem)
+    destination = cache_root / stem
+    marker = destination / ".complete"
+    if marker.is_file():
+        return destination
+    for archive_path in archive_paths:
+        if not archive_path.is_file():
+            raise RuntimeInstallError(f"runtime pack is missing: {archive_path.name}")
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True)
+    try:
+        for archive_path in archive_paths:
+            with zipfile.ZipFile(archive_path) as archive:
+                for name in archive.namelist():
+                    parts = Path(name.replace("\\", "/")).parts
+                    if (
+                        not parts
+                        or ".." in parts
+                        or Path(name).is_absolute()
+                        or len(parts) != 1
+                        or not (
+                            name.endswith(".whl") or name == "pack-requirements.txt"
+                        )
+                    ):
+                        raise RuntimeInstallError(f"unsafe runtime pack member: {name}")
+                    archive.extract(name, destination)
+    except zipfile.BadZipFile as exc:
+        raise RuntimeInstallError("runtime pack archive is invalid") from exc
+    if not (destination / "pack-requirements.txt").is_file():
+        raise RuntimeInstallError("runtime pack lacks pack-requirements.txt")
+    marker.write_text("ok\n", encoding="utf-8")
+    if reporter is not None:
+        reporter.advance(
+            phase="install_profile",
+            current=4,
+            total=7,
+            message_code="runtime.extract_pack",
+            component_id="ocr_engine",
+        )
+    return destination
 
 
 class RuntimeInstaller:
