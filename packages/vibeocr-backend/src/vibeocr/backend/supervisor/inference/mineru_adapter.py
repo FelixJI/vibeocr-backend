@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
-from vibeocr.runtime_contracts import EvictionReason
+from vibeocr.runtime_contracts import EvictionReason, PipelineSelection
 
 from .budgets import AdapterCapability, InputItem
 
@@ -180,6 +180,22 @@ class MinerUProcessAdapter:
     # recognize_many — budgeted multi-file request
     # ------------------------------------------------------------------
 
+    def _service_options(self, options: Any | None) -> Any | None:
+        """Convert a wire ``PipelineSelection`` into backend ``OCROptions``.
+
+        Same boundary conversion as the paddle adapter: the wire DTO stays
+        contracts-owned and strictly validated, while the Backend package
+        owns the option semantics (``lang_list``, ``backend``, page ranges,
+        formula/table toggles, ...).
+        """
+        if not isinstance(options, PipelineSelection):
+            return options
+        from vibeocr.backend.models.ocr_options import OCROptions
+
+        return OCROptions.from_dict(
+            {"pipeline": options.pipeline_id, **options.options}
+        )
+
     def recognize_many(
         self,
         items: list[InputItem],
@@ -209,7 +225,19 @@ class MinerUProcessAdapter:
                 stem = unique_stem(display, idx)
                 stem_to_index[stem] = idx
                 files.append((stem, bytes(raw)))
-            raw_results = client.file_parse(files, backend=self.backend)
+            service_options = self._service_options(options)
+            # A request-provided backend (user-selected pipeline option) wins
+            # over the adapter default: file_parse's ``backend`` kwarg would
+            # override options.backend, so pass None when the request already
+            # carries one.
+            backend_override = (
+                None if getattr(service_options, "backend", None) else self.backend
+            )
+            raw_results = client.file_parse(
+                files,
+                options=service_options,
+                backend=backend_override,
+            )
             payloads = self._map_results_back(raw_results, stem_to_index, len(items))
         except Exception:
             logger.exception(
