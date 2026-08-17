@@ -776,7 +776,24 @@ class RuntimeInstaller:
         )
 
     def _drifted_component_ids(self) -> tuple[str, ...]:
-        return self._scope_drifted_from(self.profile_payload())
+        installed = self._installed_scope_ids()
+        if not installed:
+            return ()
+        # 已安装闭包可能来自 base profile（base-only 的 ocr_engine 绑定是
+        # RapidOCR，而 cpu plan 的同名组件绑定 PaddleOCR）。漂移探测必须按
+        # 已安装 scope 的覆盖 profile 取 import 绑定，否则会把成功的
+        # base-only 安装整体误判为漂移并让 ensure 的 launch 校验失败。
+        payload = runtime_profile_status(
+            self.manifest,
+            accelerator=self.accelerator,
+            runtime_root=self.paths.runtime_root,
+            probe_results=self._component_probe(
+                self.paths.runtime_root,
+                installed,
+                self._covering_profile(installed),
+            ),
+        )
+        return self._scope_drifted_from(payload)
 
     def _scope_drifted_from(self, profile: dict[str, Any]) -> tuple[str, ...]:
         # 漂移只对已安装闭包判定：base-only 安装缺 full 组件不是漂移。

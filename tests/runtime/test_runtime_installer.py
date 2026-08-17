@@ -1807,3 +1807,77 @@ def test_maintenance_snapshot_echoes_download_source_intent(
     # 省略：requested 不出现，effective 解析为 Backend 缺省源。
     assert "requested_download_source_ids" not in snapshot
     assert snapshot["effective_download_source_ids"] == ["tuna-pypi"]
+
+
+def test_base_only_ensure_probes_with_base_binding_not_plan_binding(
+    tmp_path: Path,
+) -> None:
+    """base-only 安装的漂移探测必须用 base profile 的 import 绑定。
+
+    回归：accelerator=cpu + 显式空安装范围时，已安装 ocr_engine 的绑定是
+    RapidOCR；旧实现按 cpu plan 绑定 PaddleOCR 探测，会把刚装好的 base
+    闭包整体判为漂移，ensure 最终以 "did not verify" 失败。
+    """
+
+    manifest, component = _release(tmp_path / "release")
+    probe_profiles: list[str] = []
+
+    def probe(
+        _runtime_root: Path, component_ids: tuple[str, ...], profile_id: str
+    ) -> dict[str, bool]:
+        probe_profiles.append(profile_id)
+        # 只按“绑定是否来自 base profile”判定：base 绑定（rapidocr）已装，
+        # cpu plan 绑定（paddleocr）在 base-only 安装中不存在。
+        return {
+            component_id: profile_id == "win-x64-base" for component_id in component_ids
+        }
+
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_component_ids=(),
+        install_runner=_fake_install,
+        component_probe=probe,
+        operation_id="base-only-ensure",
+    )
+
+    launch = installer.ensure()
+
+    assert launch is not None
+    assert Path(launch.python_executable).is_file()
+    assert probe_profiles
+    # 漂移探测（非展示 payload）必须以 base 覆盖 profile 探测
+    assert "win-x64-base" in probe_profiles
+    assert installer._drifted_component_ids() == ()
+    # 幂等复跑：base 闭包 ready，不触发重装
+    assert installer.ensure() is not None
+
+
+def test_full_scope_drift_still_probes_with_plan_binding(tmp_path: Path) -> None:
+    """full（含可选组件）安装的漂移探测仍使用 accelerator 的 plan 绑定。"""
+
+    manifest, component = _release(tmp_path / "release")
+    probe_profiles: list[str] = []
+
+    def probe(
+        _runtime_root: Path, component_ids: tuple[str, ...], profile_id: str
+    ) -> dict[str, bool]:
+        probe_profiles.append(profile_id)
+        return dict.fromkeys(component_ids, True)
+
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_component_ids=("document_parsing",),
+        install_runner=_fake_install,
+        component_probe=probe,
+        operation_id="full-ensure",
+    )
+    installer.ensure()
+
+    assert installer._drifted_component_ids() == ()
+    assert "win-x64-cpu" in probe_profiles
