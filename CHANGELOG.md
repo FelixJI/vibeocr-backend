@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.0
+
+### Features
+
+- **runtime:** 完善协议 2.7 选择与可信镜像链路 (#47) (c13e3dc)
+- **runtime:** 接入 Protocol 2.7.0 组件与下载源选择契约 (#45) (4ce02d3)
+- **ocr:** 接入通用 OCR 引擎选择协议与三引擎适配器 (#43) (451e772)
+
+### Bug Fixes
+
+- **runtime:** 修复基础 OCR 运行时契约 (#48) (c1178ab)
+- **supervisor:** 转发 MinerU 管道选项到 file_parse (#46) (ab7b71d)
+
 ## 0.11.2
 
 ### Bug Fixes
