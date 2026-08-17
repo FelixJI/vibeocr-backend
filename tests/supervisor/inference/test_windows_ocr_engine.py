@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import sys
 from typing import Any
 
@@ -92,6 +93,30 @@ def _input(item_id: str = "w-1") -> InputItem:
 
 
 class TestDescriptor:
+    def test_accepts_winrt_awaitable_that_is_not_a_coroutine(self) -> None:
+        class _WinRtAwaitable:
+            def __await__(self):  # type: ignore[no-untyped-def]
+                async def complete() -> str:
+                    return "engine-object"
+
+                return complete().__await__()
+
+        class _ProjectedOcrEngine:
+            @staticmethod
+            def try_create_from_user_profile_languages() -> _WinRtAwaitable:
+                return _WinRtAwaitable()
+
+        awaitable = _ProjectedOcrEngine.try_create_from_user_profile_languages()
+        assert inspect.isawaitable(awaitable)
+        assert not inspect.iscoroutine(awaitable)
+
+        engine = WindowsMediaOcrEngine()
+        engine._import_ocr_engine_cls = lambda: _ProjectedOcrEngine  # type: ignore[method-assign]
+        try:
+            assert engine.descriptor().availability is EngineAvailability.READY
+        finally:
+            engine.close()
+
     def test_unavailable_without_projection(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

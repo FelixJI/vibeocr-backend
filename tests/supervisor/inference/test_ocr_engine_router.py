@@ -243,6 +243,7 @@ class TestLifecycle:
         windows = RecordingEngine(OcrEngine.WINDOWS)
         fallback = RecordingFallback()
         router, _ = _router([rapid, windows], fallback)
+        _ = router.fallback
         router.close()
         assert rapid.closed and windows.closed and fallback.closed
 

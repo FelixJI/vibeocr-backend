@@ -20,6 +20,7 @@ from .settings_store import RuntimeSettings
 if TYPE_CHECKING:
     from vibeocr.runtime_contracts import CancelMode, ResidencyStatus
 
+    from .inference.ocr_engines import OcrEngineRegistry, OcrEngineResolver
     from .jobs.registry import JobRecord
 
 
@@ -89,7 +90,7 @@ def _paddle_adapter_factory() -> Any:
 
 def _build_ocr_engine_registry(
     paddle_adapter_factory: Callable[[], Any],
-) -> Any:
+) -> OcrEngineRegistry:
     """构建引擎 registry：rapidocr / windows / paddleocr 全部注册。
 
     目录探测来自实际探针（importability/语言包），未安装的稳定 id 以
@@ -123,7 +124,9 @@ def _build_ocr_engine_registry(
 def _build_paddle_executor(
     *,
     scheduler: Any = None,
-    engine_registry: Any = None,
+    engine_registry: OcrEngineRegistry | None = None,
+    engine_resolver: OcrEngineResolver | None = None,
+    paddle_fallback: bool = True,
 ) -> Executor:
     """Construct the RECOGNITION executor backed by real OCR engines.
 
@@ -149,11 +152,12 @@ def _build_paddle_executor(
 
     adapter_factory: Any = _paddle_adapter_factory
     if engine_registry is not None:
-        resolver = OcrEngineResolver(registry=engine_registry)
+        resolver = engine_resolver or OcrEngineResolver(registry=engine_registry)
 
         def routing_factory() -> Any:
             return OcrEngineRoutingAdapter(
-                fallback_factory=_paddle_adapter_factory, resolver=resolver
+                fallback_factory=(_paddle_adapter_factory if paddle_fallback else None),
+                resolver=resolver,
             )
 
         adapter_factory = routing_factory
@@ -251,7 +255,8 @@ def _build_composite_executor(
     *,
     use_paddle: bool,
     use_mineru: bool,
-    engine_registry: Any = None,
+    engine_registry: OcrEngineRegistry | None = None,
+    engine_resolver: OcrEngineResolver | None = None,
 ) -> Executor:
     """Build a CompositeExecutor over whichever real backends are available.
 
@@ -267,15 +272,19 @@ def _build_composite_executor(
 
     scheduler = DeviceScheduler(devices=["gpu:0"])
     children: list[tuple[Executor, frozenset]] = []
-    if use_paddle:
-        children.append(
-            (
-                _build_paddle_executor(
-                    scheduler=scheduler, engine_registry=engine_registry
-                ),
-                frozenset({JobKind.RECOGNITION}),
-            )
+    # Base Runtime always owns RECOGNITION through RapidOCR/Windows. Paddle is
+    # only the optional fallback for non-OCR recognition pipelines.
+    children.append(
+        (
+            _build_paddle_executor(
+                scheduler=scheduler,
+                engine_registry=engine_registry,
+                engine_resolver=engine_resolver,
+                paddle_fallback=use_paddle,
+            ),
+            frozenset({JobKind.RECOGNITION}),
         )
+    )
     if use_mineru:
         children.append(
             (
@@ -296,7 +305,7 @@ def build_supervisor(
     use_real_paddle: bool | None = None,
     use_mineru: bool | None = None,
     with_pdf_adapter: bool = False,
-    engine_registry: Any = None,
+    engine_registry: OcrEngineRegistry | None = None,
     settings_store: RuntimeSettings | None = None,
 ) -> tuple[SupervisorModule, BootstrapHandle]:
     """Assemble a supervisor module + bootstrap handle (token out of band).
@@ -331,24 +340,23 @@ def build_supervisor(
     root = stager_root or Path(tempfile.mkdtemp(prefix=f"vibeocr-sup-{iid}-"))
     if executor is not None:
         exec_impl = executor
+        engine_resolver = None
     else:
         want_paddle = use_real_paddle is True or (
             use_real_paddle is None and _paddle_available()
         )
         want_mineru = use_mineru is True or (use_mineru is None and _mineru_available())
-        if want_paddle or want_mineru:
-            if want_paddle and engine_registry is None:
-                # 只有真实 RECOGNITION 后端存在时才构建引擎目录；
-                # Null/fake executor 场景由调用方显式注入 registry。
-                engine_registry = _build_ocr_engine_registry(_paddle_adapter_factory)
-            exec_impl = _build_composite_executor(
-                use_paddle=want_paddle,
-                use_mineru=want_mineru,
-                engine_registry=engine_registry,
-            )
-        else:
-            exec_impl = _NullExecutor()
-            engine_registry = None
+        if engine_registry is None:
+            engine_registry = _build_ocr_engine_registry(_paddle_adapter_factory)
+        from .inference.ocr_engines import OcrEngineResolver
+
+        engine_resolver = OcrEngineResolver(registry=engine_registry)
+        exec_impl = _build_composite_executor(
+            use_paddle=want_paddle,
+            use_mineru=want_mineru,
+            engine_registry=engine_registry,
+            engine_resolver=engine_resolver,
+        )
     pdf_adapter = _build_pdf_adapter() if with_pdf_adapter else None
     module = SupervisorModule(
         options=opts,
@@ -356,6 +364,7 @@ def build_supervisor(
         executor=exec_impl,
         pdf_adapter=pdf_adapter,
         engine_registry=engine_registry,
+        engine_resolver=engine_resolver,
         settings_store=settings_store,
     )
     # Clean stale staging left by a previous crashed instance (plan Phase 2).

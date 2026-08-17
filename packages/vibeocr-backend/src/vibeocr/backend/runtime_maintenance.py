@@ -19,10 +19,12 @@ from uuid import uuid4
 
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_manifest import (
+    ACCELERATOR_TO_PLAN,
     ManifestError,
     RuntimeComponent,
     RuntimeProfile,
     load_runtime_manifest,
+    runtime_component_binding,
 )
 from vibeocr.backend.runtime_selection import normalized_selection_fields
 
@@ -30,27 +32,11 @@ EventSink = Callable[[dict[str, Any]], None]
 OPERATIONS_DIRECTORY = "runtime-operations"
 COMMANDS_DIRECTORY = "runtime-commands"
 TERMINAL_REPLAY_RETENTION = timedelta(days=7)
-_COMPONENT_DISTRIBUTIONS = {
-    "ocr_engine": "paddleocr",
-    "document_parsing": "mineru",
-    "pdf_document_tools": "pymupdf",
-    "image_code_tools": "opencv-contrib-python",
-    "runtime_host": "fastapi",
-    "gpu_runtime": "torch",
-}
-_COMPONENT_IMPORTS = {
-    "ocr_engine": "paddleocr",
-    "document_parsing": "mineru",
-    "pdf_document_tools": "fitz",
-    "image_code_tools": "cv2",
-    "runtime_host": "fastapi",
-    "gpu_runtime": "torch",
-}
 _COMPONENT_PROBE_CACHE_TTL_SECONDS = 10.0
 _WINDOWS_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.04, 0.08)
 _component_probe_cache_lock = threading.Lock()
 _component_probe_cache: dict[
-    tuple[str, tuple[str, ...], int | None], tuple[float, dict[str, bool]]
+    tuple[str, str, tuple[str, ...], int | None], tuple[float, dict[str, bool]]
 ] = {}
 
 
@@ -824,7 +810,10 @@ def _distribution_versions(runtime_root: Path) -> dict[str, str]:
 
 
 def probe_runtime_components(
-    runtime_root: Path, component_ids: tuple[str, ...]
+    runtime_root: Path,
+    component_ids: tuple[str, ...],
+    *,
+    profile_id: str = "win-x64-cpu",
 ) -> dict[str, bool]:
     python = next(
         (
@@ -839,7 +828,8 @@ def probe_runtime_components(
         runtime_root / "python.exe",
     )
     modules = {
-        component_id: _COMPONENT_IMPORTS[component_id] for component_id in component_ids
+        component_id: runtime_component_binding(profile_id, component_id).import_name
+        for component_id in component_ids
     }
     script = (
         "import importlib,json,sys\n"
@@ -887,20 +877,22 @@ def probe_runtime_components(
 
 
 def _cached_runtime_component_probe(
-    runtime_root: Path, component_ids: tuple[str, ...]
+    runtime_root: Path, component_ids: tuple[str, ...], *, profile_id: str
 ) -> dict[str, bool]:
     marker = runtime_root / ".installed.json"
     try:
         marker_mtime = marker.stat().st_mtime_ns
     except OSError:
         marker_mtime = None
-    key = (str(runtime_root.resolve()), component_ids, marker_mtime)
+    key = (str(runtime_root.resolve()), profile_id, component_ids, marker_mtime)
     now = time.monotonic()
     with _component_probe_cache_lock:
         cached = _component_probe_cache.get(key)
         if cached is not None and cached[0] > now:
             return dict(cached[1])
-        result = probe_runtime_components(runtime_root, component_ids)
+        result = probe_runtime_components(
+            runtime_root, component_ids, profile_id=profile_id
+        )
         expired = [
             existing_key
             for existing_key, (expires_at, _) in _component_probe_cache.items()
@@ -963,7 +955,9 @@ def _component_statuses(
             actual_state = "ready"
             drift_reason = "none"
         else:
-            distribution = _COMPONENT_DISTRIBUTIONS[component.component_id]
+            distribution = runtime_component_binding(
+                descriptor.profile_id, component.component_id
+            ).distribution
             actual_version = versions.get(re.sub(r"[-_.]+", "-", distribution).lower())
             if actual_version is None:
                 actual_state = "missing"
@@ -1004,12 +998,13 @@ def runtime_profile_status(
     probe_results: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     """Project one desired/actual component view for every transport."""
-    plan = "win-x64-cpu" if accelerator == "cpu" else "win-x64-cu126"
+    plan = ACCELERATOR_TO_PLAN[accelerator]
     descriptor = profile_descriptor(manifest.profiles[plan], accelerator=accelerator)
     if probe_results is None and runtime_root is not None:
         probe_results = _cached_runtime_component_probe(
             runtime_root,
             tuple(component.component_id for component in descriptor.components),
+            profile_id=plan,
         )
     return {
         "profile_id": descriptor.profile_id,

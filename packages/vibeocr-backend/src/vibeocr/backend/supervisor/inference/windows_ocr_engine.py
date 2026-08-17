@@ -53,7 +53,14 @@ class _AsyncRunner:
             if self._loop is None or not self._loop.is_running():
                 self._start_locked()
         assert self._loop is not None
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
+        return asyncio.run_coroutine_threadsafe(
+            self._as_coroutine(coro), self._loop
+        ).result()
+
+    @staticmethod
+    async def _as_coroutine(awaitable: Any) -> Any:
+        """Adapt PyWinRT's generic Awaitable to asyncio's coroutine-only seam."""
+        return await awaitable
 
     def _start_locked(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -65,13 +72,13 @@ class _AsyncRunner:
     def shutdown(self) -> None:
         with self._lock:
             loop = self._loop
+            thread = self._thread
             self._loop = None
             self._thread = None
         if loop is not None and loop.is_running():
             loop.call_soon_threadsafe(loop.stop)
-
-
-_runner = _AsyncRunner()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
 
 
 class WindowsMediaOcrEngine:
@@ -82,7 +89,8 @@ class WindowsMediaOcrEngine:
 
     def __init__(self, *, runner: Any | None = None) -> None:
         # runner 注入点是测试 seam；生产使用进程内 WinRT 循环。
-        self._runner = runner if runner is not None else _runner
+        self._owns_runner = runner is None
+        self._runner = runner if runner is not None else _AsyncRunner()
         self._engine_cache: dict[str, Any] = {}
         self._lock = threading.Lock()
 
@@ -306,6 +314,8 @@ class WindowsMediaOcrEngine:
     def close(self) -> None:
         with self._lock:
             self._engine_cache.clear()
+        if self._owns_runner:
+            self._runner.shutdown()
 
     # ------------------------------------------------------------------
     # Helpers

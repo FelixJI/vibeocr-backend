@@ -32,7 +32,7 @@ class OcrEngineRoutingAdapter:
     def __init__(
         self,
         *,
-        fallback_factory: Callable[[], Any],
+        fallback_factory: Callable[[], Any] | None,
         resolver: OcrEngineResolver,
     ) -> None:
         self._fallback_factory = fallback_factory
@@ -42,6 +42,8 @@ class OcrEngineRoutingAdapter:
 
     @property
     def fallback(self) -> Any:
+        if self._fallback_factory is None:
+            raise RuntimeError("optional Paddle pipeline runtime is not installed")
         if self._fallback is not None:
             return self._fallback
         with self._fallback_lock:
@@ -110,18 +112,31 @@ class OcrEngineRoutingAdapter:
             self.fallback.preload(others)
         if wants_ocr:
             engine = self.resolver.resolve(None)
-            if engine is not self.fallback:
+            if engine is not self._fallback:
                 engine.preload((OCR_PIPELINE_ID,))
         return self.residency_status()
 
     def residency_status(self) -> ResidencyStatus:
-        return self.fallback.residency_status()
+        if self._fallback is not None:
+            return self._fallback.residency_status()
+        return ResidencyStatus()
 
     def release_idle(self, pipeline: str | None = None) -> ResidencyStatus:
-        return self.fallback.release_idle(pipeline)
+        for engine in self.resolver.registry.engines():
+            engine.release_idle(pipeline)
+        if self._fallback is not None and self._fallback not in (
+            self.resolver.registry.engines()
+        ):
+            self._fallback.release_idle(pipeline)
+        return self.residency_status()
 
     def configure_settings(self, snapshot: Any) -> None:
-        self.fallback.configure_settings(snapshot)
+        for engine in self.resolver.registry.engines():
+            engine.configure_settings(snapshot)
+        if self._fallback is not None and self._fallback not in (
+            self.resolver.registry.engines()
+        ):
+            self._fallback.configure_settings(snapshot)
 
     def close(self) -> None:
         for engine in self.resolver.registry.engines():
@@ -132,7 +147,10 @@ class OcrEngineRoutingAdapter:
                     "[Supervisor][OcrEngines] close failed engine=%s",
                     getattr(engine, "engine_id", "?"),
                 )
-        self.fallback.close()
+        if self._fallback is not None and self._fallback not in (
+            self.resolver.registry.engines()
+        ):
+            self._fallback.close()
 
 
 __all__ = ["OcrEngineRoutingAdapter"]

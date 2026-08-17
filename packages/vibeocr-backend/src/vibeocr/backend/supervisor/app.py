@@ -79,7 +79,6 @@ from .inference.ocr_engines import (
     EngineAvailability,
     EngineDescriptor,
     OcrEngineError,
-    OcrEngineResolver,
     ensure_engine_valid_for_pipeline,
     parse_wire_engine,
 )
@@ -163,10 +162,10 @@ def _fallback_engine_catalog() -> dict[str, Any]:
 
 
 def _engine_catalog_for(module: SupervisorModule) -> dict[str, Any]:
-    registry = getattr(module, "engine_registry", None)
-    if registry is None:
+    resolver = getattr(module, "engine_resolver", None)
+    if resolver is None:
         return _fallback_engine_catalog()
-    return registry.catalog_payload()
+    return resolver.catalog_payload()
 
 
 def _capability_descriptors(
@@ -296,11 +295,18 @@ def create_app(
     resolved_runtime_control = runtime_control
     # 每个 app 实例复用同一个 resolver：探针缓存在 component 修复后由
     # runtime maintenance 显式失效，而不是每个请求重建。
-    engine_resolver = (
-        OcrEngineResolver(registry=module.engine_registry)
-        if module.engine_registry is not None
-        else None
-    )
+    engine_resolver = getattr(module, "engine_resolver", None)
+
+    def refresh_engine_probes(receipt: dict[str, Any]) -> None:
+        if engine_resolver is None:
+            return
+        snapshot = receipt.get("snapshot")
+        if not isinstance(snapshot, dict):
+            return
+        if snapshot.get("operation_state") == "succeeded" and snapshot.get(
+            "operation"
+        ) in {"ensure", "repair"}:
+            engine_resolver.invalidate_probe_cache()
 
     def control() -> RuntimeControl:
         nonlocal resolved_runtime_control
@@ -518,7 +524,7 @@ def create_app(
                 download_source_ids = (
                     list(settings_sources) if settings_sources else None
                 )
-            return await asyncio.to_thread(
+            receipt = await asyncio.to_thread(
                 control().execute,
                 operation=body["operation"],
                 operation_id=body.get("operation_id"),
@@ -536,6 +542,8 @@ def create_app(
                     else None
                 ),
             )
+            refresh_engine_probes(receipt)
+            return receipt
         except Exception as exc:
             return _runtime_exception_response(exc, instance_id)
 
@@ -557,7 +565,7 @@ def create_app(
                 raise ValueError(
                     "Runtime selection fields are only valid for command retry"
                 )
-            return await asyncio.to_thread(
+            receipt = await asyncio.to_thread(
                 control().command,
                 command_id=body["command_id"],
                 command=body["command"],
@@ -575,6 +583,8 @@ def create_app(
                     else None
                 ),
             )
+            refresh_engine_probes(receipt)
+            return receipt
         except Exception as exc:
             return _runtime_exception_response(exc, instance_id)
 
@@ -732,6 +742,8 @@ def create_app(
         pipelines = tuple(dict.fromkeys(raw_pipelines))
         try:
             status = await asyncio.to_thread(module.preload, pipelines)
+        except OcrEngineError as exc:
+            return _engine_error_response(exc, instance_id)
         except Exception as exc:
             return _error_response(
                 ErrorCode.INTERNAL_ERROR,
