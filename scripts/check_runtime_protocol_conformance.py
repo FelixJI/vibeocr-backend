@@ -158,7 +158,7 @@ def _engine_selection_app():
             _Engine(
                 OcrEngine.PADDLEOCR,
                 EngineAvailability.PREPARATION_REQUIRED,
-                required_component="full-cpu",
+                required_component="document_parsing",
             ),
         ]
     )
@@ -295,11 +295,197 @@ async def _engine_selection_http_checks() -> None:
             raise RuntimeError("unavailable engine fixture did not return 426")
 
 
+def check_selection_conformance() -> None:
+    """component/source selection conformance：formal schema + HTTP fixtures。"""
+    spec = json.loads(V2.joinpath("openapi.yaml").read_text(encoding="utf-8"))
+    schemas = spec["components"]["schemas"]
+
+    # 1. formal schema：选择字段与 ensure/retry 条件约束存在。
+    maintenance_props = schemas["RuntimeMaintenanceRequest"]["properties"]
+    for field in ("install_component_ids", "download_source_ids"):
+        if field not in maintenance_props:
+            raise RuntimeError(f"RuntimeMaintenanceRequest lacks {field}")
+    command_props = schemas["RuntimeMaintenanceCommandRequest"]["properties"]
+    for field in ("install_component_ids", "download_source_ids"):
+        if field not in command_props:
+            raise RuntimeError(f"RuntimeMaintenanceCommandRequest lacks {field}")
+    if "download_source_ids" not in schemas["SettingsSnapshot"]["properties"]:
+        raise RuntimeError("SettingsSnapshot lacks download_source_ids")
+    known_error_codes = schemas["Error"]["properties"]["code"]["x-vibeocr-known-values"]
+    for code in ("DOWNLOAD_SOURCE_UNKNOWN", "RUNTIME_COMPONENT_UNKNOWN"):
+        if code not in known_error_codes:
+            raise RuntimeError(f"Error known values lack {code}")
+
+    import asyncio
+
+    asyncio.run(_selection_http_checks())
+
+
+async def _selection_http_checks() -> None:
+    import httpx
+    from vibeocr.backend.runtime_selection import (
+        normalize_download_source_ids,
+        normalize_install_component_ids,
+    )
+
+    class _PolicyControl:
+        """与真实 selection policy 同语义的确定性 control fixture。"""
+
+        def execute(self, **kwargs):
+            normalize_download_source_ids(kwargs.get("download_source_ids") or None)
+            scope = normalize_install_component_ids(
+                kwargs.get("install_component_ids"),
+                accelerator="cpu",
+            )
+            snapshot = {
+                "operation_id": kwargs.get("operation_id") or "selection-op",
+                "sequence": 1,
+                "operation": kwargs["operation"],
+                "operation_state": "succeeded",
+                "phase": "commit_runtime",
+                "profile_id": "win-x64-cpu",
+                "updated_at": "2026-08-17T00:00:00Z",
+                "effective_download_source_ids": ["pypi"],
+            }
+            if scope is not None:
+                snapshot["requested_component_ids"] = list(scope)
+            if kwargs["operation"] == "ensure" and scope:
+                snapshot["effective_component_ids"] = [
+                    "ocr_engine",
+                    "document_parsing",
+                    "pdf_document_tools",
+                    "image_code_tools",
+                    "runtime_host",
+                ]
+            return {
+                "schema_version": 2,
+                "operation_id": snapshot["operation_id"],
+                "snapshot": snapshot,
+                "negotiated_capabilities": [],
+            }
+
+        def command(self, **kwargs):
+            raise AssertionError("retry conformance covered by unit contracts")
+
+        def observe(self, *args, **kwargs):
+            raise AssertionError("observe not used here")
+
+    temp = tempfile.TemporaryDirectory(prefix="vibeocr-selection-conformance-")
+    module = SupervisorModule(
+        options=SupervisorOptions(instance_id="selection-conformance"),
+        stager_root=Path(temp.name),
+        executor=MagicMock(),
+    )
+    token = "0" * 64
+    app = create_app(module, token, runtime_control=_PolicyControl())
+    app.state._conformance_temp = temp
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://127.0.0.1",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as client:
+        # 2. health：两个新 capability 携带结构合法的 catalog。
+        health = (await client.get("/v2/health")).json()
+        descriptors = {d["name"]: d for d in health["capability_descriptors"]}
+        sources = descriptors["runtime.download-sources.v1"]["download_source_catalog"][
+            "sources"
+        ]
+        if not sources or len({s["id"] for s in sources}) != len(sources):
+            raise RuntimeError("download source catalog ids are not unique/non-empty")
+        if len({s["kind"] for s in sources}) != len(sources):
+            raise RuntimeError("download source catalog repeats a kind")
+        variants = descriptors["runtime.component-selection.v1"][
+            "component_variant_catalog"
+        ]["variants"]
+        variant_keys = {(v["feature_id"], v["accelerator"]) for v in variants}
+        if not variants or len(variant_keys) != len(variants):
+            raise RuntimeError("component variant business keys are not unique")
+        selectable = {v["component_id"] for v in variants}
+        if {"ocr_engine", "pdf_document_tools"}.intersection(selectable):
+            raise RuntimeError("base components must not be selectable variants")
+        # 引擎 catalog 的 required_component 必须是可准备的组件。
+        engine_catalog = descriptors["ocr.engine-selection.v1"]["ocr_engine_catalog"]
+        for entry in engine_catalog["engines"]:
+            required = entry.get("required_component")
+            if required is not None and required not in selectable:
+                raise RuntimeError(
+                    f"engine {entry['id']} requires unknown component {required}"
+                )
+
+        # 3. settings：download_source_ids 持久化往返，未知 id fail closed。
+        put = await client.put(
+            "/v2/settings",
+            json={
+                "schema_version": 2,
+                "residency": {"default_ttl_seconds": 300, "pipelines": []},
+                "extra": {},
+                "download_source_ids": ["pypi"],
+            },
+        )
+        if put.status_code != 200 or put.json().get("download_source_ids") != ["pypi"]:
+            raise RuntimeError("settings download_source_ids roundtrip failed")
+        unknown_source = await client.put(
+            "/v2/settings",
+            json={
+                "schema_version": 2,
+                "residency": {"default_ttl_seconds": 300, "pipelines": []},
+                "extra": {},
+                "download_source_ids": ["not-a-source"],
+            },
+        )
+        if (
+            unknown_source.status_code != 400
+            or unknown_source.json()["code"] != "DOWNLOAD_SOURCE_UNKNOWN"
+        ):
+            raise RuntimeError("unknown download source did not fail closed")
+
+        # 4. maintenance：ensure 选择字段进入回显，未知组件/源 fail closed。
+        started = await client.post(
+            "/v2/runtime/maintenance",
+            json={
+                "operation": "ensure",
+                "install_component_ids": [],
+                "download_source_ids": ["pypi"],
+            },
+        )
+        if started.status_code != 200:
+            raise RuntimeError(
+                f"selection ensure fixture failed: {started.status_code} {started.text}"
+            )
+        receipt = started.json()
+        if receipt["snapshot"].get("requested_component_ids") != []:
+            raise RuntimeError("explicit empty install scope was not echoed")
+        if receipt["snapshot"].get("effective_download_source_ids") != ["pypi"]:
+            raise RuntimeError("effective download sources were not echoed")
+
+        unknown_component = await client.post(
+            "/v2/runtime/maintenance",
+            json={
+                "operation": "ensure",
+                "install_component_ids": ["not-a-component"],
+            },
+        )
+        if (
+            unknown_component.status_code != 400
+            or unknown_component.json()["code"] != "RUNTIME_COMPONENT_UNKNOWN"
+        ):
+            raise RuntimeError("unknown install component did not fail closed")
+
+        rejected = await client.post(
+            "/v2/runtime/maintenance",
+            json={"operation": "inspect", "install_component_ids": []},
+        )
+        if rejected.status_code != 400:
+            raise RuntimeError("selection fields on inspect did not fail closed")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.parse_args()
     check_conformance()
     check_engine_selection_conformance()
+    check_selection_conformance()
     print("Backend Runtime API v2 conformance: OK")
     return 0
 

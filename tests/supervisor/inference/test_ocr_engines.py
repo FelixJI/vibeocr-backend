@@ -165,14 +165,14 @@ class TestOcrEngineRegistry:
             OcrEngine.PADDLEOCR,
             availability=EngineAvailability.PREPARATION_REQUIRED,
             reason_code=REASON_ENGINE_NOT_INSTALLED,
-            required_component="full-cpu",
+            required_component="document_parsing",
         )
         registry = OcrEngineRegistry([rapid, paddle])
         entries = {e["id"]: e for e in registry.catalog_payload()["engines"]}
         assert entries["rapidocr"]["availability"] == "ready"
         assert entries["rapidocr"]["included_in_base"] is True
         assert entries["paddleocr"]["availability"] == "preparation_required"
-        assert entries["paddleocr"]["required_component"] == "full-cpu"
+        assert entries["paddleocr"]["required_component"] == "document_parsing"
         # 未注册的 windows 保持 unavailable 占位。
         assert entries["windows"]["availability"] == "unavailable"
 
@@ -259,13 +259,13 @@ class TestOcrEngineResolver:
             OcrEngine.PADDLEOCR,
             availability=EngineAvailability.PREPARATION_REQUIRED,
             reason_code=REASON_ENGINE_NOT_INSTALLED,
-            required_component="full-cpu",
+            required_component="document_parsing",
         )
         resolver = OcrEngineResolver(registry=OcrEngineRegistry([paddle]))
         with pytest.raises(OcrEngineError) as excinfo:
             resolver.validate(OcrEngine.PADDLEOCR)
         assert excinfo.value.code is ErrorCode.OCR_ENGINE_PREPARATION_REQUIRED
-        assert excinfo.value.detail == {"required_component": "full-cpu"}
+        assert excinfo.value.detail == {"required_component": "document_parsing"}
 
     def test_default_engine_unavailable_fails_closed(self) -> None:
         # 缺省引擎不可用时同样 fail closed，而不是切到其他 ready 引擎。

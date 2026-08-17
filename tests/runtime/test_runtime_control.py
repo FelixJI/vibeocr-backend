@@ -137,6 +137,10 @@ def test_retry_reuses_source_intent_and_links_new_operation(
             "required_capabilities": ("runtime.component-repair.v1",),
             "source_operation_id": "op-1",
             "profile_id": "win-x64-cpu",
+            # retry 省略选择字段：source intent 未携带 install/source，
+            # 传 None / 空集由 installer 解析为 Backend 缺省。
+            "install_component_ids": None,
+            "download_source_ids": (),
         }
     ]
 
@@ -660,3 +664,109 @@ def test_pending_retry_with_running_operation_replays_retryable_busy_failure(
             )
 
     assert calls == ["called"]
+
+
+def _retry_control_with_failed_source_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, intent: dict
+) -> tuple[RuntimeControl, list[dict]]:
+    source_identity = {"backend_source_sha": "a" * 40}
+    intent.setdefault("source_identity", source_identity)
+    store = RuntimeOperationStore(tmp_path)
+    store.start("op-1", intent)
+    store.append(
+        "op-1",
+        event_type="snapshot",
+        snapshot=_snapshot("op-1", 2, "failed"),
+        message_code="runtime.failed",
+    )
+    control = object.__new__(RuntimeControl)
+    control._store = store
+    control._installer = lambda: type("Installer", (), {"manifest": object()})()  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "vibeocr.backend.runtime_control.runtime_source_identity",
+        lambda _manifest: source_identity,
+    )
+    calls: list[dict] = []
+
+    def execute(**kwargs):  # type: ignore[no-untyped-def]
+        calls.append(kwargs)
+        return {"operation_id": kwargs["operation_id"]}
+
+    control.execute = execute  # type: ignore[method-assign]
+    return control, calls
+
+
+def test_retry_reuses_selection_intent_when_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    control, calls = _retry_control_with_failed_source_operation(
+        tmp_path,
+        monkeypatch,
+        {
+            "operation": "ensure",
+            "profile_id": "win-x64-cpu",
+            "component_ids": [],
+            "required_capabilities": [],
+            # source operation 是显式 base-only + 已选源：retry 省略时复用。
+            "install_component_ids": [],
+            "download_source_ids": ["pypi"],
+        },
+    )
+    assert control.command(
+        command_id="retry-1",
+        command="retry",
+        target_operation_id="op-1",
+        new_operation_id="op-2",
+    ) == {"operation_id": "op-2"}
+    assert calls[0]["install_component_ids"] == ()
+    assert calls[0]["download_source_ids"] == ("pypi",)
+
+
+def test_retry_explicit_selection_replaces_source_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    control, calls = _retry_control_with_failed_source_operation(
+        tmp_path,
+        monkeypatch,
+        {
+            "operation": "ensure",
+            "profile_id": "win-x64-cpu",
+            "component_ids": [],
+            "required_capabilities": [],
+            "install_component_ids": [],
+            "download_source_ids": ["pypi"],
+        },
+    )
+    assert control.command(
+        command_id="retry-2",
+        command="retry",
+        target_operation_id="op-1",
+        new_operation_id="op-3",
+        install_component_ids=("document_parsing",),
+    ) == {"operation_id": "op-3"}
+    assert calls[0]["install_component_ids"] == ("document_parsing",)
+    # 显式只给 component 时源意图仍复用 source operation。
+    assert calls[0]["download_source_ids"] == ("pypi",)
+
+
+def test_selection_fields_are_rejected_outside_ensure_and_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    control, _ = _retry_control_with_failed_source_operation(
+        tmp_path,
+        monkeypatch,
+        {"operation": "inspect", "profile_id": "win-x64-cpu"},
+    )
+    with pytest.raises(ValueError, match="only valid for operation ensure"):
+        control.execute_with_result(
+            operation="inspect",
+            install_component_ids=(),
+            download_source_ids=("pypi",),
+        )
+    with pytest.raises(ValueError, match="only valid for command retry"):
+        control.command(
+            command_id="cancel-1",
+            command="cancel",
+            target_operation_id="op-1",
+            install_component_ids=(),
+        )

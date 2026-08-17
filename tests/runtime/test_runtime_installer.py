@@ -1265,3 +1265,159 @@ def test_multi_part_pack_extracts_into_one_directory(tmp_path: Path) -> None:
     # 幂等:完整标记存在时直接复用。
     again = installer._extract_runtime_pack([part1, part2], tmp_path / "cache")
     assert again == pack_dir
+
+
+def test_ensure_with_explicit_base_only_scope_installs_base_lock(
+    tmp_path: Path,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    seen_profiles: list[str] = []
+
+    def install(partial: Path, runtime_manifest, profile: str) -> Path:
+        seen_profiles.append(profile)
+        return _fake_install(partial, runtime_manifest, profile)
+
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=install,
+        install_component_ids=(),
+    )
+    installer.ensure()
+
+    assert seen_profiles == ["win-x64-base"]
+    marker = json.loads(
+        (installer.paths.runtime_root / ".installed.json").read_text(encoding="utf-8")
+    )
+    assert "document_parsing" not in marker["component_ids"]
+    snapshot = installer.maintenance_snapshot()
+    # 显式空集回显 requested=[]（base-only），effective 为 base 闭包。
+    assert snapshot["requested_component_ids"] == []
+    assert "document_parsing" not in snapshot["effective_component_ids"]
+    # base-only 缺 full 可选组件不算漂移：inspect 仍 ready。
+    assert installer.inspect().integrity == "verified"
+
+
+def test_ensure_with_optional_components_reports_full_profile_closure(
+    tmp_path: Path,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    seen_profiles: list[str] = []
+
+    def install(partial: Path, runtime_manifest, profile: str) -> Path:
+        seen_profiles.append(profile)
+        return _fake_install(partial, runtime_manifest, profile)
+
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=install,
+        install_component_ids=("document_parsing",),
+    )
+    installer.ensure()
+
+    # per-profile lock 粒度：选择任一可选组件即安装目标档位完整闭包，
+    # effective 诚实回显闭包而非请求子集。
+    assert seen_profiles == ["win-x64-cpu"]
+    snapshot = installer.maintenance_snapshot()
+    assert snapshot["requested_component_ids"] == ["document_parsing"]
+    assert snapshot["effective_component_ids"] == list(
+        installer._profile_component_ids()
+    )
+
+
+def test_ensure_reinstalls_when_scope_changes(tmp_path: Path) -> None:
+    manifest, component = _release(tmp_path / "release")
+    calls: list[Path] = []
+
+    def install(partial: Path, runtime_manifest, profile: str) -> Path:
+        calls.append(partial)
+        return _fake_install(partial, runtime_manifest, profile)
+
+    base_only = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=install,
+        install_component_ids=(),
+    )
+    base_only.ensure()
+
+    # 范围从 base-only 扩到缺省全量：marker 闭包不同 → 重装一次。
+    default_scope = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=install,
+    )
+    default_scope.ensure()
+    assert len(calls) == 2
+
+    # 幂等：同范围再次 ensure 不重装。
+    default_scope.ensure()
+    assert len(calls) == 2
+
+
+def test_unknown_install_component_fails_closed(tmp_path: Path) -> None:
+    from vibeocr.backend.runtime_selection import RuntimeSelectionError
+    from vibeocr.runtime_contracts import ErrorCode
+
+    manifest, component = _release(tmp_path / "release")
+    with pytest.raises(RuntimeSelectionError) as excinfo:
+        RuntimeInstaller(
+            product_root=tmp_path / "product",
+            component_lock=component,
+            runtime_manifest=manifest,
+            accelerator="cpu",
+            install_runner=_fake_install,
+            install_component_ids=("not-a-component",),
+        )
+    assert excinfo.value.code is ErrorCode.RUNTIME_COMPONENT_UNKNOWN
+
+    # gpu_runtime 只属于 nvidia_cuda 档位：component selection 不得隐式换档。
+    with pytest.raises(RuntimeSelectionError):
+        RuntimeInstaller(
+            product_root=tmp_path / "product",
+            component_lock=component,
+            runtime_manifest=manifest,
+            accelerator="cpu",
+            install_runner=_fake_install,
+            install_component_ids=("gpu_runtime",),
+        )
+
+
+def test_maintenance_snapshot_echoes_download_source_intent(
+    tmp_path: Path,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    explicit = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+        download_source_ids=("pypi",),
+    )
+    explicit.ensure()
+    snapshot = explicit.maintenance_snapshot()
+    assert snapshot["requested_download_source_ids"] == ["pypi"]
+    assert snapshot["effective_download_source_ids"] == ["pypi"]
+
+    omitted = RuntimeInstaller(
+        product_root=tmp_path / "product2",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+    )
+    omitted.ensure()
+    snapshot = omitted.maintenance_snapshot()
+    # 省略：requested 不出现，effective 解析为 Backend 缺省源。
+    assert "requested_download_source_ids" not in snapshot
+    assert snapshot["effective_download_source_ids"] == ["pypi"]

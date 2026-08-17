@@ -151,6 +151,9 @@ async def test_start_and_retry_forward_idempotency_and_negotiation_fields(
             "component_ids": ("ocr_engine",),
             "required_capabilities": ("runtime.component-repair.v1",),
             "profile_id": "win-x64-cpu",
+            "install_component_ids": None,
+            # 请求省略时快照当前 Settings（空）→ 空集交给 installer 解析缺省。
+            "download_source_ids": (),
         }
     ]
     assert retried.status_code == 200
