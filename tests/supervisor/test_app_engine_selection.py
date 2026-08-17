@@ -161,7 +161,7 @@ def engines() -> list[_FakeOcrEngine]:
         _FakeOcrEngine(
             OcrEngine.PADDLEOCR,
             availability=EngineAvailability.PREPARATION_REQUIRED,
-            required_component="full-cpu",
+            required_component="document_parsing",
         ),
     ]
 
@@ -243,7 +243,7 @@ class TestSubmitEngineSelection:
         assert resp.status_code == 428
         body = resp.json()
         assert body["code"] == "OCR_ENGINE_PREPARATION_REQUIRED"
-        assert body["detail"]["required_component"] == "full-cpu"
+        assert body["detail"]["required_component"] == "document_parsing"
 
     async def test_default_engine_unavailable_fails_closed_426(
         self, tmp_path: Any
@@ -294,7 +294,7 @@ class TestReadyEngineCatalog:
         assert entries["rapidocr"]["included_in_base"] is True
         assert entries["windows"]["availability"] == "unavailable"
         assert entries["paddleocr"]["availability"] == "preparation_required"
-        assert entries["paddleocr"]["required_component"] == "full-cpu"
+        assert entries["paddleocr"]["required_component"] == "document_parsing"
 
     async def test_catalog_without_registry_is_honestly_unavailable(
         self, tmp_path: Any

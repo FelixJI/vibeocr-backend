@@ -937,12 +937,17 @@ def _component_statuses(
             runtime_root / "bin" / "python",
         )
     )
-    expected_marker = {
-        "schema_version": 1,
-        "backend_version": manifest.backend_version,
-        "manifest_sha256": manifest.sha256,
-        "accelerator": descriptor.accelerator,
-    }
+    # marker 的基础字段逐项比较：component_ids（安装闭包）是 2.7.0 新增
+    # 字段，由 installer 的 integrity gate 负责判定，不参与展示层 drift。
+    marker_matches = marker is not None and all(
+        marker.get(key) == value
+        for key, value in (
+            ("schema_version", 1),
+            ("backend_version", manifest.backend_version),
+            ("manifest_sha256", manifest.sha256),
+            ("accelerator", descriptor.accelerator),
+        )
+    )
     versions = _distribution_versions(runtime_root) if runtime_root is not None else {}
     statuses: list[dict[str, Any]] = []
     for component in descriptor.components:
@@ -950,7 +955,7 @@ def _component_statuses(
         if marker is None or not python_ready:
             actual_state = "missing"
             drift_reason = "missing"
-        elif marker != expected_marker:
+        elif not marker_matches:
             actual_state = "drifted"
             drift_reason = "identity_mismatch"
         elif component.version is None:
@@ -1036,8 +1041,12 @@ class RuntimeMaintenanceReporter:
         self._sequence = 0
         self._snapshot: dict[str, Any] | None = None
         self._message_code: str | None = None
-        self._requested_component_ids: tuple[str, ...] = ()
+        # requested None = 请求省略（wire 上省略该字段）；() = 显式空集
+        # （ensure base-only），两者在 intent 与回显上都不同。
+        self._requested_component_ids: tuple[str, ...] | None = None
         self._effective_component_ids: tuple[str, ...] = ()
+        self._requested_download_source_ids: tuple[str, ...] = ()
+        self._effective_download_source_ids: tuple[str, ...] = ()
         self._source: dict[str, Any] | None = None
         self._source_operation_id: str | None = None
 
@@ -1059,8 +1068,11 @@ class RuntimeMaintenanceReporter:
         *,
         total_steps: int,
         operation_id: str | None = None,
-        component_ids: tuple[str, ...] = (),
+        component_ids: tuple[str, ...] | None = None,
         effective_component_ids: tuple[str, ...] = (),
+        install_component_ids: tuple[str, ...] | None = None,
+        download_source_ids: tuple[str, ...] = (),
+        requested_download_source_ids: tuple[str, ...] = (),
         source: dict[str, Any] | None = None,
         source_operation_id: str | None = None,
         required_capabilities: tuple[str, ...] = (),
@@ -1069,6 +1081,8 @@ class RuntimeMaintenanceReporter:
         self._operation_id = operation_id or str(uuid4())
         self._requested_component_ids = component_ids
         self._effective_component_ids = effective_component_ids
+        self._requested_download_source_ids = requested_download_source_ids
+        self._effective_download_source_ids = download_source_ids
         self._source = dict(source) if source is not None else None
         self._source_operation_id = source_operation_id
         self._sequence = 0
@@ -1084,7 +1098,7 @@ class RuntimeMaintenanceReporter:
             "updated_at": _timestamp(),
             "progress": {"unit": "steps", "current": 1, "total": total_steps},
         }
-        if self._requested_component_ids:
+        if self._requested_component_ids is not None:
             initial_snapshot["requested_component_ids"] = list(
                 self._requested_component_ids
             )
@@ -1092,18 +1106,32 @@ class RuntimeMaintenanceReporter:
             initial_snapshot["effective_component_ids"] = list(
                 self._effective_component_ids
             )
+        if self._requested_download_source_ids:
+            initial_snapshot["requested_download_source_ids"] = list(
+                self._requested_download_source_ids
+            )
+        if self._effective_download_source_ids:
+            initial_snapshot["effective_download_source_ids"] = list(
+                self._effective_download_source_ids
+            )
         if self._source is not None:
             initial_snapshot["source"] = dict(self._source)
+        intent: dict[str, Any] = {
+            "operation": operation,
+            "profile_id": self._profile.profile_id,
+            "component_ids": list(component_ids or ()),
+            "required_capabilities": list(required_capabilities),
+            "source_identity": dict(source or {}),
+            "source_operation_id": source_operation_id,
+        }
+        # normalized intent：install scope 与源意图固化后供 retry 复用/比对。
+        if install_component_ids is not None:
+            intent["install_component_ids"] = list(install_component_ids)
+        if download_source_ids:
+            intent["download_source_ids"] = list(download_source_ids)
         started = self._store.start(
             self._operation_id,
-            {
-                "operation": operation,
-                "profile_id": self._profile.profile_id,
-                "component_ids": list(component_ids),
-                "required_capabilities": list(required_capabilities),
-                "source_identity": dict(source or {}),
-                "source_operation_id": source_operation_id,
-            },
+            intent,
             source_operation_id=source_operation_id,
             initial_snapshot=initial_snapshot,
             initial_message_code="runtime.validate_binding",
@@ -1311,10 +1339,18 @@ class RuntimeMaintenanceReporter:
             snapshot["component_id"] = component_id
         if progress is not None:
             snapshot["progress"] = progress
-        if self._requested_component_ids:
+        if self._requested_component_ids is not None:
             snapshot["requested_component_ids"] = list(self._requested_component_ids)
         if self._effective_component_ids:
             snapshot["effective_component_ids"] = list(self._effective_component_ids)
+        if self._requested_download_source_ids:
+            snapshot["requested_download_source_ids"] = list(
+                self._requested_download_source_ids
+            )
+        if self._effective_download_source_ids:
+            snapshot["effective_download_source_ids"] = list(
+                self._effective_download_source_ids
+            )
         if self._source is not None:
             snapshot["source"] = dict(self._source)
         try:

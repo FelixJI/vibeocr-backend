@@ -107,6 +107,8 @@ class RuntimeControl:
         source_operation_id: str | None = None,
         component_ids: tuple[str, ...] = (),
         required_capabilities: tuple[str, ...] = (),
+        install_component_ids: tuple[str, ...] | None = None,
+        download_source_ids: tuple[str, ...] | None = None,
     ) -> RuntimeInstaller:
         if self._installer_factory is not None:
             return self._installer_factory(
@@ -114,6 +116,8 @@ class RuntimeControl:
                 source_operation_id=source_operation_id,
                 component_ids=component_ids,
                 required_capabilities=required_capabilities,
+                install_component_ids=install_component_ids,
+                download_source_ids=download_source_ids,
             )
         return RuntimeInstaller(
             product_root=self._product_root,
@@ -124,6 +128,8 @@ class RuntimeControl:
             source_operation_id=source_operation_id,
             component_ids=component_ids,
             required_capabilities=required_capabilities,
+            install_component_ids=install_component_ids,
+            download_source_ids=download_source_ids,
         )
 
     @staticmethod
@@ -150,6 +156,8 @@ class RuntimeControl:
         required_capabilities: tuple[str, ...] = (),
         source_operation_id: str | None = None,
         profile_id: str | None = None,
+        install_component_ids: tuple[str, ...] | None = None,
+        download_source_ids: tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
         if operation not in {"inspect", "ensure", "repair"}:
             raise ValueError("invalid Runtime maintenance operation")
@@ -160,6 +168,8 @@ class RuntimeControl:
             required_capabilities=required_capabilities,
             source_operation_id=source_operation_id,
             profile_id=profile_id,
+            install_component_ids=install_component_ids,
+            download_source_ids=download_source_ids,
         )
         return result.receipt
 
@@ -172,15 +182,27 @@ class RuntimeControl:
         required_capabilities: tuple[str, ...] = (),
         source_operation_id: str | None = None,
         profile_id: str | None = None,
+        install_component_ids: tuple[str, ...] | None = None,
+        download_source_ids: tuple[str, ...] | None = None,
     ) -> RuntimeControlResult:
         """Execute once while exposing adapter-only launch projection."""
         if operation not in {"inspect", "ensure", "repair"}:
             raise ValueError("invalid Runtime maintenance operation")
+        # 选择字段只对 ensure 合法（计划 §4.3：inspect/repair 不接受
+        # install/source selection）。
+        if operation != "ensure" and (
+            install_component_ids is not None or download_source_ids is not None
+        ):
+            raise ValueError(
+                "Runtime selection fields are only valid for operation ensure"
+            )
         installer = self._installer(
             operation_id=operation_id,
             source_operation_id=source_operation_id,
             component_ids=component_ids,
             required_capabilities=required_capabilities,
+            install_component_ids=install_component_ids,
+            download_source_ids=download_source_ids,
         )
         if profile_id is not None and profile_id != installer.plan:
             raise ValueError("requested Runtime profile is unavailable")
@@ -248,7 +270,16 @@ class RuntimeControl:
         target_operation_id: str,
         new_operation_id: str | None = None,
         expected_sequence: int | None = None,
+        install_component_ids: tuple[str, ...] | None = None,
+        download_source_ids: tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
+        # 选择字段只对 retry 合法；cancel 不接受 selection（计划 §4.3）。
+        if command != "retry" and (
+            install_component_ids is not None or download_source_ids is not None
+        ):
+            raise ValueError(
+                "Runtime selection fields are only valid for command retry"
+            )
         payload = {
             "command": command,
             "target_operation_id": target_operation_id,
@@ -281,6 +312,22 @@ class RuntimeControl:
             if target["operation_state"] not in {"failed", "cancelled"}:
                 raise RuntimeOperationNotRetryable(target_operation_id)
             intent = self._store.intent(target_operation_id)
+            # retry 省略选择字段时复用 source operation 的 normalized intent；
+            # 显式给出时重新按当前 catalog 验证（installer 构造时 fail closed）。
+            retry_install = (
+                install_component_ids
+                if install_component_ids is not None
+                else (
+                    tuple(intent["install_component_ids"])
+                    if "install_component_ids" in intent
+                    else None
+                )
+            )
+            retry_sources = (
+                download_source_ids
+                if download_source_ids is not None
+                else tuple(intent.get("download_source_ids", ()))
+            )
             retry_installer = self._installer()
             if intent.get("source_identity") != runtime_source_identity(
                 retry_installer.manifest
@@ -303,6 +350,10 @@ class RuntimeControl:
                     "source_identity": dict(intent.get("source_identity", {})),
                     "source_operation_id": target_operation_id,
                 }
+                if retry_install is not None:
+                    expected_retry_intent["install_component_ids"] = list(retry_install)
+                if retry_sources:
+                    expected_retry_intent["download_source_ids"] = list(retry_sources)
                 if self._store.intent(new_operation_id) != expected_retry_intent:
                     raise RuntimeOperationConflict(new_operation_id)
                 state = existing.get("operation_state")
@@ -329,6 +380,8 @@ class RuntimeControl:
                 required_capabilities=tuple(intent.get("required_capabilities", [])),
                 source_operation_id=target_operation_id,
                 profile_id=str(intent["profile_id"]),
+                install_component_ids=retry_install,
+                download_source_ids=retry_sources,
             )
 
         return self._store.apply_command(command_id, payload, apply)

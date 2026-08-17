@@ -43,9 +43,11 @@ from .ocr_engines import (
 
 logger = logging.getLogger(__name__)
 
-# PaddleOCR 属于用户显式准备的重型组件（full-cpu/full-cu126 pack），
-# 不随 base-offline 运行时携带。
-PADDLE_REQUIRED_COMPONENT = "full-cpu"
+# PaddleOCR 属于用户显式准备的重型闭包，不随 base-offline 运行时携带。
+# 准备路径是可选组件 document_parsing（runtime.component-selection.v1
+# 目录中的 cpu/nvidia_cuda variant）：安装该组件的 profile 闭包携带
+# paddleocr 文字引擎所需的全部依赖。
+PADDLE_REQUIRED_COMPONENT = "document_parsing"
 
 
 class _OCRServiceLike(Protocol):

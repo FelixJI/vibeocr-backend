@@ -45,9 +45,16 @@ from vibeocr.backend.runtime_maintenance import (
     runtime_source_identity,
 )
 from vibeocr.backend.runtime_manifest import (
+    ACCELERATOR_TO_PLAN,
     ManifestError,
     RuntimeManifest,
     load_runtime_manifest,
+)
+from vibeocr.backend.runtime_selection import (
+    BASE_PROFILE,
+    RuntimeSelectionError,
+    normalize_download_source_ids,
+    normalize_install_component_ids,
 )
 
 
@@ -67,13 +74,6 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 PROTOCOL_VERSION = 2
-ACCELERATOR_TO_PLAN = {
-    # base：随 Portable 携带的离线必备闭包（win-x64-base）；full 闭包由
-    # cpu / nvidia_cuda 显式选择（计划 §4.1）。
-    "base": "win-x64-base",
-    "cpu": "win-x64-cpu",
-    "nvidia_cuda": "win-x64-cu126",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -526,6 +526,8 @@ class RuntimeInstaller:
         source_operation_id: str | None = None,
         component_ids: tuple[str, ...] = (),
         required_capabilities: tuple[str, ...] = (),
+        install_component_ids: tuple[str, ...] | None = None,
+        download_source_ids: tuple[str, ...] | None = None,
     ) -> None:
         self.product_root = Path(product_root).resolve()
         self.component_lock_path = Path(component_lock).resolve()
@@ -539,6 +541,15 @@ class RuntimeInstaller:
         )
         self.accelerator = self._select_accelerator(accelerator)
         self.plan = ACCELERATOR_TO_PLAN[self.accelerator]
+        # install scope / download source 在这里一次性规范化（计划 §4.2）：
+        # None=Backend 缺省、[]=显式 base-only；源省略解析为 Backend 缺省源。
+        self._install_scope = normalize_install_component_ids(
+            install_component_ids, accelerator=self.accelerator
+        )
+        self._requested_download_source_ids = tuple(download_source_ids or ())
+        self._effective_download_source_ids = normalize_download_source_ids(
+            download_source_ids
+        )
         available_components = {
             component.component_id
             for component in self.manifest.profiles[self.plan].components
@@ -648,21 +659,61 @@ class RuntimeInstaller:
     def _marker(self) -> Path:
         return self.paths.runtime_root / ".installed.json"
 
-    def _integrity_ok(self) -> bool:
-        marker = self._marker()
-        python = _python_in(self.paths.runtime_root)
-        if not marker.is_file() or not python.is_file():
-            return False
+    def _marker_value(self) -> dict[str, Any] | None:
         try:
-            value = json.loads(marker.read_text(encoding="utf-8"))
+            value = json.loads(self._marker().read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def _integrity_ok(self) -> bool:
+        python = _python_in(self.paths.runtime_root)
+        if not self._marker().is_file() or not python.is_file():
             return False
-        return value == {
-            "schema_version": 1,
-            "backend_version": self.manifest.backend_version,
-            "manifest_sha256": self.manifest.sha256,
-            "accelerator": self.accelerator,
+        value = self._marker_value()
+        if value is None or value.get("schema_version") != 1:
+            return False
+        if (
+            value.get("backend_version") != self.manifest.backend_version
+            or value.get("manifest_sha256") != self.manifest.sha256
+            or value.get("accelerator") != self.accelerator
+        ):
+            return False
+        installed = value.get("component_ids")
+        # 新版 marker 记录实际安装闭包；缺该字段的旧 runtime 会在下一次
+        # ensure 整体重装（版本升级本就触发重装，无额外代价）。
+        if (
+            not isinstance(installed, list)
+            or not installed
+            or not set(installed).issubset(self._profile_component_ids())
+        ):
+            return False
+        return True
+
+    def _installed_scope_ids(self) -> tuple[str, ...]:
+        """已安装闭包（marker）；未安装/失完整时退回期望闭包以驱动首装。"""
+        if self._integrity_ok():
+            marker = self._marker_value()
+            if marker is not None:
+                installed = marker.get("component_ids")
+                if isinstance(installed, list):
+                    return tuple(str(item) for item in installed)
+        return self._desired_scope_ids()
+
+    def _desired_scope_ids(self) -> tuple[str, ...]:
+        """本次 intent 的安装闭包：显式 base-only 装 base lock，其余装目标档位。"""
+        profile = BASE_PROFILE if self._install_scope == () else self.plan
+        return tuple(
+            component.component_id
+            for component in self.manifest.profiles[profile].components
+        )
+
+    def _covering_profile(self, component_ids: tuple[str, ...]) -> str:
+        base_ids = {
+            component.component_id
+            for component in self.manifest.profiles[BASE_PROFILE].components
         }
+        return BASE_PROFILE if set(component_ids) <= base_ids else self.plan
 
     def profile_payload(self) -> dict[str, Any]:
         component_ids = self._profile_component_ids()
@@ -683,7 +734,16 @@ class RuntimeInstaller:
         )
 
     def _drifted_component_ids(self) -> tuple[str, ...]:
-        return self._drifted_component_ids_from(self.profile_payload())
+        return self._scope_drifted_from(self.profile_payload())
+
+    def _scope_drifted_from(self, profile: dict[str, Any]) -> tuple[str, ...]:
+        # 漂移只对已安装闭包判定：base-only 安装缺 full 组件不是漂移。
+        scope = set(self._installed_scope_ids())
+        return tuple(
+            component_id
+            for component_id in self._drifted_component_ids_from(profile)
+            if component_id in scope
+        )
 
     @staticmethod
     def _drifted_component_ids_from(profile: dict[str, Any]) -> tuple[str, ...]:
@@ -694,14 +754,30 @@ class RuntimeInstaller:
         )
 
     def _start_operation(
-        self, operation: str, *, effective_component_ids: tuple[str, ...] = ()
+        self,
+        operation: str,
+        *,
+        effective_component_ids: tuple[str, ...] = (),
     ) -> bool:
+        # ensure 的 requested 回显可选组件安装范围（None=缺省省略、
+        # []=显式 base-only）；inspect/repair 保持 component_ids 语义，
+        # 空集仍省略。
+        requested: tuple[str, ...] | None
+        if operation == "ensure":
+            requested = self._install_scope
+        else:
+            requested = self._component_ids or None
         return self._reporter.start(
             operation,
             total_steps=7 if operation != "inspect" else 2,
             operation_id=self._operation_id,
-            component_ids=self._component_ids,
+            component_ids=requested,
             effective_component_ids=effective_component_ids,
+            install_component_ids=self._install_scope
+            if operation == "ensure"
+            else None,
+            download_source_ids=self._effective_download_source_ids,
+            requested_download_source_ids=self._requested_download_source_ids,
             source=self._source,
             source_operation_id=self._source_operation_id,
             required_capabilities=self._required_capabilities,
@@ -710,7 +786,9 @@ class RuntimeInstaller:
     def inspect_snapshot(self, *, emit: bool = True) -> RuntimeInspection:
         started = self._start_operation("inspect") if emit else False
         profile = self.profile_payload()
-        ready = self._integrity_ok() and not self._drifted_component_ids_from(profile)
+        # inspect 诚实反映“已安装闭包是否 ready”，不把缺 full 可选组件
+        # 当作失败（base-only 是合法的安装状态）。
+        ready = self._integrity_ok() and not self._scope_drifted_from(profile)
         state = RuntimeState(
             status="ready" if ready else "missing",
             runtime_root=str(self.paths.runtime_root),
@@ -762,10 +840,16 @@ class RuntimeInstaller:
         }
 
     def ensure(self) -> RuntimeLaunch | None:
-        ready = self._integrity_ok() and not self._drifted_component_ids()
+        # ready 额外要求已安装闭包等于期望闭包：从 base-only 扩到 full
+        # （或反向）都会触发一次重装，而不是静默沿用旧范围。
+        ready = (
+            self._integrity_ok()
+            and self._installed_scope_ids() == self._desired_scope_ids()
+            and not self._drifted_component_ids()
+        )
         started = self._start_operation(
             "ensure",
-            effective_component_ids=() if ready else self._profile_component_ids(),
+            effective_component_ids=() if ready else self._desired_scope_ids(),
         )
         if not started:
             return self._launch() if ready else None
@@ -782,8 +866,12 @@ class RuntimeInstaller:
                     timeout=self._lock_timeout,
                 )
                 with lock:
-                    if not self._integrity_ok() or self._drifted_component_ids():
-                        self._install_locked()
+                    if (
+                        not self._integrity_ok()
+                        or self._installed_scope_ids() != self._desired_scope_ids()
+                        or self._drifted_component_ids()
+                    ):
+                        self._install_locked(self._desired_scope_ids())
             else:
                 self._reporter.advance(
                     phase="verify_runtime",
@@ -806,7 +894,8 @@ class RuntimeInstaller:
             self._reporter.fail(exc)
             raise
 
-    def _install_locked(self) -> None:
+    def _install_locked(self, target_ids: tuple[str, ...]) -> None:
+        profile_name = self._covering_profile(target_ids)
         self._reporter.advance(
             phase="prepare_runtime",
             current=3,
@@ -834,7 +923,7 @@ class RuntimeInstaller:
                     message_code="runtime.install_profile",
                     component_id="ocr_engine",
                 )
-            python = self._install_runner(partial, self.manifest, self.plan)
+            python = self._install_runner(partial, self.manifest, profile_name)
             if not self._runner_reports_phases:
                 self._reporter.advance(
                     phase="verify_runtime",
@@ -850,9 +939,7 @@ class RuntimeInstaller:
                 ) from exc
             if not python.is_file():
                 raise RuntimeInstallError("installed runtime has no Python executable")
-            probe_results = self._component_probe(
-                partial, self._profile_component_ids()
-            )
+            probe_results = self._component_probe(partial, target_ids)
             failed_components = sorted(
                 component_id
                 for component_id, ready in probe_results.items()
@@ -871,6 +958,7 @@ class RuntimeInstaller:
                 "backend_version": self.manifest.backend_version,
                 "manifest_sha256": self.manifest.sha256,
                 "accelerator": self.accelerator,
+                "component_ids": list(target_ids),
             }
             (partial / ".installed.json").write_text(
                 json.dumps(marker, sort_keys=True) + "\n",
@@ -903,7 +991,8 @@ class RuntimeInstaller:
         requested = set(self._component_ids) if self._component_ids else drifted
         needs_repair = bool(requested.intersection(drifted))
         globally_ready = self._integrity_ok() and not drifted
-        effective = () if not needs_repair else self._profile_component_ids()
+        # repair 只重建已安装闭包：不得把 base-only 运行时顺带升级成 full。
+        effective = () if not needs_repair else self._installed_scope_ids()
         started = self._start_operation(
             "repair",
             effective_component_ids=effective,
@@ -933,7 +1022,7 @@ class RuntimeInstaller:
                 timeout=self._lock_timeout,
             )
             with lock:
-                self._install_locked()
+                self._install_locked(self._installed_scope_ids())
             self._save_preference()
             launch = self._launch()
             self._reporter.succeed(
@@ -1016,6 +1105,8 @@ def _request(value: object) -> dict[str, Any]:
                 "accelerator",
                 "layout_manifest",
                 "product_id",
+                "install_component_ids",
+                "download_source_ids",
             }
         )
     elif request_kind == "observe":
@@ -1042,6 +1133,8 @@ def _request(value: object) -> dict[str, Any]:
                 "operation_id",
                 "component_ids",
                 "required_capabilities",
+                "install_component_ids",
+                "download_source_ids",
             }
         )
     else:
@@ -1077,6 +1170,27 @@ def _request(value: object) -> dict[str, Any]:
             or len(set(items)) != len(items)
         ):
             raise RuntimeInstallError(f"Runtime Host {field} is invalid")
+    for field in ("install_component_ids", "download_source_ids"):
+        if field not in value:
+            continue
+        items = value[field]
+        if (
+            not isinstance(items, list)
+            or any(not isinstance(item, str) or not item for item in items)
+            or len(set(items)) != len(items)
+            or (field == "download_source_ids" and not items)
+        ):
+            raise RuntimeInstallError(f"Runtime Host {field} is invalid")
+    # 选择字段只对 ensure / retry 合法（与正式 wire schema 的条件约束一致）。
+    if "install_component_ids" in value or "download_source_ids" in value:
+        if request_kind == "start" and value["operation"] != "ensure":
+            raise RuntimeInstallError(
+                "Runtime Host selection fields require operation ensure"
+            )
+        if request_kind == "command" and value["command"] != "retry":
+            raise RuntimeInstallError(
+                "Runtime Host selection fields require command retry"
+            )
     for field in (
         "operation_id",
         "command_id",
@@ -1107,6 +1221,8 @@ def _installer_from_request(
     source_operation_id: str | None = None,
     component_ids: tuple[str, ...] | None = None,
     required_capabilities: tuple[str, ...] | None = None,
+    install_component_ids: tuple[str, ...] | None = None,
+    download_source_ids: tuple[str, ...] | None = None,
 ) -> RuntimeInstaller:
     return RuntimeInstaller(
         product_root=request["product_root"],
@@ -1129,6 +1245,24 @@ def _installer_from_request(
             required_capabilities
             if required_capabilities is not None
             else tuple(request.get("required_capabilities", []))
+        ),
+        install_component_ids=(
+            install_component_ids
+            if install_component_ids is not None
+            else (
+                tuple(request["install_component_ids"])
+                if "install_component_ids" in request
+                else None
+            )
+        ),
+        download_source_ids=(
+            download_source_ids
+            if download_source_ids is not None
+            else (
+                tuple(request["download_source_ids"])
+                if "download_source_ids" in request
+                else None
+            )
         ),
     )
 
@@ -1194,6 +1328,16 @@ def _command_envelope(
         target_operation_id=request["target_operation_id"],
         new_operation_id=request.get("new_operation_id"),
         expected_sequence=request.get("expected_sequence"),
+        install_component_ids=(
+            tuple(request["install_component_ids"])
+            if "install_component_ids" in request
+            else None
+        ),
+        download_source_ids=(
+            tuple(request["download_source_ids"])
+            if "download_source_ids" in request
+            else None
+        ),
     )
     snapshot = receipt["snapshot"]
     operation = str(snapshot["operation"])
@@ -1269,6 +1413,10 @@ def _failure_envelope(
         legacy_code = "invalid_binding"
         canonical_code = "RUNTIME_IDENTITY_MISMATCH"
         category = "identity"
+    elif isinstance(exc, RuntimeSelectionError):
+        legacy_code = "invalid_request"
+        canonical_code = exc.code.value
+        category = "validation"
     elif (
         isinstance(exc, (json.JSONDecodeError, RuntimeInstallFailure))
         and operation is None
@@ -1352,6 +1500,16 @@ def main(argv: list[str] | None = None) -> int:
             operation_id=request.get("operation_id"),
             component_ids=tuple(request.get("component_ids", [])),
             required_capabilities=tuple(request.get("required_capabilities", [])),
+            install_component_ids=(
+                tuple(request["install_component_ids"])
+                if "install_component_ids" in request
+                else None
+            ),
+            download_source_ids=(
+                tuple(request["download_source_ids"])
+                if "download_source_ids" in request
+                else None
+            ),
             profile_id=request.get("profile_id"),
         )
     except (
@@ -1360,6 +1518,7 @@ def main(argv: list[str] | None = None) -> int:
         RuntimeInstallError,
         RuntimeLockTimeout,
         RuntimeOperationError,
+        RuntimeSelectionError,
         OSError,
     ) as exc:
         _emit(

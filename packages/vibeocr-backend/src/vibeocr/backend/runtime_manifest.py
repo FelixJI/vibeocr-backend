@@ -11,6 +11,14 @@ from pathlib import Path, PurePath
 from typing import Any
 
 PROFILE_NAMES = ("win-x64-base", "win-x64-cpu", "win-x64-cu126")
+# base：随 Portable 携带的离线必备闭包（win-x64-base）；full 闭包由
+# cpu / nvidia_cuda 显式选择（计划 §4.1）。accelerator → profile 的映射
+# 是 manifest 域的单一事实来源，selection policy 与 installer 共同消费。
+ACCELERATOR_TO_PLAN = {
+    "base": "win-x64-base",
+    "cpu": "win-x64-cpu",
+    "nvidia_cuda": "win-x64-cu126",
+}
 PROFILE_COMPONENTS = {
     # base-offline 必备闭包：随 Portable 携带、禁网可安装（计划 §4.1）。
     # 缺省 OCR 引擎是 RapidOCR（ocr_engine 组件）；不含 MinerU/CUDA。
@@ -526,6 +534,7 @@ def load_runtime_manifest(
 
 
 __all__ = [
+    "ACCELERATOR_TO_PLAN",
     "PROFILE_NAMES",
     "PROFILE_COMPONENTS",
     "InstallerArtifact",

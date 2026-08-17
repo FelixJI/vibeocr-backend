@@ -29,7 +29,7 @@ def test_backend_declares_protocol_same_major_package_range() -> None:
     )
 
     assert (
-        "vibeocr-runtime-contracts>=2.6.0,<3.0.0" in metadata["project"]["dependencies"]
+        "vibeocr-runtime-contracts>=2.7.0,<3.0.0" in metadata["project"]["dependencies"]
     )
 
 
@@ -67,4 +67,4 @@ def test_backend_wheel_metadata_preserves_protocol_package_range(
     ]
 
     assert len(protocol) == 1
-    assert str(protocol[0].specifier) == "<3.0.0,>=2.6.0"
+    assert str(protocol[0].specifier) == "<3.0.0,>=2.7.0"

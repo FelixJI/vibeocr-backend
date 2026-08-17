@@ -49,6 +49,12 @@ from vibeocr.backend.runtime_maintenance import (
     RuntimeSourceIdentityMismatch,
     runtime_status_from_environment,
 )
+from vibeocr.backend.runtime_selection import (
+    RuntimeSelectionError,
+    component_variant_catalog_payload,
+    download_source_catalog_payload,
+    normalize_download_source_ids,
+)
 from vibeocr.runtime_contracts import (
     SCHEMA_VERSION,
     ErrorCode,
@@ -63,6 +69,8 @@ from vibeocr.runtime_contracts.dtos import OcrEngine
 from vibeocr.runtime_contracts.errors import error_registry
 from vibeocr.runtime_contracts.generated.capabilities import (
     OCR_ENGINE_SELECTION_V1,
+    RUNTIME_COMPONENT_SELECTION_V1,
+    RUNTIME_DOWNLOAD_SOURCES_V1,
 )
 
 from .auth import check_bearer_token, check_loopback, is_bootstrap_path
@@ -182,6 +190,15 @@ def _capability_descriptors(
             descriptor["ocr_engine_catalog"] = engine_catalog or (
                 _fallback_engine_catalog()
             )
+        elif name == RUNTIME_DOWNLOAD_SOURCES_V1:
+            # 源目录来自 Backend 声明（release-wide、确定性）。
+            descriptor["download_source_catalog"] = download_source_catalog_payload()
+        elif name == RUNTIME_COMPONENT_SELECTION_V1:
+            # 可选组件目录由 manifest/profile 派生：feature+accelerator ->
+            # component_id；base 必备组件不进入可选目录。
+            descriptor["component_variant_catalog"] = (
+                component_variant_catalog_payload()
+            )
         descriptors.append(descriptor)
     return descriptors
 
@@ -244,6 +261,8 @@ def _runtime_exception_response(exc: Exception, instance_id: str) -> JSONRespons
         retry_after = 1
     elif isinstance(exc, RuntimeInstallFailure):
         code = ErrorCode.RUNTIME_INSTALL_FAILED
+    elif isinstance(exc, RuntimeSelectionError):
+        code = exc.code
     elif isinstance(exc, (ValueError, TypeError, json.JSONDecodeError)):
         code = ErrorCode.VALIDATION_ERROR
     else:
@@ -484,6 +503,18 @@ def create_app(
             body = _strict_wire_payload(
                 await request.json(), wire.RuntimeMaintenanceRequest
             )
+            install_component_ids = body.get("install_component_ids")
+            download_source_ids = body.get("download_source_ids")
+            if (
+                install_component_ids is not None or download_source_ids is not None
+            ) and (body["operation"] != "ensure"):
+                raise ValueError(
+                    "Runtime selection fields are only valid for operation ensure"
+                )
+            if download_source_ids is None:
+                # 省略时在开始瞬间快照当前 Settings（计划 §4.3）；
+                # 两者都为空时由 installer 解析 Backend 缺省源。
+                download_source_ids = list(module.settings().download_source_ids)
             return await asyncio.to_thread(
                 control().execute,
                 operation=body["operation"],
@@ -491,6 +522,12 @@ def create_app(
                 component_ids=tuple(body.get("component_ids", [])),
                 required_capabilities=tuple(body.get("required_capabilities", [])),
                 profile_id=body.get("profile_id"),
+                install_component_ids=(
+                    tuple(install_component_ids)
+                    if install_component_ids is not None
+                    else None
+                ),
+                download_source_ids=tuple(download_source_ids),
             )
         except Exception as exc:
             return _runtime_exception_response(exc, instance_id)
@@ -505,6 +542,14 @@ def create_app(
             body = _strict_wire_payload(
                 await request.json(), wire.RuntimeMaintenanceCommandRequest
             )
+            install_component_ids = body.get("install_component_ids")
+            download_source_ids = body.get("download_source_ids")
+            if (
+                install_component_ids is not None or download_source_ids is not None
+            ) and (body["command"] != "retry"):
+                raise ValueError(
+                    "Runtime selection fields are only valid for command retry"
+                )
             return await asyncio.to_thread(
                 control().command,
                 command_id=body["command_id"],
@@ -512,6 +557,16 @@ def create_app(
                 target_operation_id=body["target_operation_id"],
                 new_operation_id=body.get("new_operation_id"),
                 expected_sequence=body.get("expected_sequence"),
+                install_component_ids=(
+                    tuple(install_component_ids)
+                    if install_component_ids is not None
+                    else None
+                ),
+                download_source_ids=(
+                    tuple(download_source_ids)
+                    if download_source_ids is not None
+                    else None
+                ),
             )
         except Exception as exc:
             return _runtime_exception_response(exc, instance_id)
@@ -705,12 +760,22 @@ def create_app(
             extra = body.get("extra", {})
             if not isinstance(extra, dict):
                 raise ValueError("extra must be an object")
+            # download_source_ids 持久化用户默认偏好：只存显式选择，
+            # 未知 id/同 kind 多选 fail closed（RuntimeSelectionError 映射
+            # 到 DOWNLOAD_SOURCE_UNKNOWN / VALIDATION_ERROR）。
+            raw_sources = body.get("download_source_ids")
+            source_ids = (
+                normalize_download_source_ids(raw_sources) if raw_sources else ()
+            )
             snapshot = SettingsSnapshot(
                 default_ttl_seconds=default_ttl,
                 pipelines=pipelines,
                 extra=extra,
+                download_source_ids=source_ids,
             )
             return module.update_settings(snapshot).to_payload()
+        except RuntimeSelectionError as exc:
+            return _error_response(exc.code, instance_id, detail={"reason": exc.reason})
         except (TypeError, ValueError) as exc:
             return _error_response(
                 ErrorCode.VALIDATION_ERROR,
