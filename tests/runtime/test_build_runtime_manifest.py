@@ -180,6 +180,9 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
         "runtime.events.sse.v1",
         "runtime.events.ndjson.v1",
         "task.progress.v1",
+        "ocr.engine-selection.v1",
+        "runtime.download-sources.v1",
+        "runtime.component-selection.v1",
     }
     assert [
         component.component_id
