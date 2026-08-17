@@ -17,6 +17,7 @@ import httpx
 import pytest
 from vibeocr.backend.supervisor.app import create_app
 from vibeocr.backend.supervisor.bootstrap import generate_session_token, new_instance_id
+from vibeocr.backend.supervisor.composition import build_supervisor
 from vibeocr.backend.supervisor.inference.budgets import AdapterCapability
 from vibeocr.backend.supervisor.inference.ocr_engines import (
     EngineAvailability,
@@ -62,6 +63,9 @@ class _FakeOcrEngine:
         compute_batch: Any | None = None,
     ) -> list[dict[str, Any]]:
         return [{"engine": self.engine_id.value} for _ in items]
+
+    def configure_settings(self, snapshot: Any) -> None:
+        del snapshot
 
 
 class _CapturingExecutor:
@@ -314,3 +318,111 @@ class TestReadyEngineCatalog:
         }
         assert set(entries) == {"rapidocr", "windows", "paddleocr"}
         assert all(entry["availability"] == "unavailable" for entry in entries.values())
+
+    async def test_successful_maintenance_refreshes_cached_engine_catalog(
+        self, tmp_path: Any, engines: list[_FakeOcrEngine]
+    ) -> None:
+        class _SuccessfulMaintenance:
+            def execute(self, **kwargs: Any) -> dict[str, Any]:
+                return {
+                    "schema_version": 2,
+                    "operation_id": "ensure-1",
+                    "snapshot": {
+                        "operation_id": "ensure-1",
+                        "sequence": 1,
+                        "operation": "ensure",
+                        "operation_state": "succeeded",
+                        "phase": "commit_runtime",
+                        "profile_id": "win-x64-cpu",
+                        "updated_at": "2026-08-17T00:00:00Z",
+                    },
+                    "negotiated_capabilities": list(kwargs["required_capabilities"]),
+                }
+
+        module, _ = _module(tmp_path, engines)
+        paddle = next(
+            engine for engine in engines if engine.engine_id is OcrEngine.PADDLEOCR
+        )
+        token = generate_session_token()
+        app = create_app(
+            module,
+            token,
+            runtime_control=_SuccessfulMaintenance(),  # type: ignore[arg-type]
+        )
+
+        async with _client(app, token) as http:
+            before = await http.get("/v2/health")
+            paddle.availability = EngineAvailability.READY
+            cached = await http.get("/v2/health")
+            maintained = await http.post(
+                "/v2/runtime/maintenance",
+                json={
+                    "operation_id": "ensure-1",
+                    "operation": "ensure",
+                    "profile_id": "win-x64-cpu",
+                    "component_ids": [],
+                    "required_capabilities": [],
+                },
+            )
+            refreshed = await http.get("/v2/health")
+
+        def paddle_availability(response: httpx.Response) -> str:
+            descriptor = next(
+                item
+                for item in response.json()["capability_descriptors"]
+                if item["name"] == "ocr.engine-selection.v1"
+            )
+            entry = next(
+                item
+                for item in descriptor["ocr_engine_catalog"]["engines"]
+                if item["id"] == "paddleocr"
+            )
+            return str(entry["availability"])
+
+        assert paddle_availability(before) == "preparation_required"
+        assert paddle_availability(cached) == "preparation_required"
+        assert maintained.status_code == 200
+        assert paddle_availability(refreshed) == "ready"
+
+
+@pytest.mark.parametrize(
+    ("availability", "expected_status", "expected_code"),
+    [
+        (
+            EngineAvailability.UNAVAILABLE,
+            426,
+            "OCR_ENGINE_UNAVAILABLE",
+        ),
+        (
+            EngineAvailability.PREPARATION_REQUIRED,
+            428,
+            "OCR_ENGINE_PREPARATION_REQUIRED",
+        ),
+    ],
+)
+async def test_preload_preserves_ocr_engine_error_mapping(
+    tmp_path: Any,
+    availability: EngineAvailability,
+    expected_status: int,
+    expected_code: str,
+) -> None:
+    rapid = _FakeOcrEngine(
+        OcrEngine.RAPIDOCR,
+        availability=availability,
+        required_component=(
+            "document_parsing"
+            if availability is EngineAvailability.PREPARATION_REQUIRED
+            else None
+        ),
+    )
+    module, handle = build_supervisor(
+        instance_id=new_instance_id(),
+        stager_root=tmp_path / "staging",
+        engine_registry=OcrEngineRegistry([rapid]),
+        use_real_paddle=False,
+        use_mineru=False,
+    )
+    async with _client(create_app(module, handle.token), handle.token) as http:
+        response = await http.post("/v2/runtime/preload", json={"pipelines": ["OCR"]})
+    assert response.status_code == expected_status, response.text
+    assert response.json()["code"] == expected_code

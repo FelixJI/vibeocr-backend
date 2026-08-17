@@ -27,12 +27,14 @@ from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_maintenance import (
     RuntimeInstallFailure,
     RuntimeMaintenanceReporter,
+    probe_runtime_components,
     profile_descriptor,
     runtime_status_from_environment,
 )
 from vibeocr.backend.runtime_manifest import (
     ManifestError,
     load_runtime_manifest,
+    runtime_component_binding,
     validate_requirements_lock,
 )
 from vibeocr.backend.runtime_selection import BoundDownloadSource
@@ -529,7 +531,7 @@ def test_failed_repair_preserves_previous_runtime_until_verified_commit(
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=fail,
-        component_probe=lambda _root, component_ids: {
+        component_probe=lambda _root, component_ids, _profile_id: {
             component_id: component_id != "ocr_engine" for component_id in component_ids
         },
         operation_id="failed-repair",
@@ -565,7 +567,7 @@ def test_component_import_probe_reports_integrity_failed_drift(
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=_fake_install,
-        component_probe=lambda _root, component_ids: {
+        component_probe=lambda _root, component_ids, _profile_id: {
             component_id: component_id != "ocr_engine" for component_id in component_ids
         },
     )
@@ -580,6 +582,36 @@ def test_component_import_probe_reports_integrity_failed_drift(
     assert inspection.integrity == "not-installed"
 
 
+def test_base_component_probe_uses_rapidocr_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    python = runtime_root / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"python")
+
+    def run(command, **_kwargs):  # type: ignore[no-untyped-def]
+        modules = json.loads(command[-1])
+        result = {
+            component_id: module == "rapidocr"
+            for component_id, module in modules.items()
+        }
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="VIBEOCR_COMPONENT_PROBE=" + json.dumps(result) + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(runtime_maintenance.subprocess, "run", run)
+
+    assert probe_runtime_components(
+        runtime_root,
+        ("ocr_engine",),
+        profile_id="win-x64-base",
+    ) == {"ocr_engine": True}
+
+
 def test_runtime_control_inspect_probes_components_once(tmp_path: Path) -> None:
     manifest, component = _release(tmp_path / "release")
     initial = RuntimeInstaller(
@@ -592,7 +624,9 @@ def test_runtime_control_inspect_probes_components_once(tmp_path: Path) -> None:
     initial.ensure()
     probe_calls: list[tuple[Path, tuple[str, ...]]] = []
 
-    def probe(runtime_root: Path, component_ids: tuple[str, ...]) -> dict[str, bool]:
+    def probe(
+        runtime_root: Path, component_ids: tuple[str, ...], _profile_id: str
+    ) -> dict[str, bool]:
         probe_calls.append((runtime_root, component_ids))
         return {component_id: True for component_id in component_ids}
 
@@ -645,7 +679,7 @@ def test_repair_of_in_sync_component_succeeds_without_claiming_global_ready(
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=install,
-        component_probe=lambda _root, component_ids: {
+        component_probe=lambda _root, component_ids, _profile_id: {
             component_id: component_id != "ocr_engine" for component_id in component_ids
         },
         component_ids=("runtime_host",),
@@ -790,10 +824,7 @@ def test_component_repair_reports_requested_and_effective_scope(tmp_path: Path) 
         install_runner=install,
     )
     initial.ensure()
-    marker = initial.paths.runtime_root / ".installed.json"
-    marker_payload = json.loads(marker.read_text(encoding="utf-8"))
-    marker_payload["manifest_sha256"] = "f" * 64
-    marker.write_text(json.dumps(marker_payload), encoding="utf-8")
+    Path(initial._launch().python_executable).unlink()
 
     repair = RuntimeInstaller(
         product_root=tmp_path / "product",
@@ -1011,7 +1042,7 @@ def test_install_progress_and_http_status_share_the_persisted_snapshot(
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(
         "vibeocr.backend.runtime_maintenance.probe_runtime_components",
-        lambda _root, component_ids: {
+        lambda _root, component_ids, **_kwargs: {
             component_id: True for component_id in component_ids
         },
     )
@@ -1034,7 +1065,7 @@ def test_install_progress_and_http_status_share_the_persisted_snapshot(
 
     monkeypatch.setattr(
         "vibeocr.backend.runtime_maintenance.probe_runtime_components",
-        lambda _root, component_ids: {
+        lambda _root, component_ids, **_kwargs: {
             component_id: component_id != "ocr_engine" for component_id in component_ids
         },
     )
@@ -1278,7 +1309,7 @@ def test_online_install_uses_selected_source_and_isolates_parent_config(
         component_lock=component,
         runtime_manifest=manifest,
         accelerator="cpu",
-        component_probe=lambda _root, ids: dict.fromkeys(ids, True),
+        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
         download_source_ids=source_ids,
     )
     launch = runtime.ensure()
@@ -1322,7 +1353,7 @@ def test_cuda_gpu_only_selection_uses_exact_install_scope(
         component_lock=component,
         runtime_manifest=manifest,
         accelerator="nvidia_cuda",
-        component_probe=lambda _root, ids: dict.fromkeys(ids, True),
+        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
         install_component_ids=("gpu_runtime",),
     )
     runtime.ensure()
@@ -1541,6 +1572,118 @@ def test_ensure_with_explicit_base_only_scope_installs_base_lock(
     assert "document_parsing" not in snapshot["effective_component_ids"]
     # base-only 缺 full 可选组件不算漂移：inspect 仍 ready。
     assert installer.inspect().integrity == "verified"
+
+
+@pytest.mark.parametrize(
+    ("install_component_ids", "expected_profile", "expected_ocr_import"),
+    [
+        ((), "win-x64-base", "rapidocr"),
+        (("document_parsing",), "win-x64-cpu", "paddleocr"),
+    ],
+)
+def test_install_probe_uses_actual_install_scope_profile(
+    tmp_path: Path,
+    install_component_ids: tuple[str, ...],
+    expected_profile: str,
+    expected_ocr_import: str,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+
+    def probe(
+        runtime_root: Path,
+        component_ids: tuple[str, ...],
+        profile_id: str,
+    ) -> dict[str, bool]:
+        if runtime_root.name != "runtime.installing":
+            return dict.fromkeys(component_ids, True)
+        return {
+            component_id: (
+                runtime_component_binding(profile_id, component_id).import_name
+                == expected_ocr_import
+                if component_id == "ocr_engine"
+                else profile_id == expected_profile
+            )
+            for component_id in component_ids
+        }
+
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+        component_probe=probe,
+        install_component_ids=install_component_ids,
+    )
+
+    assert installer.ensure() is not None
+
+
+def test_repair_preserves_trusted_base_only_closure_when_runtime_is_incomplete(
+    tmp_path: Path,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    installed_profiles: list[str] = []
+
+    def install(partial: Path, runtime_manifest, profile: str) -> Path:
+        installed_profiles.append(profile)
+        return _fake_install(partial, runtime_manifest, profile)
+
+    base_only = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=install,
+        install_component_ids=(),
+    )
+    base_only.ensure()
+    Path(base_only._launch().python_executable).unlink()
+
+    repair = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=install,
+    )
+    repair.repair()
+
+    assert installed_profiles == ["win-x64-base", "win-x64-base"]
+    marker = json.loads(
+        (repair.paths.runtime_root / ".installed.json").read_text(encoding="utf-8")
+    )
+    assert "document_parsing" not in marker["component_ids"]
+
+
+def test_repair_fails_closed_when_installed_marker_is_untrusted(
+    tmp_path: Path,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    initial = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+        install_component_ids=(),
+    )
+    initial.ensure()
+    marker_path = initial.paths.runtime_root / ".installed.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["manifest_sha256"] = "f" * 64
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+    repair = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+    )
+
+    with pytest.raises(RuntimeInstallError, match="untrusted installed marker"):
+        repair.repair()
 
 
 def test_ensure_with_optional_components_reports_full_profile_closure(

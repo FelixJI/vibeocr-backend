@@ -149,8 +149,8 @@ class TestEngineValidForPipeline:
 
 class TestOcrEngineRegistry:
     def test_catalog_covers_all_stable_ids_when_empty(self) -> None:
-        registry = OcrEngineRegistry([])
-        payload = registry.catalog_payload()
+        resolver = OcrEngineResolver(registry=OcrEngineRegistry([]))
+        payload = resolver.catalog_payload()
         ids = [entry["id"] for entry in payload["engines"]]
         assert ids == ["rapidocr", "windows", "paddleocr"]
         assert all(
@@ -168,7 +168,8 @@ class TestOcrEngineRegistry:
             required_component="document_parsing",
         )
         registry = OcrEngineRegistry([rapid, paddle])
-        entries = {e["id"]: e for e in registry.catalog_payload()["engines"]}
+        resolver = OcrEngineResolver(registry=registry)
+        entries = {e["id"]: e for e in resolver.catalog_payload()["engines"]}
         assert entries["rapidocr"]["availability"] == "ready"
         assert entries["rapidocr"]["included_in_base"] is True
         assert entries["paddleocr"]["availability"] == "preparation_required"
@@ -191,10 +192,14 @@ class TestOcrEngineRegistry:
             availability=EngineAvailability.UNAVAILABLE,
             reason_code="boom",
         )
-        registry = OcrEngineRegistry([broken])
-        entries = {e["id"]: e for e in registry.catalog_payload()["engines"]}
+        resolver = OcrEngineResolver(registry=OcrEngineRegistry([broken]))
+        entries = {e["id"]: e for e in resolver.catalog_payload()["engines"]}
         assert entries["windows"]["availability"] == "unavailable"
         assert entries["windows"]["reason_code"] == REASON_ENGINE_INIT_FAILED
+        with pytest.raises(OcrEngineError) as excinfo:
+            resolver.resolve(OcrEngine.WINDOWS)
+        assert excinfo.value.code is ErrorCode.OCR_ENGINE_UNAVAILABLE
+        assert excinfo.value.reason_code == REASON_ENGINE_INIT_FAILED
 
     def test_selectable_engine_ids_only_ready_in_protocol_order(self) -> None:
         registry = OcrEngineRegistry(
@@ -208,7 +213,8 @@ class TestOcrEngineRegistry:
                 ),
             ]
         )
-        assert registry.selectable_engine_ids() == ("rapidocr", "paddleocr")
+        resolver = OcrEngineResolver(registry=registry)
+        assert resolver.selectable_engine_ids() == ("rapidocr", "paddleocr")
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +292,27 @@ class TestOcrEngineResolver:
         resolver.invalidate_probe_cache(OcrEngine.RAPIDOCR)
         with pytest.raises(OcrEngineError):
             resolver.validate(None)
+
+    def test_catalog_availability_refreshes_only_after_resolver_invalidation(
+        self,
+    ) -> None:
+        engine = FakeEngine(OcrEngine.RAPIDOCR)
+        resolver = OcrEngineResolver(registry=OcrEngineRegistry([engine]))
+
+        initial = {e["id"]: e for e in resolver.catalog_payload()["engines"]}
+        assert initial["rapidocr"]["availability"] == "ready"
+
+        engine.availability = EngineAvailability.UNAVAILABLE
+        engine.reason_code = REASON_ENGINE_LANGUAGE_UNAVAILABLE
+        cached = {e["id"]: e for e in resolver.catalog_payload()["engines"]}
+        assert cached["rapidocr"]["availability"] == "ready"
+
+        resolver.invalidate_probe_cache()
+        refreshed = {e["id"]: e for e in resolver.catalog_payload()["engines"]}
+        assert refreshed["rapidocr"]["availability"] == "unavailable"
+        assert (
+            refreshed["rapidocr"]["reason_code"] == REASON_ENGINE_LANGUAGE_UNAVAILABLE
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -73,6 +73,50 @@ class RuntimeComponent:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeComponentBinding:
+    """Profile-specific package metadata shared by build and runtime probes."""
+
+    distribution: str
+    import_name: str
+
+
+_RUNTIME_COMPONENT_BINDINGS = {
+    ("win-x64-base", "ocr_engine"): RuntimeComponentBinding("rapidocr", "rapidocr"),
+    ("win-x64-cpu", "ocr_engine"): RuntimeComponentBinding("paddleocr", "paddleocr"),
+    ("win-x64-cu126", "ocr_engine"): RuntimeComponentBinding("paddleocr", "paddleocr"),
+    ("win-x64-base", "image_code_tools"): RuntimeComponentBinding(
+        "opencv-python", "cv2"
+    ),
+    ("win-x64-cpu", "image_code_tools"): RuntimeComponentBinding(
+        "opencv-contrib-python", "cv2"
+    ),
+    ("win-x64-cu126", "image_code_tools"): RuntimeComponentBinding(
+        "opencv-contrib-python", "cv2"
+    ),
+}
+_SHARED_RUNTIME_COMPONENT_BINDINGS = {
+    "document_parsing": RuntimeComponentBinding("mineru", "mineru"),
+    "pdf_document_tools": RuntimeComponentBinding("pymupdf", "fitz"),
+    "runtime_host": RuntimeComponentBinding("fastapi", "fastapi"),
+    "gpu_runtime": RuntimeComponentBinding("torch", "torch"),
+}
+
+
+def runtime_component_binding(
+    profile_id: str, component_id: str
+) -> RuntimeComponentBinding:
+    """Return the authoritative package/import binding for one component."""
+    binding = _RUNTIME_COMPONENT_BINDINGS.get((profile_id, component_id))
+    if binding is None:
+        binding = _SHARED_RUNTIME_COMPONENT_BINDINGS.get(component_id)
+    if binding is None:
+        raise ManifestError(
+            f"runtime component binding is missing: {profile_id}/{component_id}"
+        )
+    return binding
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeInstallScope:
     scope_id: str
     component_ids: tuple[str, ...]
@@ -710,10 +754,12 @@ __all__ = [
     "PythonRuntime",
     "RuntimeManifest",
     "RuntimeComponent",
+    "RuntimeComponentBinding",
     "RuntimeInstallScope",
     "RuntimeProfile",
     "installer_executable_sha256",
     "load_runtime_manifest",
+    "runtime_component_binding",
     "sha256_file",
     "validate_requirements_lock",
     "default_profile_components",

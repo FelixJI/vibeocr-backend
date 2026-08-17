@@ -46,6 +46,8 @@ from .settings_store import RuntimeSettings
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from .inference.ocr_engines import OcrEngineRegistry, OcrEngineResolver
+
 
 class Executor(Protocol):
     """The seam real adapters (Paddle/MinerU/PDF) implement.
@@ -114,7 +116,8 @@ class SupervisorModule:
         stager_root: Any,
         executor: Executor,
         pdf_adapter: Any = None,
-        engine_registry: Any = None,
+        engine_registry: OcrEngineRegistry | None = None,
+        engine_resolver: OcrEngineResolver | None = None,
         settings_store: RuntimeSettings | None = None,
     ) -> None:
         self.options = options
@@ -142,6 +145,11 @@ class SupervisorModule:
         # its live probes; None means this module has no real recognition
         # backend (tests/fakes) and engine validation stays value-only.
         self.engine_registry = engine_registry
+        if engine_resolver is None and engine_registry is not None:
+            from .inference.ocr_engines import OcrEngineResolver
+
+            engine_resolver = OcrEngineResolver(registry=engine_registry)
+        self.engine_resolver = engine_resolver
         self._lock = threading.RLock()
         self._draining = False
         self._shutdown = False

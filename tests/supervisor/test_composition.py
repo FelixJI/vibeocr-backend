@@ -107,15 +107,59 @@ def test_null_executor_swallows_transition_error(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_supervisor_uses_null_executor_without_backends(
+def test_build_supervisor_keeps_base_ocr_path_without_optional_backends(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from vibeocr.backend.supervisor.inference.ocr_engines import (
+        EngineAvailability,
+        EngineDescriptor,
+        OcrEngineRegistry,
+    )
+    from vibeocr.runtime_contracts import ResidencyStatus
+    from vibeocr.runtime_contracts.dtos import OcrEngine
+
+    class _BaseOcrEngine:
+        engine_id = OcrEngine.RAPIDOCR
+
+        def descriptor(self) -> EngineDescriptor:
+            return EngineDescriptor(
+                engine_id=self.engine_id,
+                availability=EngineAvailability.READY,
+                included_in_base=True,
+            )
+
+        def preload(self, pipelines):  # type: ignore[no-untyped-def]
+            return ResidencyStatus()
+
+        def residency_status(self) -> ResidencyStatus:
+            return ResidencyStatus()
+
+        def release_idle(self, pipeline=None):  # type: ignore[no-untyped-def]
+            return ResidencyStatus()
+
+        def configure_settings(self, snapshot):  # type: ignore[no-untyped-def]
+            return None
+
+        def close(self) -> None:
+            return None
+
     monkeypatch.setattr(composition, "_paddle_available", lambda: False)
     monkeypatch.setattr(composition, "_mineru_available", lambda: False)
+    registry = OcrEngineRegistry([_BaseOcrEngine()])
     module, handle = build_supervisor(
-        instance_id="comp-test", stager_root=tmp_path / "stage"
+        instance_id="comp-test",
+        stager_root=tmp_path / "stage",
+        engine_registry=registry,
     )
-    assert isinstance(module._executor, _NullExecutor)
+    assert module.engine_resolver.catalog_payload()["engines"][0] == {
+        "id": "rapidocr",
+        "availability": "ready",
+        "included_in_base": True,
+        "reason_code": None,
+        "required_component": None,
+    }
+    module.preload(("OCR",))
+    module.release_idle("OCR")
     assert handle.token  # bootstrap handle should now carry a token
 
 
@@ -182,6 +226,7 @@ def test_build_supervisor_picks_composite_when_paddle_available(
         use_paddle,
         use_mineru,
         engine_registry=None,  # type: ignore[no-untyped-def]
+        engine_resolver=None,  # type: ignore[no-untyped-def]
     ):
         captured.update(use_paddle=use_paddle, use_mineru=use_mineru)
         return _NullExecutor()
@@ -207,6 +252,7 @@ def test_build_supervisor_picks_composite_when_mineru_available(
         use_paddle,
         use_mineru,
         engine_registry=None,  # type: ignore[no-untyped-def]
+        engine_resolver=None,  # type: ignore[no-untyped-def]
     ):
         captured.update(use_paddle=use_paddle, use_mineru=use_mineru)
         return _NullExecutor()
@@ -220,8 +266,8 @@ def test_build_supervisor_picks_composite_when_mineru_available(
         use_real_paddle=False,
     )
     assert captured == {"use_paddle": False, "use_mineru": True}
-    # 无 RECOGNITION 后端时不构建引擎目录。
-    assert module.engine_registry is None
+    # MinerU 是可选子执行器；base OCR 目录始终存在。
+    assert module.engine_registry is not None
 
 
 def test_build_supervisor_force_paddle_overrides_availability(
@@ -235,6 +281,7 @@ def test_build_supervisor_force_paddle_overrides_availability(
         use_paddle,
         use_mineru,
         engine_registry=None,  # type: ignore[no-untyped-def]
+        engine_resolver=None,  # type: ignore[no-untyped-def]
     ):
         captured.update(use_paddle=use_paddle, use_mineru=use_mineru)
         return _NullExecutor()
@@ -329,11 +376,14 @@ def test_build_paddle_executor_wires_factory_and_clear_cache(
 
 
 def test_build_ocr_engine_registry_registers_all_stable_engines() -> None:
-    from vibeocr.backend.supervisor.inference.ocr_engines import LazyEngineHandle
+    from vibeocr.backend.supervisor.inference.ocr_engines import (
+        LazyEngineHandle,
+        OcrEngineResolver,
+    )
     from vibeocr.runtime_contracts.dtos import OcrEngine
 
     registry = composition._build_ocr_engine_registry(lambda: object())
-    descriptors = registry.probe_descriptors()
+    descriptors = OcrEngineResolver(registry).probe_descriptors()
     assert [d.engine_id for d in descriptors] == [
         OcrEngine.RAPIDOCR,
         OcrEngine.WINDOWS,
@@ -365,7 +415,7 @@ def test_build_paddle_executor_with_registry_wraps_router(
     assert isinstance(adapter, OcrEngineRoutingAdapter)
 
 
-def test_build_supervisor_null_path_exposes_no_engine_registry(
+def test_build_supervisor_base_path_exposes_engine_registry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(composition, "_paddle_available", lambda: False)
@@ -373,7 +423,7 @@ def test_build_supervisor_null_path_exposes_no_engine_registry(
     module, _ = build_supervisor(
         instance_id="comp-test", stager_root=tmp_path / "stage"
     )
-    assert module.engine_registry is None
+    assert module.engine_registry is not None
 
 
 def test_paddle_clear_cache_runs_empty_cache_when_cuda_compiled(
@@ -489,7 +539,13 @@ def test_build_composite_executor_routes_to_each_backend(
     paddle_exec = _NullExecutor()
     mineru_exec = _NullExecutor()
 
-    def fake_paddle(*, scheduler=None, engine_registry=None):  # type: ignore[no-untyped-def]
+    def fake_paddle(  # type: ignore[no-untyped-def]
+        *,
+        scheduler=None,
+        engine_registry=None,
+        engine_resolver=None,
+        paddle_fallback=True,
+    ):
         return paddle_exec
 
     def fake_mineru(*, scheduler=None):  # type: ignore[no-untyped-def]
@@ -504,10 +560,20 @@ def test_build_composite_executor_routes_to_each_backend(
 
 def test_build_composite_executor_paddle_only(monkeypatch: pytest.MonkeyPatch) -> None:
     paddle_exec = _NullExecutor()
+
+    def fake_paddle(  # type: ignore[no-untyped-def]
+        *,
+        scheduler=None,
+        engine_registry=None,
+        engine_resolver=None,
+        paddle_fallback=True,
+    ):
+        return paddle_exec
+
     monkeypatch.setattr(
         composition,
         "_build_paddle_executor",
-        lambda *, scheduler=None, engine_registry=None: paddle_exec,
+        fake_paddle,
     )
     composite = composition._build_composite_executor(use_paddle=True, use_mineru=False)
     assert len(composite._children) == 1
@@ -519,7 +585,7 @@ def test_build_composite_executor_mineru_only(monkeypatch: pytest.MonkeyPatch) -
         composition, "_build_mineru_executor", lambda *, scheduler=None: mineru_exec
     )
     composite = composition._build_composite_executor(use_paddle=False, use_mineru=True)
-    assert len(composite._children) == 1
+    assert len(composite._children) == 2
 
 
 # ---------------------------------------------------------------------------

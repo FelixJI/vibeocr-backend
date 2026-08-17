@@ -104,13 +104,13 @@ class RuntimeLaunch:
 
 
 InstallRunner = Callable[[Path, RuntimeManifest, str], Path]
-ComponentProbe = Callable[[Path, tuple[str, ...]], dict[str, bool]]
+ComponentProbe = Callable[[Path, tuple[str, ...], str], dict[str, bool]]
 
 
 def _default_component_probe(
-    runtime_root: Path, component_ids: tuple[str, ...]
+    runtime_root: Path, component_ids: tuple[str, ...], profile_id: str
 ) -> dict[str, bool]:
-    return probe_runtime_components(runtime_root, component_ids)
+    return probe_runtime_components(runtime_root, component_ids, profile_id=profile_id)
 
 
 def _run_install_command(
@@ -600,13 +600,14 @@ class RuntimeInstaller:
         self._required_capabilities = required_capabilities
         self._source = runtime_source_identity(self.manifest)
         self._runner_reports_phases = install_runner is None
-        self._component_probe = component_probe or (
-            _default_component_probe
-            if install_runner is None
-            else lambda _root, component_ids: {
+        if component_probe is not None:
+            self._component_probe = component_probe
+        elif install_runner is None:
+            self._component_probe = _default_component_probe
+        else:
+            self._component_probe = lambda _root, component_ids, _profile_id: {
                 component_id: True for component_id in component_ids
             }
-        )
         if install_runner is None:
             self._install_runner = lambda partial, manifest, profile: (
                 _default_install_runner(
@@ -700,34 +701,39 @@ class RuntimeInstaller:
         python = _python_in(self.paths.runtime_root)
         if not self._marker().is_file() or not python.is_file():
             return False
+        return self._trusted_installed_scope_ids() is not None
+
+    def _trusted_installed_scope_ids(self) -> tuple[str, ...] | None:
+        """Read a bound, manifest-declared installed closure from the marker."""
         value = self._marker_value()
         if value is None or value.get("schema_version") != 1:
-            return False
+            return None
         if (
             value.get("backend_version") != self.manifest.backend_version
             or value.get("manifest_sha256") != self.manifest.sha256
             or value.get("accelerator") != self.accelerator
         ):
-            return False
+            return None
         installed = value.get("component_ids")
-        # 新版 marker 记录实际安装闭包；缺该字段的旧 runtime 会在下一次
-        # ensure 整体重装（版本升级本就触发重装，无额外代价）。
         if (
             not isinstance(installed, list)
             or not installed
+            or any(not isinstance(item, str) for item in installed)
+            or len(set(installed)) != len(installed)
             or not set(installed).issubset(self._profile_component_ids())
         ):
-            return False
-        return True
+            return None
+        try:
+            scope = self._scope_for_ids(tuple(installed))
+        except RuntimeInstallError:
+            return None
+        return scope.component_ids
 
     def _installed_scope_ids(self) -> tuple[str, ...]:
-        """已安装闭包（marker）；未安装/失完整时退回期望闭包以驱动首装。"""
-        if self._integrity_ok():
-            marker = self._marker_value()
-            if marker is not None:
-                installed = marker.get("component_ids")
-                if isinstance(installed, list):
-                    return tuple(str(item) for item in installed)
+        """已安装闭包由可信 marker 提供，不依赖当前运行时完整。"""
+        installed = self._trusted_installed_scope_ids()
+        if installed is not None:
+            return installed
         return self._desired_scope_ids()
 
     def _desired_scope_ids(self) -> tuple[str, ...]:
@@ -755,7 +761,9 @@ class RuntimeInstaller:
             self.manifest,
             accelerator=self.accelerator,
             runtime_root=self.paths.runtime_root,
-            probe_results=self._component_probe(self.paths.runtime_root, component_ids),
+            probe_results=self._component_probe(
+                self.paths.runtime_root, component_ids, self.plan
+            ),
         )
 
     def maintenance_snapshot(self) -> dict[str, Any] | None:
@@ -985,7 +993,7 @@ class RuntimeInstaller:
                 ) from exc
             if not python.is_file():
                 raise RuntimeInstallError("installed runtime has no Python executable")
-            probe_results = self._component_probe(partial, target_ids)
+            probe_results = self._component_probe(partial, target_ids, profile_name)
             failed_components = sorted(
                 component_id
                 for component_id, ready in probe_results.items()
@@ -1033,6 +1041,11 @@ class RuntimeInstaller:
             raise
 
     def repair(self) -> RuntimeLaunch | None:
+        if self._marker().is_file() and self._trusted_installed_scope_ids() is None:
+            error = RuntimeInstallError("untrusted installed marker")
+            if self._start_operation("repair"):
+                self._reporter.fail(error)
+            raise error
         drifted = set(self._drifted_component_ids())
         requested = set(self._component_ids) if self._component_ids else drifted
         needs_repair = bool(requested.intersection(drifted))

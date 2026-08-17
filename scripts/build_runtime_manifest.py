@@ -30,6 +30,7 @@ from vibeocr.backend.runtime_manifest import (  # noqa: E402
     default_profile_components,
     installer_executable_sha256,
     load_runtime_manifest,
+    runtime_component_binding,
     sha256_file,
     validate_requirements_lock,
 )
@@ -51,25 +52,9 @@ DEFAULT_CAPABILITIES = (
     "task.progress.v1",
 )
 
-_COMPONENT_VERSION_PACKAGES = {
-    # base 的 ocr_engine 组件是缺省引擎 RapidOCR；full 闭包是 PaddleOCR。
-    # base 只保留一套 OpenCV 发行物（opencv-python）。
-    ("win-x64-base", "ocr_engine"): "rapidocr",
-    ("win-x64-base", "image_code_tools"): "opencv-python",
-    ("win-x64-cpu", "ocr_engine"): "paddleocr",
-    ("win-x64-cu126", "ocr_engine"): "paddleocr",
-    "document_parsing": "mineru",
-    "pdf_document_tools": "pymupdf",
-    "image_code_tools": "opencv-contrib-python",
-    "runtime_host": "fastapi",
-    "gpu_runtime": "torch",
-}
-
 
 def _component_version_package(profile: str, component_id: str) -> str | None:
-    if (profile, component_id) in _COMPONENT_VERSION_PACKAGES:
-        return _COMPONENT_VERSION_PACKAGES[(profile, component_id)]
-    return _COMPONENT_VERSION_PACKAGES.get(component_id)
+    return runtime_component_binding(profile, component_id).distribution
 
 
 def _git_sha() -> str:

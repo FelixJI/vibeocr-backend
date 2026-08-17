@@ -225,51 +225,6 @@ class OcrEngineRegistry:
             if engine_id in self._engines
         )
 
-    def probe_descriptors(self) -> list[EngineDescriptor]:
-        """按协议顺序探测全部稳定 engine id（含未注册 id 的占位）。"""
-        descriptors: list[EngineDescriptor] = []
-        for engine_id in _STABLE_ENGINE_ORDER:
-            engine = self._engines.get(engine_id)
-            if engine is None:
-                descriptors.append(
-                    EngineDescriptor(
-                        engine_id=engine_id,
-                        availability=EngineAvailability.UNAVAILABLE,
-                        reason_code=REASON_ENGINE_NOT_INSTALLED,
-                    )
-                )
-                continue
-            try:
-                descriptor = engine.descriptor()
-            except Exception:
-                logger.exception(
-                    "[Supervisor][OcrEngines] probe failed engine=%s",
-                    engine_id.value,
-                )
-                descriptor = EngineDescriptor(
-                    engine_id=engine_id,
-                    availability=EngineAvailability.UNAVAILABLE,
-                    reason_code=REASON_ENGINE_INIT_FAILED,
-                )
-            descriptors.append(descriptor)
-        return descriptors
-
-    def selectable_engine_ids(self) -> tuple[str, ...]:
-        """当前 ready 的 engine id（按协议顺序）。"""
-        return tuple(
-            descriptor.engine_id.value
-            for descriptor in self.probe_descriptors()
-            if descriptor.availability is EngineAvailability.READY
-        )
-
-    def catalog_payload(self) -> dict[str, Any]:
-        """OcrEngineCatalog wire payload：每个稳定 id 恰好一个 descriptor。"""
-        return {
-            "engines": [
-                descriptor.to_payload() for descriptor in self.probe_descriptors()
-            ]
-        }
-
 
 @dataclass
 class OcrEngineResolver:
@@ -277,6 +232,40 @@ class OcrEngineResolver:
 
     registry: OcrEngineRegistry
     _probe_cache: dict[OcrEngine, EngineDescriptor] = field(default_factory=dict)
+    _probe_lock: threading.RLock = field(
+        default_factory=threading.RLock, init=False, repr=False
+    )
+
+    def probe_descriptors(self) -> list[EngineDescriptor]:
+        """Return one cached descriptor for every stable engine id."""
+        descriptors: list[EngineDescriptor] = []
+        for engine_id in _STABLE_ENGINE_ORDER:
+            adapter = self.registry.get(engine_id)
+            if adapter is None:
+                descriptors.append(
+                    EngineDescriptor(
+                        engine_id=engine_id,
+                        availability=EngineAvailability.UNAVAILABLE,
+                        reason_code=REASON_ENGINE_NOT_INSTALLED,
+                    )
+                )
+            else:
+                descriptors.append(self._descriptor_for(adapter))
+        return descriptors
+
+    def selectable_engine_ids(self) -> tuple[str, ...]:
+        return tuple(
+            descriptor.engine_id.value
+            for descriptor in self.probe_descriptors()
+            if descriptor.availability is EngineAvailability.READY
+        )
+
+    def catalog_payload(self) -> dict[str, Any]:
+        return {
+            "engines": [
+                descriptor.to_payload() for descriptor in self.probe_descriptors()
+            ]
+        }
 
     def resolve(self, engine: OcrEngine | None) -> Any:
         """解析引擎实例；不可用时抛 OcrEngineError（fail closed）。"""
@@ -287,7 +276,7 @@ class OcrEngineResolver:
                 ErrorCode.OCR_ENGINE_UNAVAILABLE,
                 reason_code=REASON_ENGINE_NOT_INSTALLED,
                 engine=target.value,
-                selectable_engines=self.registry.selectable_engine_ids(),
+                selectable_engines=self.selectable_engine_ids(),
             )
         descriptor = self._descriptor_for(adapter)
         if descriptor.availability is EngineAvailability.PREPARATION_REQUIRED:
@@ -295,7 +284,7 @@ class OcrEngineResolver:
                 ErrorCode.OCR_ENGINE_PREPARATION_REQUIRED,
                 reason_code=descriptor.reason_code or REASON_ENGINE_NOT_INSTALLED,
                 engine=target.value,
-                selectable_engines=self.registry.selectable_engine_ids(),
+                selectable_engines=self.selectable_engine_ids(),
                 detail={"required_component": descriptor.required_component},
             )
         if descriptor.availability is not EngineAvailability.READY:
@@ -303,7 +292,7 @@ class OcrEngineResolver:
                 ErrorCode.OCR_ENGINE_UNAVAILABLE,
                 reason_code=descriptor.reason_code or REASON_ENGINE_INIT_FAILED,
                 engine=target.value,
-                selectable_engines=self.registry.selectable_engine_ids(),
+                selectable_engines=self.selectable_engine_ids(),
             )
         return adapter
 
@@ -313,19 +302,32 @@ class OcrEngineResolver:
 
     def _descriptor_for(self, adapter: Any) -> EngineDescriptor:
         engine_id = adapter.engine_id
-        cached = self._probe_cache.get(engine_id)
-        if cached is not None:
-            return cached
-        descriptor = adapter.descriptor()
-        self._probe_cache[engine_id] = descriptor
-        return descriptor
+        with self._probe_lock:
+            cached = self._probe_cache.get(engine_id)
+            if cached is not None:
+                return cached
+            try:
+                descriptor = adapter.descriptor()
+            except Exception:
+                logger.exception(
+                    "[Supervisor][OcrEngines] probe failed engine=%s",
+                    engine_id.value,
+                )
+                descriptor = EngineDescriptor(
+                    engine_id=engine_id,
+                    availability=EngineAvailability.UNAVAILABLE,
+                    reason_code=REASON_ENGINE_INIT_FAILED,
+                )
+            self._probe_cache[engine_id] = descriptor
+            return descriptor
 
     def invalidate_probe_cache(self, engine_id: OcrEngine | None = None) -> None:
         """component 安装/修复后使探针缓存失效，下一次解析重新探测。"""
-        if engine_id is None:
-            self._probe_cache.clear()
-        else:
-            self._probe_cache.pop(engine_id, None)
+        with self._probe_lock:
+            if engine_id is None:
+                self._probe_cache.clear()
+            else:
+                self._probe_cache.pop(engine_id, None)
 
 
 @dataclass
