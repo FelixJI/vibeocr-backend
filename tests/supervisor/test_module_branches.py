@@ -350,7 +350,7 @@ def test_update_settings_caches_residency_when_returned(tmp_path: Path) -> None:
     out = mod.update_settings(snap)
     assert out.default_ttl_seconds == 900
     # configure_settings was called and returned a ResidencyStatus that was cached.
-    assert cached and cached[0].default_ttl_seconds == 900
+    assert cached[-1].default_ttl_seconds == 900
     # The cached snapshot is observable while a preload owns the executor lock.
     with mod._lock:  # type: ignore[attr-defined]
         mod._preload_count = 1  # type: ignore[attr-defined]

@@ -3,15 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import zipfile
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
-from vibeocr.backend.runtime_manifest import load_runtime_manifest
+from vibeocr.backend.runtime_manifest import (
+    ManifestError,
+    load_runtime_manifest,
+    validate_requirements_lock,
+)
 
 from scripts.build_runtime_manifest import build_runtime_manifest
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _lock(profile: str) -> str:
@@ -47,6 +48,7 @@ def _inputs(root: Path) -> dict[str, Path]:
         "base_lock": root / "requirements-win-x64-base.lock",
         "cpu_lock": root / "requirements-win-x64-cpu.lock",
         "cu126_lock": root / "requirements-win-x64-cu126.lock",
+        "cu126_gpu_lock": root / "requirements-win-x64-cu126-gpu.lock",
         "python_archive": root / "cpython-3.13.12-win_amd64.tar.gz",
         "installer_archive": root / "vibeocr-runtime-installer-0.7.0.zip",
     }
@@ -73,6 +75,7 @@ def _inputs(root: Path) -> dict[str, Path]:
     values["base_lock"].write_text(_lock("win-x64-base"), encoding="utf-8")
     values["cpu_lock"].write_text(_lock("win-x64-cpu"), encoding="utf-8")
     values["cu126_lock"].write_text(_lock("win-x64-cu126"), encoding="utf-8")
+    values["cu126_gpu_lock"].write_text(_lock("win-x64-cu126"), encoding="utf-8")
     values["python_archive"].write_bytes(b"python-archive")
     with zipfile.ZipFile(values["installer_archive"], mode="w") as archive:
         archive.writestr(
@@ -97,6 +100,60 @@ def _build(root: Path, output: Path) -> Path:
         build_workflow="tests/runtime-manifest",
         output_dir=output,
     )
+
+
+def test_gpu_scope_input_is_source_neutral_and_excludes_document_parsing() -> None:
+    content = (
+        Path(__file__).parents[2]
+        / "packages/vibeocr-backend/runtime-profiles/win-x64-cu126-gpu/requirements.in"
+    ).read_text(encoding="utf-8")
+    requirements = [
+        line for line in content.splitlines() if line and not line.startswith("#")
+    ]
+
+    assert "uv 0.11.16" in content
+    assert (
+        "--no-config --no-sources --default-index "
+        "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+    ) in content
+    assert "--emit-index-url" not in content
+    assert requirements == [
+        "-r ../win-x64-base/requirements.in",
+        (
+            "paddlepaddle-gpu @ https://paddle-whl.bj.bcebos.com/stable/cu126/"
+            "paddlepaddle-gpu/paddlepaddle_gpu-3.3.1-cp313-cp313-win_amd64.whl"
+        ),
+        (
+            "torch @ https://download.pytorch.org/whl/cu126/"
+            "torch-2.12.1%2Bcu126-cp313-cp313-win_amd64.whl"
+        ),
+        (
+            "torchvision @ https://download.pytorch.org/whl/cu126/"
+            "torchvision-0.27.1%2Bcu126-cp313-cp313-win_amd64.whl"
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("directory", "profile"),
+    [
+        ("win-x64-base", "win-x64-base"),
+        ("win-x64-cpu", "win-x64-cpu"),
+        ("win-x64-cu126", "win-x64-cu126"),
+        ("win-x64-cu126-gpu", "win-x64-cu126"),
+    ],
+)
+def test_committed_runtime_locks_are_source_neutral(
+    directory: str, profile: str
+) -> None:
+    lock = (
+        Path(__file__).parents[2]
+        / "packages/vibeocr-backend/runtime-profiles"
+        / directory
+        / f"requirements-{directory}.lock"
+    )
+
+    validate_requirements_lock(lock, profile=profile)
 
 
 def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
@@ -135,6 +192,20 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
         "runtime_host",
     ]
     assert manifest.profiles["win-x64-cpu"].components[0].version is None
+    cpu_profile = manifest.profiles["win-x64-cpu"]
+    assert [scope.scope_id for scope in cpu_profile.scopes] == ["default"]
+    assert cpu_profile.scopes[0].component_ids == tuple(
+        component.component_id for component in cpu_profile.components
+    )
+    assert cpu_profile.scopes[0].lock_path == cpu_profile.lock_path
+
+    cuda_components = {
+        component.component_id: component
+        for component in manifest.profiles["win-x64-cu126"].components
+    }
+    assert cuda_components["document_parsing"].dependencies == ("gpu_runtime",)
+    assert cuda_components["gpu_runtime"].dependencies == ()
+    assert "dependencies" not in cuda_components["document_parsing"].to_payload()
 
     checksums = {}
     for line in (first.parent / "SHA256SUMS").read_text().splitlines():
@@ -169,6 +240,42 @@ def test_manifest_json_has_no_self_hash(tmp_path: Path) -> None:
     manifest_path = _build(tmp_path / "input", tmp_path / "output")
     value = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert "runtime_manifest_sha256" not in value
+
+
+def test_build_emits_cuda_gpu_runtime_install_scope(tmp_path: Path) -> None:
+    manifest_path = _build(tmp_path / "input", tmp_path / "output")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    cuda = raw["profiles"]["win-x64-cu126"]
+
+    assert cuda["install_scopes"] == [
+        {
+            "scope_id": "gpu-runtime",
+            "component_ids": [
+                "ocr_engine",
+                "pdf_document_tools",
+                "image_code_tools",
+                "runtime_host",
+                "gpu_runtime",
+            ],
+            "lock": "requirements-win-x64-cu126-gpu.lock",
+            "runtime_pack": None,
+            "sha256": hashlib.sha256(
+                (
+                    manifest_path.parent / "requirements-win-x64-cu126-gpu.lock"
+                ).read_bytes()
+            ).hexdigest(),
+        }
+    ]
+    profile = load_runtime_manifest(manifest_path).profiles["win-x64-cu126"]
+    assert [scope.scope_id for scope in profile.scopes] == [
+        "default",
+        "gpu-runtime",
+    ]
+    checksum_names = {
+        line.split("  ", 1)[1]
+        for line in (manifest_path.parent / "SHA256SUMS").read_text().splitlines()
+    }
+    assert "requirements-win-x64-cu126-gpu.lock" in checksum_names
 
 
 def test_build_binds_base_profile_and_runtime_pack(tmp_path: Path) -> None:
@@ -246,4 +353,164 @@ def test_loader_rejects_pack_sha_without_pack(tmp_path: Path) -> None:
     from vibeocr.backend.runtime_manifest import ManifestError
 
     with pytest.raises(ManifestError, match="runtime_pack_sha256 requires"):
+        load_runtime_manifest(manifest_path)
+
+
+def test_loader_keeps_old_manifest_without_install_scopes_readable(
+    tmp_path: Path,
+) -> None:
+    manifest_path = _build(tmp_path / "input", tmp_path / "output")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["profiles"]["win-x64-cu126"].pop("install_scopes")
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    profile = load_runtime_manifest(manifest_path).profiles["win-x64-cu126"]
+
+    assert [scope.scope_id for scope in profile.scopes] == ["default"]
+    assert profile.scopes[0].component_ids == tuple(
+        component.component_id for component in profile.components
+    )
+
+
+def test_loader_parses_additional_install_scope(tmp_path: Path) -> None:
+    manifest_path = _build(tmp_path / "input", tmp_path / "output")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    cuda = raw["profiles"]["win-x64-cu126"]
+    cuda["install_scopes"] = [
+        {
+            "scope_id": "gpu-runtime",
+            "component_ids": [
+                "ocr_engine",
+                "pdf_document_tools",
+                "image_code_tools",
+                "runtime_host",
+                "gpu_runtime",
+            ],
+            "lock": cuda["lock"],
+            "sha256": cuda["sha256"],
+            "runtime_pack": None,
+        }
+    ]
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    profile = load_runtime_manifest(manifest_path).profiles["win-x64-cu126"]
+
+    assert [scope.scope_id for scope in profile.scopes] == [
+        "default",
+        "gpu-runtime",
+    ]
+    gpu_scope = profile.scopes[1]
+    assert gpu_scope.component_ids[-1] == "gpu_runtime"
+    assert gpu_scope.lock_path.name == cuda["lock"]
+
+
+def _cuda_scope(raw: dict) -> dict:
+    cuda = raw["profiles"]["win-x64-cu126"]
+    return {
+        "scope_id": "gpu-runtime",
+        "component_ids": [
+            "ocr_engine",
+            "pdf_document_tools",
+            "image_code_tools",
+            "runtime_host",
+            "gpu_runtime",
+        ],
+        "lock": cuda["lock"],
+        "sha256": cuda["sha256"],
+        "runtime_pack": None,
+    }
+
+
+def test_loader_rejects_install_scope_without_base_components(tmp_path: Path) -> None:
+    manifest_path = _build(tmp_path / "input", tmp_path / "output")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    scope = _cuda_scope(raw)
+    scope["component_ids"].remove("runtime_host")
+    raw["profiles"]["win-x64-cu126"]["install_scopes"] = [scope]
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="must include base components"):
+        load_runtime_manifest(manifest_path)
+
+
+def test_loader_rejects_install_scope_that_is_not_dependency_closure(
+    tmp_path: Path,
+) -> None:
+    manifest_path = _build(tmp_path / "input", tmp_path / "output")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    scope = _cuda_scope(raw)
+    scope["component_ids"].remove("gpu_runtime")
+    scope["component_ids"].append("document_parsing")
+    raw["profiles"]["win-x64-cu126"]["install_scopes"] = [scope]
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="must be a dependency closure"):
+        load_runtime_manifest(manifest_path)
+
+
+def test_loader_rejects_circular_component_dependencies(tmp_path: Path) -> None:
+    manifest_path = _build(tmp_path / "input", tmp_path / "output")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    components = raw["profiles"]["win-x64-cu126"]["components"]
+    by_id = {component["component_id"]: component for component in components}
+    by_id["document_parsing"]["dependencies"] = ["gpu_runtime"]
+    by_id["gpu_runtime"]["dependencies"] = ["document_parsing"]
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="must be acyclic"):
+        load_runtime_manifest(manifest_path)
+
+
+@pytest.mark.parametrize(
+    "dependencies",
+    [
+        ["gpu_runtime", "gpu_runtime"],
+        ["not-in-profile"],
+    ],
+)
+def test_loader_rejects_invalid_component_dependencies(
+    tmp_path: Path,
+    dependencies: list[str],
+) -> None:
+    manifest_path = _build(tmp_path / "input", tmp_path / "output")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    components = raw["profiles"]["win-x64-cu126"]["components"]
+    next(
+        component
+        for component in components
+        if component["component_id"] == "document_parsing"
+    )["dependencies"] = dependencies
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="components"):
+        load_runtime_manifest(manifest_path)
+
+
+def test_loader_rejects_duplicate_install_scope_component_set(tmp_path: Path) -> None:
+    manifest_path = _build(tmp_path / "input", tmp_path / "output")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    cuda = raw["profiles"]["win-x64-cu126"]
+    cuda["install_scopes"] = [
+        {
+            **_cuda_scope(raw),
+            "component_ids": [
+                component["component_id"] for component in cuda["components"]
+            ],
+        }
+    ]
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="component sets must be unique"):
+        load_runtime_manifest(manifest_path)
+
+
+def test_loader_rejects_install_scope_lock_sha_mismatch(tmp_path: Path) -> None:
+    manifest_path = _build(tmp_path / "input", tmp_path / "output")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    scope = _cuda_scope(raw)
+    scope["sha256"] = "0" * 64
+    raw["profiles"]["win-x64-cu126"]["install_scopes"] = [scope]
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="lock SHA-256 mismatch"):
         load_runtime_manifest(manifest_path)

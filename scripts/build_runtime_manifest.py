@@ -149,6 +149,7 @@ def build_runtime_manifest(
     base_lock: Path,
     cpu_lock: Path,
     cu126_lock: Path,
+    cu126_gpu_lock: Path,
     python_archive: Path,
     python_version: str,
     python_source_url: str,
@@ -188,6 +189,8 @@ def build_runtime_manifest(
     }
     for profile in PROFILE_NAMES:
         validate_requirements_lock(profile_sources[profile], profile=profile)
+    cu126_gpu_lock = cu126_gpu_lock.resolve(strict=True)
+    validate_requirements_lock(cu126_gpu_lock, profile="win-x64-cu126")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     copied_backend = _copy_exact(backend_wheel, output_dir)
@@ -212,6 +215,11 @@ def build_runtime_manifest(
         profile: _copy_exact(profile_sources[profile], output_dir)
         for profile in PROFILE_NAMES
     }
+    copied_cu126_gpu_lock = _copy_exact(cu126_gpu_lock, output_dir)
+    base_component_ids = [
+        component.component_id
+        for component in default_profile_components("win-x64-base")
+    ]
 
     manifest = {
         "schema_version": 1,
@@ -255,6 +263,24 @@ def build_runtime_manifest(
                 ),
                 "sha256": sha256_file(copied_profiles[profile]),
                 "components": _profile_components(copied_profiles[profile], profile),
+                **(
+                    {
+                        "install_scopes": [
+                            {
+                                "scope_id": "gpu-runtime",
+                                "component_ids": [
+                                    *base_component_ids,
+                                    "gpu_runtime",
+                                ],
+                                "lock": copied_cu126_gpu_lock.name,
+                                "runtime_pack": None,
+                                "sha256": sha256_file(copied_cu126_gpu_lock),
+                            }
+                        ]
+                    }
+                    if profile == "win-x64-cu126"
+                    else {}
+                ),
             }
             for profile in PROFILE_NAMES
         },
@@ -274,6 +300,7 @@ def build_runtime_manifest(
         copied_installer,
         *(pack for packs in copied_packs.values() for pack in packs),
         *(copied_profiles[profile] for profile in PROFILE_NAMES),
+        copied_cu126_gpu_lock,
         manifest_path,
     ]
     checksum_lines = [
@@ -296,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-lock", type=Path, required=True)
     parser.add_argument("--cpu-lock", type=Path, required=True)
     parser.add_argument("--cu126-lock", type=Path, required=True)
+    parser.add_argument("--cu126-gpu-lock", type=Path, required=True)
     parser.add_argument("--python-archive", type=Path, required=True)
     parser.add_argument("--python-version", default="3.13.12")
     parser.add_argument(
@@ -334,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
         base_lock=args.base_lock,
         cpu_lock=args.cpu_lock,
         cu126_lock=args.cu126_lock,
+        cu126_gpu_lock=args.cu126_gpu_lock,
         python_archive=args.python_archive,
         python_version=args.python_version,
         python_source_url=args.python_source_url,

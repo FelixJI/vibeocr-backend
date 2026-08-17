@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -39,6 +40,7 @@ for _source_root in (
         sys.path.insert(0, str(_source_root))
         break
 
+from vibeocr.backend.network_detector import get_pip_mirror  # noqa: E402
 from vibeocr.backend.runtime_manifest import (  # noqa: E402
     ManifestError,
     validate_requirements_lock,
@@ -51,6 +53,7 @@ _DECLARATION_RE = re.compile(r"(?m)^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)")
 _WHEEL_FILENAME_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)-(?P<version>\d[^-]*)-(?P<rest>.+)\.whl$"
 )
+DEFAULT_PACKAGE_INDEX = get_pip_mirror("domestic")
 
 
 def _normalize(name: str) -> str:
@@ -77,6 +80,20 @@ def _sha256_file(path: Path) -> str:
 
 
 def _run(command: list[str]) -> None:
+    child_environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.upper().startswith(("PIP_", "UV_"))
+    }
+    child_environment.update(
+        {
+            "PIP_CONFIG_FILE": os.devnull,
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+            "PIP_NO_INPUT": "1",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONUTF8": "1",
+        }
+    )
     result = subprocess.run(
         command,
         check=False,
@@ -84,6 +101,7 @@ def _run(command: list[str]) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=child_environment,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -99,6 +117,7 @@ def build_runtime_pack(
     work_dir: Path,
     output: Path,
     max_part_bytes: int | None = None,
+    index_url: str = DEFAULT_PACKAGE_INDEX,
 ) -> list[Path]:
     lock = lock.resolve(strict=True)
     validate_requirements_lock(lock, profile=profile)
@@ -121,6 +140,8 @@ def build_runtime_pack(
             "-m",
             "pip",
             "download",
+            "--index-url",
+            index_url,
             "--require-hashes",
             "-d",
             str(downloads),
@@ -237,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--profile", required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--index-url", default=DEFAULT_PACKAGE_INDEX)
     parser.add_argument(
         "--max-part-bytes",
         type=int,
@@ -254,6 +276,7 @@ def main(argv: list[str] | None = None) -> int:
             work_dir=args.work_dir,
             output=args.output,
             max_part_bytes=args.max_part_bytes,
+            index_url=args.index_url,
         )
     except (ManifestError, ValueError, RuntimeError) as exc:
         print(f"runtime pack build failed: {exc}", file=sys.stderr)

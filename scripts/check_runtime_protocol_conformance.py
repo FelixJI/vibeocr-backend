@@ -393,8 +393,8 @@ async def _selection_http_checks() -> None:
         ]
         if not sources or len({s["id"] for s in sources}) != len(sources):
             raise RuntimeError("download source catalog ids are not unique/non-empty")
-        if len({s["kind"] for s in sources}) != len(sources):
-            raise RuntimeError("download source catalog repeats a kind")
+        if not any(source["id"] == "tuna-pypi" for source in sources):
+            raise RuntimeError("trusted TUNA package index is not declared")
         variants = descriptors["runtime.component-selection.v1"][
             "component_variant_catalog"
         ]["variants"]

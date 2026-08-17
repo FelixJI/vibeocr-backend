@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from .bootstrap import BootstrapHandle, generate_session_token, new_instance_id
 from .module import Executor, SupervisorModule, SupervisorOptions
+from .settings_store import RuntimeSettings
 
 if TYPE_CHECKING:
     from vibeocr.runtime_contracts import CancelMode, ResidencyStatus
@@ -296,6 +297,7 @@ def build_supervisor(
     use_mineru: bool | None = None,
     with_pdf_adapter: bool = False,
     engine_registry: Any = None,
+    settings_store: RuntimeSettings | None = None,
 ) -> tuple[SupervisorModule, BootstrapHandle]:
     """Assemble a supervisor module + bootstrap handle (token out of band).
 
@@ -354,6 +356,7 @@ def build_supervisor(
         executor=exec_impl,
         pdf_adapter=pdf_adapter,
         engine_registry=engine_registry,
+        settings_store=settings_store,
     )
     # Clean stale staging left by a previous crashed instance (plan Phase 2).
     # At startup no jobs are known yet, so every existing dir is stale.

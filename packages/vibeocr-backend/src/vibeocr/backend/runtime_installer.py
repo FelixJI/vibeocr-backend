@@ -47,14 +47,15 @@ from vibeocr.backend.runtime_maintenance import (
 from vibeocr.backend.runtime_manifest import (
     ACCELERATOR_TO_PLAN,
     ManifestError,
+    RuntimeInstallScope,
     RuntimeManifest,
     load_runtime_manifest,
 )
 from vibeocr.backend.runtime_selection import (
     BASE_PROFILE,
+    BoundDownloadSource,
     RuntimeSelectionError,
-    normalize_download_source_ids,
-    normalize_install_component_ids,
+    RuntimeSelectionPolicy,
 )
 
 
@@ -229,7 +230,8 @@ def _python_in(runtime_root: Path) -> Path:
 def _default_install_runner(
     partial_root: Path,
     manifest: RuntimeManifest,
-    profile: str,
+    install_scope: RuntimeInstallScope,
+    download_sources: tuple[BoundDownloadSource, ...],
     reporter: RuntimeMaintenanceReporter | None = None,
 ) -> Path:
     """Extract bound Python and install only hash-locked dependencies.
@@ -260,9 +262,12 @@ def _default_install_runner(
     python = _python_in(partial_root)
     if not python.is_file():
         raise RuntimeInstallError("Python archive has no python.exe")
-    lock = manifest.profiles[profile].lock_path
-    runtime_pack = manifest.profiles[profile].runtime_pack
+    lock = install_scope.lock_path
+    runtime_pack = install_scope.runtime_pack
     portable_env = os.environ.copy()
+    for name in tuple(portable_env):
+        if name.upper().startswith(("PIP_", "UV_")):
+            portable_env.pop(name)
     cache = partial_root.parent.parent / "state" / "installer-cache"
     portable_env.update(
         {
@@ -298,7 +303,12 @@ def _default_install_runner(
     ]
     pack_files = [manifest.path.parent / name for name in runtime_pack]
     pack_present = bool(pack_files) and all(path.is_file() for path in pack_files)
-    if runtime_pack and not pack_present and profile == "win-x64-base":
+    base_ids = {
+        component.component_id
+        for component in manifest.profiles[BASE_PROFILE].components
+    }
+    is_base_scope = set(install_scope.component_ids) == base_ids
+    if runtime_pack and not pack_present and is_base_scope:
         # base 是随 Portable 携带的必备闭包：缺失即产品不完整，fail closed
         # 而不是静默联网安装（计划 §4.1）。full 闭包的 pack 由用户按需下载，
         # 未到位时回退在线安装是合法状态（cu126 因 torch 单 wheel 超过
@@ -324,7 +334,20 @@ def _default_install_runner(
             str(requirements_file),
         ]
     else:
-        install_command += ["--require-hashes", "-r", str(lock)]
+        package_indexes = tuple(
+            source for source in download_sources if source.kind == "package_index"
+        )
+        if len(package_indexes) != 1:
+            raise RuntimeInstallError(
+                "online Runtime install requires one package_index source"
+            )
+        install_command += [
+            "--index-url",
+            package_indexes[0].endpoint,
+            "--require-hashes",
+            "-r",
+            str(lock),
+        ]
     _run_install_command(
         install_command,
         timeout=3600,
@@ -541,15 +564,21 @@ class RuntimeInstaller:
         )
         self.accelerator = self._select_accelerator(accelerator)
         self.plan = ACCELERATOR_TO_PLAN[self.accelerator]
-        # install scope / download source 在这里一次性规范化（计划 §4.2）：
-        # None=Backend 缺省、[]=显式 base-only；源省略解析为 Backend 缺省源。
-        self._install_scope = normalize_install_component_ids(
-            install_component_ids, accelerator=self.accelerator
+        self._selection = RuntimeSelectionPolicy.from_manifest(
+            self.manifest
+        ).plan_start(
+            accelerator=self.accelerator,
+            install_component_ids=install_component_ids,
+            download_source_ids=download_source_ids,
         )
-        self._requested_download_source_ids = tuple(download_source_ids or ())
-        self._effective_download_source_ids = normalize_download_source_ids(
-            download_source_ids
+        self._install_scope = self._selection.requested_component_ids
+        self._requested_download_source_ids = (
+            self._selection.requested_download_source_ids or ()
         )
+        self._effective_download_source_ids = (
+            self._selection.effective_download_source_ids
+        )
+        self._active_install_ids = self._selection.effective_component_ids
         available_components = {
             component.component_id
             for component in self.manifest.profiles[self.plan].components
@@ -583,7 +612,8 @@ class RuntimeInstaller:
                 _default_install_runner(
                     partial,
                     manifest,
-                    profile,
+                    self._scope_for_ids(self._active_install_ids),
+                    self._selection.effective_download_sources,
                     self._reporter,
                 )
             )
@@ -701,12 +731,16 @@ class RuntimeInstaller:
         return self._desired_scope_ids()
 
     def _desired_scope_ids(self) -> tuple[str, ...]:
-        """本次 intent 的安装闭包：显式 base-only 装 base lock，其余装目标档位。"""
-        profile = BASE_PROFILE if self._install_scope == () else self.plan
-        return tuple(
-            component.component_id
-            for component in self.manifest.profiles[profile].components
-        )
+        """本次 intent 解析后的精确依赖闭包。"""
+        return self._selection.effective_component_ids
+
+    def _scope_for_ids(self, component_ids: tuple[str, ...]) -> RuntimeInstallScope:
+        desired = set(component_ids)
+        for profile_name in (BASE_PROFILE, self.plan):
+            for scope in self.manifest.profiles[profile_name].scopes:
+                if set(scope.component_ids) == desired:
+                    return scope
+        raise RuntimeInstallError("runtime manifest has no matching install scope")
 
     def _covering_profile(self, component_ids: tuple[str, ...]) -> str:
         base_ids = {
@@ -812,7 +846,7 @@ class RuntimeInstaller:
 
     def _environment(self) -> dict[str, str]:
         state = self.paths.state_root
-        return {
+        environment = {
             "VIBEOCR_PRODUCT_ROOT": str(self.product_root),
             "VIBEOCR_RUNTIME_ROOT": str(self.paths.runtime_root),
             "VIBEOCR_MODEL_ROOT": str(self.paths.models_root),
@@ -826,6 +860,9 @@ class RuntimeInstaller:
                 "true" if self.accelerator == "nvidia_cuda" else "false"
             ),
             "VIBEOCR_RUNTIME_STATE_ROOT": str(state),
+            "VIBEOCR_SUPERVISOR_SETTINGS": str(
+                self.product_root / "state" / "supervisor-settings.json"
+            ),
             "PIP_CACHE_DIR": str(state / "cache" / "pip"),
             "UV_CACHE_DIR": str(state / "cache" / "uv"),
             "HF_HOME": str(state / "cache" / "huggingface"),
@@ -838,6 +875,14 @@ class RuntimeInstaller:
             "PYTHONNOUSERSITE": "1",
             "PYTHONUTF8": "1",
         }
+        package_indexes = tuple(
+            source
+            for source in self._selection.effective_download_sources
+            if source.kind == "package_index"
+        )
+        if package_indexes:
+            environment["PIP_INDEX_URL"] = package_indexes[0].endpoint
+        return environment
 
     def ensure(self) -> RuntimeLaunch | None:
         # ready 额外要求已安装闭包等于期望闭包：从 base-only 扩到 full
@@ -896,6 +941,7 @@ class RuntimeInstaller:
 
     def _install_locked(self, target_ids: tuple[str, ...]) -> None:
         profile_name = self._covering_profile(target_ids)
+        self._active_install_ids = target_ids
         self._reporter.advance(
             phase="prepare_runtime",
             current=3,

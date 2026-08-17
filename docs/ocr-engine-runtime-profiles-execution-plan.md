@@ -10,13 +10,18 @@
 > 持久化 `download_source_ids`、maintenance ensure/retry 接入
 > `install_component_ids` 与 source intent（requested/effective 贯通
 > receipt/status/observe/SSE）、Runtime Host stdio 请求同步放行、marker
-> 记录安装闭包（显式 base-only 装 base lock，范围变化触发重装）。
+> 记录安装闭包（显式 base-only 装 base lock，范围变化触发重装）；retry
+> command identity 也包含 component/source override，避免同 id 错误重放。
+> package-index 已进入真实 pip 安装：默认使用仓库信任的清华 TUNA，官方
+> PyPI 作为显式候选；运行时与 release pack 构建都会隔离宿主 pip/uv 源配置，
+> hash lock 保持 source-neutral。CUDA 另有 `gpu_runtime` 精确 scope，不再把任意
+> 非空选择无声扩大成完整 profile。
 > `ocr.engine-selection.v1` 已在 PR #43 落地；**2.7.0 的 stdlib parser 仍不
 > 接受 wire `engine` 字段（wire schema 已允许），`_extract_engine_selection`
 > seam 保留至上游修复**。PaddleOCR 引擎的 `required_component` 修正为真实
 > 可选组件 `document_parsing`（原占位 `full-cpu` 不在 component-selection
-> 目录中）。待办：B6 在线 full 安装的端点消费、B0.3 隔离机验证、B7 正式
-> Release 交接。
+> 目录中）。待办：B6 的 model registry/模型资产消费及后续新增 feature 的精确
+> lock，B0.3 隔离机验证，以及 B7 正式 Release 交接。
 
 ## 1. 当前事实与目标
 
@@ -61,7 +66,7 @@ registry，且每次安装操作拥有稳定的 source intent。
 | `PipelineSelection.engine` | job adapter 解析后交给 OCR resolver | 仅纯文本 `OCR` pipeline 有效；未知/不可用/需准备均 fail closed，不回退 |
 | `runtime.component-selection.v1` / `component_variant_catalog` | 当前 Backend Release 的 manifest/component lock 生成 `feature_id + accelerator -> component_id` | `feature_id` 是能力族，不等同 OCR engine；MinerU 不能被命名为 OCR engine |
 | `install_component_ids` | ensure/retry 的可选组件意图 | 省略=Backend 默认；`[]`=明确只保留 base；未知 id 返回 `RUNTIME_COMPONENT_UNKNOWN` |
-| `runtime.download-sources.v1` / `download_source_catalog` | Backend 配置声明稳定 source id、开放 kind、endpoint | 每种 kind 至多一个；数组顺序无优先级；未知 id 返回 `DOWNLOAD_SOURCE_UNKNOWN` |
+| `runtime.download-sources.v1` / `download_source_catalog` | Backend 配置声明稳定 source id、开放 kind、endpoint | catalog 可有同 kind 多候选；单次选择每种 kind 至多一个；数组顺序无优先级；未知 id 返回 `DOWNLOAD_SOURCE_UNKNOWN` |
 | Settings `download_source_ids` | 持久化用户默认偏好 | 省略=Backend 声明的默认源，不在 Protocol 写死“official” |
 | maintenance `download_source_ids` | start/retry 显式覆盖并固化本次 operation source intent | 仅 ensure/retry 合法；省略时在开始瞬间快照当前 Settings/Backend default |
 | `requested_*` / `effective_*` | durable operation status 回显规范化前后的组件与源 | observe、SSE、receipt、runtime status 必须一致，重启后可恢复 |
@@ -157,10 +162,14 @@ full 组件不得在第一次 OCR 时懒下载；不得随每次前端更新重�
 
 ### B6：在线 full 安装
 
-- 为每个 feature/accelerator 生成当前 Release 的权威 hash lock 和依赖闭包元数据。
+- 已完成：当前 catalog 的 component/accelerator 闭包由 manifest scope 绑定权威 hash
+  lock；`gpu_runtime` 可单独选择，`document_parsing` 在 CUDA 下自动包含 GPU 依赖。
+- 已完成：package index 选择真实进入 pip `--index-url`；TUNA 是 release/runtime
+  默认，官方 PyPI 为显式候选；lock 不嵌入 index 指令，宿主 pip/uv 配置被隔离。
 - 下载、缓存、空间预检、取消、断点后的显式 retry、原子切换与失败回滚复用 durable
   maintenance，不做无依据的自动重试。
-- package index 只用于依赖安装，model registry 只用于模型资产；kind 不混用。
+- 待完成：model registry 只用于模型资产并建立独立下载 Adapter；后续新增 feature 时
+  同步增加精确 scope/lock，不回退为“任一非空选择即完整 profile”。
 
 ### B7：正式 Release 与三仓交接
 
@@ -179,7 +188,8 @@ full 组件不得在第一次 OCR 时懒下载；不得随每次前端更新重�
   `component_id` 唯一（`document_parsing` 合法出现在 cpu 与 nvidia_cuda 两个
   variant，协议仅 MUST 约束业务键，比原文的“component id 全局唯一”更准确）；
   base 必备组件不进入可选目录。
-- source id 全局唯一、每 kind 至多一个；未知开放 kind 可序列化但不成为默认可选项。
+- source id 全局唯一；catalog 允许同 kind 多候选，单次 selection 每 kind 至多一个；
+  未知开放 kind 可序列化但不成为默认可选项。
 - Settings omission、source selection、同 kind 冲突和未知 id；operation start 时的快照竞态。
 - component `None`、`[]`、非空、unknown；ensure/retry 合法，inspect/repair/cancel 非法。
 - retry 省略复用旧 intent、显式重选产生新 intent；重启恢复后 requested/effective 不变。

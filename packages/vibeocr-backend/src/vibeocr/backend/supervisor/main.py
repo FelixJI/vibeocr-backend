@@ -41,6 +41,17 @@ from .bootstrap import (
     token_from_environment,
 )
 from .composition import build_supervisor
+from .settings_store import RuntimeSettingsStore
+
+
+def _settings_store_from_environment() -> RuntimeSettingsStore | None:
+    configured = os.environ.get("VIBEOCR_SUPERVISOR_SETTINGS")
+    if configured:
+        return RuntimeSettingsStore(Path(configured))
+    root = os.environ.get("VIBEOCR_SUP_ROOT")
+    if root:
+        return RuntimeSettingsStore(Path(root) / "supervisor-settings.json")
+    return None
 
 
 def _write_self_test_result() -> None:
@@ -94,6 +105,7 @@ def run_supervisor(
     port = sock.getsockname()[1]
     root_env = os.environ.get("VIBEOCR_SUP_ROOT")
     stager_root = Path(root_env) if root_env else None
+    settings_store = _settings_store_from_environment()
 
     module, _ = build_supervisor(
         instance_id=instance_id,
@@ -102,6 +114,7 @@ def run_supervisor(
         # The supervisor owns the PDF child so the GUI never talks to it
         # directly (plan §6 / ADR §"Transport"). The child is spawned lazily.
         with_pdf_adapter=True,
+        settings_store=settings_store,
     )
     envelope = ReadyEnvelope(
         ready=True,

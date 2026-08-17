@@ -24,6 +24,7 @@ from vibeocr.backend.runtime_maintenance import (
     RuntimeOperationStore,
     runtime_source_identity,
 )
+from vibeocr.backend.runtime_selection import normalized_selection_fields
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,6 +287,12 @@ class RuntimeControl:
             "new_operation_id": new_operation_id,
             "expected_sequence": expected_sequence,
         }
+        payload.update(
+            normalized_selection_fields(
+                install_component_ids=install_component_ids,
+                download_source_ids=download_source_ids,
+            )
+        )
 
         def apply() -> dict[str, Any]:
             target = self._store.snapshot(target_operation_id)
@@ -350,10 +357,12 @@ class RuntimeControl:
                     "source_identity": dict(intent.get("source_identity", {})),
                     "source_operation_id": target_operation_id,
                 }
-                if retry_install is not None:
-                    expected_retry_intent["install_component_ids"] = list(retry_install)
-                if retry_sources:
-                    expected_retry_intent["download_source_ids"] = list(retry_sources)
+                expected_retry_intent.update(
+                    normalized_selection_fields(
+                        install_component_ids=retry_install,
+                        download_source_ids=retry_sources or None,
+                    )
+                )
                 if self._store.intent(new_operation_id) != expected_retry_intent:
                     raise RuntimeOperationConflict(new_operation_id)
                 state = existing.get("operation_state")

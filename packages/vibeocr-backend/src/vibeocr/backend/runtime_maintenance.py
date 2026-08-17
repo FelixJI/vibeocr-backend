@@ -24,6 +24,7 @@ from vibeocr.backend.runtime_manifest import (
     RuntimeProfile,
     load_runtime_manifest,
 )
+from vibeocr.backend.runtime_selection import normalized_selection_fields
 
 EventSink = Callable[[dict[str, Any]], None]
 OPERATIONS_DIRECTORY = "runtime-operations"
@@ -1124,11 +1125,14 @@ class RuntimeMaintenanceReporter:
             "source_identity": dict(source or {}),
             "source_operation_id": source_operation_id,
         }
-        # normalized intent：install scope 与源意图固化后供 retry 复用/比对。
-        if install_component_ids is not None:
-            intent["install_component_ids"] = list(install_component_ids)
-        if download_source_ids:
-            intent["download_source_ids"] = list(download_source_ids)
+        # normalized selection 与 command identity 使用同一投影，避免 retry
+        # 手工重建字段形状后发生漂移。
+        intent.update(
+            normalized_selection_fields(
+                install_component_ids=install_component_ids,
+                download_source_ids=download_source_ids or None,
+            )
+        )
         started = self._store.start(
             self._operation_id,
             intent,

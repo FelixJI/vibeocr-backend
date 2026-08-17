@@ -749,6 +749,84 @@ def test_retry_explicit_selection_replaces_source_intent(
     assert calls[0]["download_source_ids"] == ("pypi",)
 
 
+@pytest.mark.parametrize(
+    ("first_selection", "changed_selection"),
+    [
+        ({}, {"install_component_ids": ()}),
+        (
+            {"install_component_ids": ()},
+            {"install_component_ids": ("document_parsing",)},
+        ),
+        ({}, {"download_source_ids": ("pypi",)}),
+    ],
+)
+def test_retry_command_identity_includes_selection_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    first_selection: dict,
+    changed_selection: dict,
+) -> None:
+    control, calls = _retry_control_with_failed_source_operation(
+        tmp_path,
+        monkeypatch,
+        {
+            "operation": "ensure",
+            "profile_id": "win-x64-cpu",
+            "component_ids": [],
+            "required_capabilities": [],
+            "download_source_ids": ["pypi"],
+        },
+    )
+    command = {
+        "command_id": "retry-selection",
+        "command": "retry",
+        "target_operation_id": "op-1",
+        "new_operation_id": "op-2",
+    }
+
+    first = control.command(**command, **first_selection)
+    assert control.command(**command, **first_selection) == first
+    assert len(calls) == 1
+
+    with pytest.raises(RuntimeCommandConflict):
+        control.command(**command, **changed_selection)
+
+
+def test_retry_command_identity_ignores_unordered_selection_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    control, calls = _retry_control_with_failed_source_operation(
+        tmp_path,
+        monkeypatch,
+        {
+            "operation": "ensure",
+            "profile_id": "win-x64-cu126",
+            "component_ids": [],
+            "required_capabilities": [],
+            "download_source_ids": ["pypi"],
+        },
+    )
+    command = {
+        "command_id": "retry-unordered-selection",
+        "command": "retry",
+        "target_operation_id": "op-1",
+        "new_operation_id": "op-2",
+    }
+
+    first = control.command(
+        **command,
+        install_component_ids=("gpu_runtime", "document_parsing"),
+    )
+    assert (
+        control.command(
+            **command,
+            install_component_ids=("document_parsing", "gpu_runtime"),
+        )
+        == first
+    )
+    assert len(calls) == 1
+
+
 def test_selection_fields_are_rejected_outside_ensure_and_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
