@@ -17,6 +17,7 @@ import threading
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Protocol
 
+from vibeocr.backend.runtime_selection import normalize_download_source_ids
 from vibeocr.runtime_contracts import (
     TERMINAL_JOB_STATES,
     CancelMode,
@@ -40,6 +41,7 @@ from vibeocr.runtime_contracts import (
 from .jobs.registry import JobRecord, JobRegistry
 from .jobs.retention import RetentionPolicy
 from .jobs.staging import InputExpiredError, InputStager, StagedInput, StagingQuotaError
+from .settings_store import RuntimeSettings
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -113,6 +115,7 @@ class SupervisorModule:
         executor: Executor,
         pdf_adapter: Any = None,
         engine_registry: Any = None,
+        settings_store: RuntimeSettings | None = None,
     ) -> None:
         self.options = options
         self.registry = JobRegistry(options.instance_id)
@@ -142,9 +145,15 @@ class SupervisorModule:
         self._lock = threading.RLock()
         self._draining = False
         self._shutdown = False
-        self._settings: SettingsSnapshot = SettingsSnapshot(
-            default_ttl_seconds=300, pipelines=()
+        self._settings_store = settings_store
+        default_settings = SettingsSnapshot(default_ttl_seconds=300, pipelines=())
+        self._settings = (
+            settings_store.load(default_settings)
+            if settings_store is not None
+            else default_settings
         )
+        if self._settings.download_source_ids:
+            normalize_download_source_ids(self._settings.download_source_ids)
         # Runtime status is observational and must remain available while a
         # heavy preload owns executor-internal locks. Keep the latest immutable
         # snapshot at the module boundary instead of forcing every status read
@@ -154,6 +163,11 @@ class SupervisorModule:
             pipelines=self._settings.pipelines,
         )
         self._preload_count = 0
+        configure = getattr(self._executor, "configure_settings", None)
+        if callable(configure):
+            status = configure(self._settings)
+            if isinstance(status, ResidencyStatus):
+                self._residency_snapshot = status
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -457,16 +471,33 @@ class SupervisorModule:
                 self._preload_count -= 1
 
     def settings(self) -> SettingsSnapshot:
-        return self._settings
+        with self._lock:
+            return self._settings
 
     def update_settings(self, snapshot: SettingsSnapshot) -> SettingsSnapshot:
-        configure = getattr(self._executor, "configure_settings", None)
-        if callable(configure):
-            status = configure(snapshot)
-            if isinstance(status, ResidencyStatus):
-                self._remember_residency(status)
+        if snapshot.download_source_ids:
+            normalize_download_source_ids(snapshot.download_source_ids)
         with self._lock:
+            previous = self._settings
+            configure = getattr(self._executor, "configure_settings", None)
+            status: ResidencyStatus | None = None
+            if callable(configure):
+                configured = configure(snapshot)
+                if isinstance(configured, ResidencyStatus):
+                    status = configured
+            try:
+                if self._settings_store is not None:
+                    self._settings_store.replace(snapshot)
+            except Exception:
+                if callable(configure):
+                    try:
+                        configure(previous)
+                    except Exception:
+                        pass
+                raise
             self._settings = snapshot
+            if status is not None:
+                self._residency_snapshot = status
         return self._settings
 
     def _remember_residency(self, status: ResidencyStatus) -> ResidencyStatus:

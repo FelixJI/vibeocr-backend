@@ -511,10 +511,13 @@ def create_app(
                 raise ValueError(
                     "Runtime selection fields are only valid for operation ensure"
                 )
-            if download_source_ids is None:
+            if body["operation"] == "ensure" and download_source_ids is None:
                 # 省略时在开始瞬间快照当前 Settings（计划 §4.3）；
                 # 两者都为空时由 installer 解析 Backend 缺省源。
-                download_source_ids = list(module.settings().download_source_ids)
+                settings_sources = module.settings().download_source_ids
+                download_source_ids = (
+                    list(settings_sources) if settings_sources else None
+                )
             return await asyncio.to_thread(
                 control().execute,
                 operation=body["operation"],
@@ -527,7 +530,11 @@ def create_app(
                     if install_component_ids is not None
                     else None
                 ),
-                download_source_ids=tuple(download_source_ids),
+                download_source_ids=(
+                    tuple(download_source_ids)
+                    if download_source_ids is not None
+                    else None
+                ),
             )
         except Exception as exc:
             return _runtime_exception_response(exc, instance_id)

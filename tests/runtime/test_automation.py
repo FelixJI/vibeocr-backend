@@ -32,6 +32,7 @@ def test_backend_config_uses_canonical_lanes_and_identity_asset() -> None:
         "cpython-*-x86_64-pc-windows-msvc-install_only.tar.gz",
         "requirements-win-x64-cpu.lock",
         "requirements-win-x64-cu126.lock",
+        "requirements-win-x64-cu126-gpu.lock",
     } <= set(config["release"]["required_assets"])
 
 

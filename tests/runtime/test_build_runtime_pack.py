@@ -8,6 +8,7 @@ wheel 覆盖校验、确定性 zip 输出与 lock 校验前置。
 from __future__ import annotations
 
 import hashlib
+import os
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,6 @@ _LOCK_HASH = hashlib.sha256(_WHEEL_BYTES).hexdigest()
 def _base_lock(tmp_path: Path) -> Path:
     lock = tmp_path / "requirements-win-x64-base.lock"
     lock.write_text(
-        "--index-url https://pypi.org/simple\n"
         f"rapidocr==3.9.2 \\\n    --hash=sha256:{_LOCK_HASH}\n"
         f"onnxruntime==1.28.0 \\\n    --hash=sha256:{_LOCK_HASH}\n"
         f"winrt-runtime==3.2.1 \\\n    --hash=sha256:{_LOCK_HASH}\n"
@@ -45,6 +45,7 @@ def _install_fake_pip(
     downloads: dict[str, bytes] | None = None,
     *,
     returncode: int = 0,
+    environments: list[dict[str, str]] | None = None,
 ) -> list[list[str]]:
     """Fake pip download + pip wheel.
 
@@ -54,8 +55,10 @@ def _install_fake_pip(
     """
     calls: list[list[str]] = []
 
-    def fake_run(command: list[str], **_kwargs: Any) -> _FakeCompleted:
+    def fake_run(command: list[str], **kwargs: Any) -> _FakeCompleted:
         calls.append(list(command))
+        if environments is not None:
+            environments.append(dict(kwargs["env"]))
         if "download" in command:
             target = Path(command[command.index("-d") + 1])
             target.mkdir(parents=True, exist_ok=True)
@@ -82,12 +85,18 @@ def test_pack_build_two_phase_download_wheel_and_zip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # antlr 只有 sdist(经 omegaconf 进入闭包):download 阶段出现 sdist。
+    environments: list[dict[str, str]] = []
+    monkeypatch.setenv("PIP_EXTRA_INDEX_URL", "https://extra.invalid/simple")
+    monkeypatch.setenv("PIP_FIND_LINKS", "https://links.invalid")
+    monkeypatch.setenv("PIP_NO_INDEX", "1")
+    monkeypatch.setenv("UV_INDEX", "https://uv.invalid/simple")
     calls = _install_fake_pip(
         monkeypatch,
         {
             "rapidocr-3.9.2-py3-none-any.whl": _WHEEL_BYTES,
             "antlr4-python3-runtime-4.9.3.tar.gz": _WHEEL_BYTES,
         },
+        environments=environments,
     )
     lock = tmp_path / "requirements-win-x64-base.lock"
     lock.write_text(
@@ -107,7 +116,16 @@ def test_pack_build_two_phase_download_wheel_and_zip(
     assert first == [output]
     download_command = calls[0]
     assert "--require-hashes" in download_command
+    assert download_command[download_command.index("--index-url") + 1] == (
+        "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+    )
     assert str(lock) in download_command
+    for child_environment in environments:
+        assert "PIP_EXTRA_INDEX_URL" not in child_environment
+        assert "PIP_FIND_LINKS" not in child_environment
+        assert "PIP_NO_INDEX" not in child_environment
+        assert "UV_INDEX" not in child_environment
+        assert child_environment["PIP_CONFIG_FILE"] == os.devnull
     wheel_command = calls[1]
     # sdist→wheel 必须离线、免隔离构建(依赖运行环境 setuptools)。
     assert "--no-index" in wheel_command
@@ -281,7 +299,6 @@ def test_pack_build_splits_into_parts_under_limit(
     calls = _install_fake_pip(monkeypatch, dict(wheels))
     lock = tmp_path / "requirements-win-x64-base.lock"
     lock.write_text(
-        "--index-url https://pypi.org/simple\n"
         f"alpha==1.0 \\n    --hash=sha256:{_LOCK_HASH}\n"
         f"beta==2.0 \\n    --hash=sha256:{_LOCK_HASH}\n"
         f"gamma==3.0 \\n    --hash=sha256:{_LOCK_HASH}\n",

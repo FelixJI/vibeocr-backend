@@ -30,7 +30,12 @@ from vibeocr.backend.runtime_maintenance import (
     profile_descriptor,
     runtime_status_from_environment,
 )
-from vibeocr.backend.runtime_manifest import ManifestError, load_runtime_manifest
+from vibeocr.backend.runtime_manifest import (
+    ManifestError,
+    load_runtime_manifest,
+    validate_requirements_lock,
+)
+from vibeocr.backend.runtime_selection import BoundDownloadSource
 
 
 def _sha(data: bytes) -> str:
@@ -98,6 +103,23 @@ def _release(root: Path, *, with_base_pack: bool = False) -> tuple[Path, Path]:
             "sha256": _sha(lock.read_bytes()),
             "runtime_pack": None,
         }
+    cu126_gpu_lock = root / "requirements-win-x64-cu126-gpu.lock"
+    cu126_gpu_lock.write_text(_lock_text("win-x64-cu126"), encoding="utf-8")
+    profiles["win-x64-cu126"]["install_scopes"] = [
+        {
+            "scope_id": "gpu-runtime",
+            "component_ids": [
+                "ocr_engine",
+                "pdf_document_tools",
+                "image_code_tools",
+                "runtime_host",
+                "gpu_runtime",
+            ],
+            "lock": cu126_gpu_lock.name,
+            "sha256": _sha(cu126_gpu_lock.read_bytes()),
+            "runtime_pack": None,
+        }
+    ]
     if with_base_pack:
         pack = root / "vibeocr-runtime-pack-win-x64-base-0.7.0.zip"
         with zipfile.ZipFile(pack, mode="w") as archive:
@@ -176,6 +198,16 @@ def _fake_install(partial: Path, _manifest, _profile: str) -> Path:
     python.parent.mkdir(parents=True)
     python.write_bytes(b"python")
     return python
+
+
+def _pypi_source() -> tuple[BoundDownloadSource, ...]:
+    return (
+        BoundDownloadSource(
+            kind="package_index",
+            source_id="pypi",
+            endpoint="https://pypi.org/simple",
+        ),
+    )
 
 
 def _tar_with(path: Path, member_name: str, content: bytes = b"python") -> None:
@@ -285,6 +317,21 @@ def test_manifest_rejects_tampered_lock(tmp_path: Path) -> None:
     )
     with pytest.raises(ManifestError, match="SHA-256 mismatch"):
         load_runtime_manifest(manifest_path)
+
+
+@pytest.mark.parametrize(
+    "directive",
+    ["--index-url https://pypi.org/simple", "--extra-index-url https://extra.invalid"],
+)
+def test_runtime_lock_rejects_embedded_source_directives(
+    tmp_path: Path,
+    directive: str,
+) -> None:
+    lock = tmp_path / "requirements-win-x64-cpu.lock"
+    lock.write_text(f"{directive}\n{_lock_text('win-x64-cpu')}", encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="source-neutral"):
+        validate_requirements_lock(lock, profile="win-x64-cpu")
 
 
 def test_manifest_rejects_tampered_protocol_wheel(tmp_path: Path) -> None:
@@ -1104,7 +1151,12 @@ def _run_default_installer(
 
     monkeypatch.setattr(installer, "_run_install_command", fake_run)
     monkeypatch.setattr(installer, "_extract_python_archive", fake_extract_python)
-    installer._default_install_runner(partial_root, manifest, profile)
+    installer._default_install_runner(
+        partial_root,
+        manifest,
+        manifest.profiles[profile].scopes[0],
+        _pypi_source(),
+    )
     return commands, partial_root, manifest_path
 
 
@@ -1134,7 +1186,12 @@ class TestOfflineRuntimePack:
 
         manifest = load_runtime_manifest(manifest_path)
         commands.clear()
-        installer._default_install_runner(partial_root, manifest, "win-x64-base")
+        installer._default_install_runner(
+            partial_root,
+            manifest,
+            manifest.profiles["win-x64-base"].scopes[0],
+            _pypi_source(),
+        )
         assert commands[0][commands[0].index("--find-links") + 1] == find_links
         assert (pack_dir / ".complete").stat().st_mtime_ns == marker_before
 
@@ -1173,7 +1230,188 @@ class TestOfflineRuntimePack:
 
         monkeypatch.setattr(installer, "_extract_python_archive", fake_extract_python)
         with pytest.raises(RuntimeInstallError, match="runtime pack is missing"):
-            installer._default_install_runner(partial_root, manifest, "win-x64-base")
+            installer._default_install_runner(
+                partial_root,
+                manifest,
+                manifest.profiles["win-x64-base"].scopes[0],
+                _pypi_source(),
+            )
+
+
+@pytest.mark.parametrize(
+    ("source_ids", "expected_endpoint"),
+    [
+        (None, "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"),
+        (("pypi",), "https://pypi.org/simple"),
+    ],
+)
+def test_online_install_uses_selected_source_and_isolates_parent_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_ids: tuple[str, ...] | None,
+    expected_endpoint: str,
+) -> None:
+    from vibeocr.backend import runtime_installer as installer_module
+
+    manifest, component = _release(tmp_path / "release")
+    captured: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_run(command, *, timeout, env, reporter, heartbeat_code):  # type: ignore[no-untyped-def]
+        captured.append((list(command), dict(env)))
+
+    def fake_extract_python(archive_path, destination, *, progress=None):  # type: ignore[no-untyped-def]
+        (destination / "python.exe").write_bytes(b"python")
+
+    monkeypatch.setattr(installer_module, "_run_install_command", fake_run)
+    monkeypatch.setattr(
+        installer_module,
+        "_extract_python_archive",
+        fake_extract_python,
+    )
+    monkeypatch.setenv("PIP_EXTRA_INDEX_URL", "https://extra.invalid/simple")
+    monkeypatch.setenv("PIP_FIND_LINKS", "https://links.invalid")
+    monkeypatch.setenv("PIP_NO_INDEX", "1")
+    monkeypatch.setenv("UV_INDEX", "https://uv.invalid/simple")
+
+    runtime = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        component_probe=lambda _root, ids: dict.fromkeys(ids, True),
+        download_source_ids=source_ids,
+    )
+    launch = runtime.ensure()
+
+    profile_command, child_env = captured[0]
+    assert profile_command[profile_command.index("--index-url") + 1] == (
+        expected_endpoint
+    )
+    assert "--require-hashes" in profile_command
+    assert "PIP_EXTRA_INDEX_URL" not in child_env
+    assert "PIP_FIND_LINKS" not in child_env
+    assert "PIP_NO_INDEX" not in child_env
+    assert "UV_INDEX" not in child_env
+    assert launch is not None
+    assert launch.environment["PIP_INDEX_URL"] == expected_endpoint
+
+
+def test_cuda_gpu_only_selection_uses_exact_install_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vibeocr.backend import runtime_installer as installer_module
+
+    manifest, component = _release(tmp_path / "release")
+    captured: list[list[str]] = []
+
+    def fake_run(command, *, timeout, env, reporter, heartbeat_code):  # type: ignore[no-untyped-def]
+        captured.append(list(command))
+
+    def fake_extract_python(archive_path, destination, *, progress=None):  # type: ignore[no-untyped-def]
+        (destination / "python.exe").write_bytes(b"python")
+
+    monkeypatch.setattr(installer_module, "_run_install_command", fake_run)
+    monkeypatch.setattr(
+        installer_module,
+        "_extract_python_archive",
+        fake_extract_python,
+    )
+
+    runtime = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="nvidia_cuda",
+        component_probe=lambda _root, ids: dict.fromkeys(ids, True),
+        install_component_ids=("gpu_runtime",),
+    )
+    runtime.ensure()
+
+    assert captured[0][-1] == str(
+        tmp_path / "release" / "requirements-win-x64-cu126-gpu.lock"
+    )
+    marker = json.loads(
+        (runtime.paths.runtime_root / ".installed.json").read_text(encoding="utf-8")
+    )
+    assert marker["component_ids"] == [
+        "ocr_engine",
+        "pdf_document_tools",
+        "image_code_tools",
+        "runtime_host",
+        "gpu_runtime",
+    ]
+
+
+def test_control_installer_store_composition_retries_durable_selection(
+    tmp_path: Path,
+) -> None:
+    manifest, component = _release(tmp_path / "release")
+    product_root = tmp_path / "product"
+    constructed: list[dict[str, object]] = []
+
+    def fail_install(_partial: Path, _manifest, _profile: str) -> Path:
+        raise RuntimeInstallError("synthetic install failure")
+
+    def factory(**kwargs):  # type: ignore[no-untyped-def]
+        constructed.append(dict(kwargs))
+        install_runner = (
+            fail_install
+            if kwargs.get("operation_id") == "composition-failed"
+            else _fake_install
+        )
+        return RuntimeInstaller(
+            product_root=product_root,
+            component_lock=component,
+            runtime_manifest=manifest,
+            accelerator="cpu",
+            install_runner=install_runner,
+            **kwargs,
+        )
+
+    control = RuntimeControl.from_installer_factory(factory)
+    with pytest.raises(RuntimeInstallError, match="synthetic install failure"):
+        control.execute(
+            operation="ensure",
+            operation_id="composition-failed",
+            install_component_ids=(),
+            download_source_ids=("pypi",),
+        )
+
+    receipt = control.command(
+        command_id="composition-retry-command",
+        command="retry",
+        target_operation_id="composition-failed",
+        new_operation_id="composition-retried",
+    )
+    assert receipt["snapshot"]["operation_state"] == "succeeded"
+    retried = next(
+        item
+        for item in constructed
+        if item.get("operation_id") == "composition-retried"
+    )
+    assert retried["install_component_ids"] == ()
+    assert retried["download_source_ids"] == ("pypi",)
+
+    intent = runtime_maintenance.RuntimeOperationStore(control.state_root).intent(
+        "composition-retried"
+    )
+    assert intent["install_component_ids"] == []
+    assert intent["download_source_ids"] == ["pypi"]
+    restarted = RuntimeControl.from_installer_factory(factory)
+    observation = restarted.observe("composition-retried")
+    assert observation["snapshot"]["operation_state"] == "succeeded"
+    assert observation["events"][-1]["snapshot"]["operation_state"] == "succeeded"
+
+    default_receipt = restarted.execute(
+        operation="ensure",
+        operation_id="composition-default-source",
+        install_component_ids=(),
+    )
+    assert default_receipt["snapshot"]["effective_download_source_ids"] == ["tuna-pypi"]
+    default_intent = runtime_maintenance.RuntimeOperationStore(
+        restarted.state_root
+    ).intent("composition-default-source")
+    assert default_intent["download_source_ids"] == ["tuna-pypi"]
 
 
 def test_extract_runtime_pack_rejects_unsafe_members(tmp_path: Path) -> None:
@@ -1235,7 +1473,12 @@ def test_full_profile_without_pack_falls_back_online(tmp_path: Path) -> None:
     installer._run_install_command = fake_run  # type: ignore[assignment]
     installer._extract_python_archive = fake_extract_python  # type: ignore[assignment]
     try:
-        installer._default_install_runner(partial_root, manifest, "win-x64-cpu")
+        installer._default_install_runner(
+            partial_root,
+            manifest,
+            manifest.profiles["win-x64-cpu"].scopes[0],
+            _pypi_source(),
+        )
     finally:
         installer._run_install_command = original_run  # type: ignore[assignment]
         installer._extract_python_archive = original_extract  # type: ignore[assignment]
@@ -1420,4 +1663,4 @@ def test_maintenance_snapshot_echoes_download_source_intent(
     snapshot = omitted.maintenance_snapshot()
     # 省略：requested 不出现，effective 解析为 Backend 缺省源。
     assert "requested_download_source_ids" not in snapshot
-    assert snapshot["effective_download_source_ids"] == ["pypi"]
+    assert snapshot["effective_download_source_ids"] == ["tuna-pypi"]

@@ -121,6 +121,7 @@ $manifestArgs = @(
   '--base-lock', (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-base/requirements-win-x64-base.lock'),
   '--cpu-lock', (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements-win-x64-cpu.lock'),
   '--cu126-lock', (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-cu126/requirements-win-x64-cu126.lock'),
+  '--cu126-gpu-lock', (Join-Path $root 'packages/vibeocr-backend/runtime-profiles/win-x64-cu126-gpu/requirements-win-x64-cu126-gpu.lock'),
   '--python-archive', $pythonArchive, '--python-version', $runtimeLock.version,
   '--python-source-url', $runtimeLock.source_url,
   '--installer-archive', $installerArchive.FullName, '--backend-version', $Version

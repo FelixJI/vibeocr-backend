@@ -44,6 +44,9 @@ PROFILE_COMPONENTS = {
         ("gpu_runtime", "CUDA and Torch runtime"),
     ),
 }
+_DEFAULT_COMPONENT_DEPENDENCIES = {
+    ("win-x64-cu126", "document_parsing"): ("gpu_runtime",),
+}
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -57,6 +60,7 @@ class RuntimeComponent:
     component_id: str
     display_name: str
     version: str | None = None
+    dependencies: tuple[str, ...] = ()
 
     def to_payload(self) -> dict[str, str]:
         payload = {
@@ -69,6 +73,16 @@ class RuntimeComponent:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeInstallScope:
+    scope_id: str
+    component_ids: tuple[str, ...]
+    lock_path: Path
+    sha256: str
+    runtime_pack: tuple[str, ...]
+    runtime_pack_sha256: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeProfile:
     name: str
     lock_path: Path
@@ -76,6 +90,7 @@ class RuntimeProfile:
     runtime_pack: tuple[str, ...]
     components: tuple[RuntimeComponent, ...]
     runtime_pack_sha256: tuple[str, ...] = ()
+    scopes: tuple[RuntimeInstallScope, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +169,37 @@ def _relative_filename(value: object, *, field: str) -> str:
     return value
 
 
+def _runtime_pack_binding(
+    record: dict[str, Any],
+    *,
+    field: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    raw_pack = record.get("runtime_pack")
+    if raw_pack is None:
+        if record.get("runtime_pack_sha256") is not None:
+            raise ManifestError(f"{field}.runtime_pack_sha256 requires runtime_pack")
+        return (), ()
+    if (
+        not isinstance(raw_pack, list)
+        or not raw_pack
+        or not all(isinstance(item, str) and item for item in raw_pack)
+    ):
+        raise ManifestError(f"{field}.runtime_pack must be a non-empty filename list")
+    runtime_pack = tuple(
+        _relative_filename(item, field=f"{field}.runtime_pack") for item in raw_pack
+    )
+    raw_shas = record.get("runtime_pack_sha256")
+    if (
+        not isinstance(raw_shas, list)
+        or len(raw_shas) != len(runtime_pack)
+        or not all(isinstance(item, str) and item for item in raw_shas)
+    ):
+        raise ManifestError(f"{field}.runtime_pack_sha256 must parallel runtime_pack")
+    return runtime_pack, tuple(
+        _sha256(item, field=f"{field}.runtime_pack_sha256") for item in raw_shas
+    )
+
+
 def _validate_protocol_release_manifest(
     path: Path,
     *,
@@ -206,6 +252,11 @@ def validate_requirements_lock(path: Path, *, profile: str) -> None:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
         raise ManifestError(f"runtime lock missing: {path}") from exc
+    source_directive = re.compile(
+        r"^\s*--(?:index-url|extra-index-url|find-links|no-index)\b"
+    )
+    if any(source_directive.match(line) for line in lines):
+        raise ManifestError("runtime lock must be source-neutral")
     entries: list[list[str]] = []
     current: list[str] = []
     for line in lines:
@@ -265,7 +316,13 @@ def default_profile_components(profile: str) -> tuple[RuntimeComponent, ...]:
     except KeyError as exc:
         raise ManifestError(f"unsupported profile: {profile}") from exc
     return tuple(
-        RuntimeComponent(component_id, display_name)
+        RuntimeComponent(
+            component_id,
+            display_name,
+            dependencies=_DEFAULT_COMPONENT_DEPENDENCIES.get(
+                (profile, component_id), ()
+            ),
+        )
         for component_id, display_name in values
     )
 
@@ -385,42 +442,12 @@ def load_runtime_manifest(
         filename = _relative_filename(record.get("lock"), field=f"profiles.{name}.lock")
         lock_path = manifest_path.parent / filename
         lock_sha = _sha256(record.get("sha256"), field=f"profiles.{name}.sha256")
-        raw_pack = record.get("runtime_pack")
-        runtime_pack: tuple[str, ...] = ()
-        runtime_pack_shas: tuple[str, ...] = ()
-        if raw_pack is not None:
-            # 离线 pack 是一个或多个分片 zip(cu126 的 torch 单 wheel 即超
-            # GitHub 2 GiB 资产上限)。每个分片必须绑定字节哈希：installer
-            # 禁网安装完全信任该闭包。
-            if (
-                not isinstance(raw_pack, list)
-                or not raw_pack
-                or not all(isinstance(item, str) and item for item in raw_pack)
-            ):
-                raise ManifestError(
-                    f"profiles.{name}.runtime_pack must be a non-empty filename list"
-                )
-            runtime_pack = tuple(
-                _relative_filename(item, field=f"profiles.{name}.runtime_pack")
-                for item in raw_pack
-            )
-            raw_shas = record.get("runtime_pack_sha256")
-            if (
-                not isinstance(raw_shas, list)
-                or len(raw_shas) != len(runtime_pack)
-                or not all(isinstance(item, str) and item for item in raw_shas)
-            ):
-                raise ManifestError(
-                    f"profiles.{name}.runtime_pack_sha256 must parallel runtime_pack"
-                )
-            runtime_pack_shas = tuple(
-                _sha256(item, field=f"profiles.{name}.runtime_pack_sha256")
-                for item in raw_shas
-            )
-        elif record.get("runtime_pack_sha256") is not None:
-            raise ManifestError(
-                f"profiles.{name}.runtime_pack_sha256 requires runtime_pack"
-            )
+        # 离线 pack 是一个或多个分片 zip。每个分片必须绑定字节哈希：
+        # installer 的禁网路径完全信任该闭包。
+        runtime_pack, runtime_pack_shas = _runtime_pack_binding(
+            record,
+            field=f"profiles.{name}",
+        )
         expected = default_profile_components(name)
         components_data = record.get("components")
         if components_data is None:
@@ -435,6 +462,15 @@ def load_runtime_manifest(
                 component_id = component.get("component_id")
                 display_name = component.get("display_name")
                 version_value = component.get("version")
+                default_dependencies = (
+                    _DEFAULT_COMPONENT_DEPENDENCIES.get((name, component_id), ())
+                    if isinstance(component_id, str)
+                    else ()
+                )
+                dependencies_value = component.get(
+                    "dependencies",
+                    default_dependencies,
+                )
                 if (
                     not isinstance(component_id, str)
                     or not component_id
@@ -443,16 +479,55 @@ def load_runtime_manifest(
                     or (
                         version_value is not None and not isinstance(version_value, str)
                     )
+                    or not isinstance(dependencies_value, (list, tuple))
+                    or any(
+                        not isinstance(dependency, str) or not dependency
+                        for dependency in dependencies_value
+                    )
+                    or len(set(dependencies_value)) != len(dependencies_value)
                 ):
                     raise ManifestError(f"profiles.{name}.components is invalid")
                 parsed_components.append(
-                    RuntimeComponent(component_id, display_name, version_value)
+                    RuntimeComponent(
+                        component_id,
+                        display_name,
+                        version_value,
+                        tuple(dependencies_value),
+                    )
                 )
             if tuple(item.component_id for item in parsed_components) != tuple(
                 item.component_id for item in expected
             ):
                 raise ManifestError(f"profiles.{name}.components must use stable ids")
             components = tuple(parsed_components)
+        component_ids = {component.component_id for component in components}
+        for component in components:
+            if not set(component.dependencies).issubset(component_ids):
+                raise ManifestError(
+                    f"profiles.{name}.components dependencies must stay in profile"
+                )
+
+        visiting: set[str] = set()
+        visited: set[str] = set()
+        dependencies_by_id = {
+            component.component_id: component.dependencies for component in components
+        }
+
+        def visit(component_id: str) -> None:
+            if component_id in visiting:
+                raise ManifestError(
+                    f"profiles.{name}.components dependencies must be acyclic"
+                )
+            if component_id in visited:
+                return
+            visiting.add(component_id)
+            for dependency in dependencies_by_id[component_id]:
+                visit(dependency)
+            visiting.remove(component_id)
+            visited.add(component_id)
+
+        for component_id in dependencies_by_id:
+            visit(component_id)
         if verify_artifacts:
             if sha256_file(lock_path) != lock_sha:
                 raise ManifestError(f"{name} lock SHA-256 mismatch")
@@ -462,6 +537,98 @@ def load_runtime_manifest(
             ):
                 if sha256_file(manifest_path.parent / pack_name) != pack_sha:
                     raise ManifestError(f"{name} runtime pack SHA-256 mismatch")
+        default_scope = RuntimeInstallScope(
+            scope_id="default",
+            component_ids=tuple(component.component_id for component in components),
+            lock_path=lock_path,
+            sha256=lock_sha,
+            runtime_pack=runtime_pack,
+            runtime_pack_sha256=runtime_pack_shas,
+        )
+        scopes = [default_scope]
+        scope_ids = {default_scope.scope_id}
+        component_sets = {frozenset(default_scope.component_ids)}
+        raw_scopes = record.get("install_scopes", [])
+        if not isinstance(raw_scopes, list):
+            raise ManifestError(f"profiles.{name}.install_scopes must be an array")
+        base_component_ids = {
+            component_id for component_id, _ in PROFILE_COMPONENTS["win-x64-base"]
+        }
+        for index, scope_record in enumerate(raw_scopes):
+            scope_field = f"profiles.{name}.install_scopes[{index}]"
+            if not isinstance(scope_record, dict):
+                raise ManifestError(f"{scope_field} must be an object")
+            scope_id = scope_record.get("scope_id")
+            raw_component_ids = scope_record.get("component_ids")
+            if not isinstance(scope_id, str) or not scope_id:
+                raise ManifestError(f"{scope_field}.scope_id is invalid")
+            if scope_id in scope_ids:
+                raise ManifestError(f"profiles.{name}.install scope ids must be unique")
+            if (
+                not isinstance(raw_component_ids, list)
+                or not raw_component_ids
+                or any(
+                    not isinstance(component_id, str) or not component_id
+                    for component_id in raw_component_ids
+                )
+                or len(set(raw_component_ids)) != len(raw_component_ids)
+            ):
+                raise ManifestError(f"{scope_field}.component_ids is invalid")
+            scope_component_ids = tuple(raw_component_ids)
+            scope_component_set = frozenset(scope_component_ids)
+            if not scope_component_set.issubset(component_ids):
+                raise ManifestError(f"{scope_field}.component_ids must stay in profile")
+            if not base_component_ids.issubset(scope_component_set):
+                raise ManifestError(
+                    f"{scope_field}.component_ids must include base components"
+                )
+            if scope_component_set in component_sets:
+                raise ManifestError(
+                    f"profiles.{name}.install scope component sets must be unique"
+                )
+            for component_id in scope_component_ids:
+                if not set(dependencies_by_id[component_id]).issubset(
+                    scope_component_set
+                ):
+                    raise ManifestError(
+                        f"{scope_field}.component_ids must be a dependency closure"
+                    )
+            scope_lock_name = _relative_filename(
+                scope_record.get("lock"),
+                field=f"{scope_field}.lock",
+            )
+            scope_lock_path = manifest_path.parent / scope_lock_name
+            scope_lock_sha = _sha256(
+                scope_record.get("sha256"),
+                field=f"{scope_field}.sha256",
+            )
+            scope_pack, scope_pack_shas = _runtime_pack_binding(
+                scope_record,
+                field=scope_field,
+            )
+            if verify_artifacts:
+                if sha256_file(scope_lock_path) != scope_lock_sha:
+                    raise ManifestError(f"{scope_field} lock SHA-256 mismatch")
+                validate_requirements_lock(scope_lock_path, profile=name)
+                for pack_name, pack_sha in zip(
+                    scope_pack, scope_pack_shas, strict=True
+                ):
+                    if sha256_file(manifest_path.parent / pack_name) != pack_sha:
+                        raise ManifestError(
+                            f"{scope_field} runtime pack SHA-256 mismatch"
+                        )
+            scopes.append(
+                RuntimeInstallScope(
+                    scope_id=scope_id,
+                    component_ids=scope_component_ids,
+                    lock_path=scope_lock_path,
+                    sha256=scope_lock_sha,
+                    runtime_pack=scope_pack,
+                    runtime_pack_sha256=scope_pack_shas,
+                )
+            )
+            scope_ids.add(scope_id)
+            component_sets.add(scope_component_set)
         profiles[name] = RuntimeProfile(
             name,
             lock_path,
@@ -469,6 +636,7 @@ def load_runtime_manifest(
             runtime_pack,
             components,
             runtime_pack_sha256=runtime_pack_shas,
+            scopes=tuple(scopes),
         )
     capabilities = data.get("capabilities")
     if (
@@ -542,6 +710,7 @@ __all__ = [
     "PythonRuntime",
     "RuntimeManifest",
     "RuntimeComponent",
+    "RuntimeInstallScope",
     "RuntimeProfile",
     "installer_executable_sha256",
     "load_runtime_manifest",

@@ -90,7 +90,7 @@ async def test_health_declares_selection_capability_catalogs(
     sources = source_descriptor["download_source_catalog"]["sources"]
     assert sources == download_source_catalog_payload()["sources"]
     assert len({s["id"] for s in sources}) == len(sources)
-    assert len({s["kind"] for s in sources}) == len(sources)
+    assert {s["id"] for s in sources} == {"tuna-pypi", "pypi"}
 
     variants = variant_descriptor["component_variant_catalog"]["variants"]
     assert variants == component_variant_catalog_payload()["variants"]
@@ -155,7 +155,7 @@ async def test_maintenance_ensure_forwards_selection_fields(
         body = started.json()
         assert body["snapshot"]["effective_download_source_ids"] == ["pypi"]
 
-        # 请求省略源时快照当前 Settings（默认空）→ 空集交给 policy 层。
+        # 请求省略源且 Settings 为空时保留 None，由 policy 采用 TUNA 缺省源。
         omitted = await client.post(
             "/v2/runtime/maintenance",
             json={"operation": "ensure", "operation_id": "op-1b"},
@@ -189,7 +189,7 @@ async def test_maintenance_ensure_forwards_selection_fields(
     assert control.execute_calls[0]["install_component_ids"] == ()
     assert control.execute_calls[0]["download_source_ids"] == ("pypi",)
     assert control.execute_calls[1]["install_component_ids"] is None
-    assert control.execute_calls[1]["download_source_ids"] == ()
+    assert control.execute_calls[1]["download_source_ids"] is None
     assert control.command_calls[0]["install_component_ids"] == ("document_parsing",)
     assert control.command_calls[0]["download_source_ids"] == ("pypi",)
 

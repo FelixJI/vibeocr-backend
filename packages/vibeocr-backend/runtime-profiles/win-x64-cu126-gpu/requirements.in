@@ -1,0 +1,11 @@
+# GPU-only install scope for CPython 3.13 / Windows x64.
+#
+# Source-neutral lock regeneration (uv 0.11.16; no user or repository config):
+# uv pip compile packages/vibeocr-backend/runtime-profiles/win-x64-cu126-gpu/requirements.in --no-config --no-sources --default-index https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/ --python-version 3.13 --python-platform windows --generate-hashes --output-file packages/vibeocr-backend/runtime-profiles/win-x64-cu126-gpu/requirements-win-x64-cu126-gpu.lock
+#
+# Reuse the complete offline base; exclude PaddleOCR/MinerU/document parsing.
+-r ../win-x64-base/requirements.in
+
+paddlepaddle-gpu @ https://paddle-whl.bj.bcebos.com/stable/cu126/paddlepaddle-gpu/paddlepaddle_gpu-3.3.1-cp313-cp313-win_amd64.whl
+torch @ https://download.pytorch.org/whl/cu126/torch-2.12.1%2Bcu126-cp313-cp313-win_amd64.whl
+torchvision @ https://download.pytorch.org/whl/cu126/torchvision-0.27.1%2Bcu126-cp313-cp313-win_amd64.whl

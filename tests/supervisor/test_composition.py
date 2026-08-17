@@ -119,6 +119,26 @@ def test_build_supervisor_uses_null_executor_without_backends(
     assert handle.token  # bootstrap handle should now carry a token
 
 
+def test_build_supervisor_loads_the_injected_settings_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vibeocr.backend.supervisor.settings_store import RuntimeSettingsStore
+    from vibeocr.runtime_contracts import SettingsSnapshot
+
+    monkeypatch.setattr(composition, "_paddle_available", lambda: False)
+    monkeypatch.setattr(composition, "_mineru_available", lambda: False)
+    store = RuntimeSettingsStore(tmp_path / "supervisor-settings.json")
+    store.replace(SettingsSnapshot(default_ttl_seconds=600))
+
+    module, _ = build_supervisor(
+        instance_id="comp-test",
+        stager_root=tmp_path / "stage",
+        settings_store=store,
+    )
+
+    assert module.settings().default_ttl_seconds == 600
+
+
 def test_build_supervisor_keeps_existing_bootstrap_token(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

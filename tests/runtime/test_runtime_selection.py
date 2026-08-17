@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+from vibeocr.backend.runtime_manifest import (
+    RuntimeInstallScope,
+    RuntimeProfile,
+    default_profile_components,
+)
 from vibeocr.backend.runtime_selection import (
     RuntimeSelectionError,
+    RuntimeSelectionPolicy,
     component_variant_catalog_payload,
+    default_download_sources,
     download_source_catalog_payload,
     normalize_download_source_ids,
     normalize_install_component_ids,
@@ -12,21 +21,71 @@ from vibeocr.backend.runtime_selection import (
 from vibeocr.runtime_contracts import ErrorCode
 
 
+def _profile(name: str, *scopes: RuntimeInstallScope) -> RuntimeProfile:
+    return RuntimeProfile(
+        name=name,
+        lock_path=Path(f"{name}.lock"),
+        sha256="0" * 64,
+        runtime_pack=(),
+        components=default_profile_components(name),
+        scopes=scopes,
+    )
+
+
+def _scope(scope_id: str, component_ids: tuple[str, ...]) -> RuntimeInstallScope:
+    return RuntimeInstallScope(
+        scope_id=scope_id,
+        component_ids=component_ids,
+        lock_path=Path(f"{scope_id}.lock"),
+        sha256="0" * 64,
+        runtime_pack=(),
+        runtime_pack_sha256=(),
+    )
+
+
+def _selection_profiles() -> dict[str, RuntimeProfile]:
+    base_ids = tuple(
+        component.component_id
+        for component in default_profile_components("win-x64-base")
+    )
+    cpu_ids = tuple(
+        component.component_id
+        for component in default_profile_components("win-x64-cpu")
+    )
+    cuda_ids = tuple(
+        component.component_id
+        for component in default_profile_components("win-x64-cu126")
+    )
+    return {
+        "win-x64-base": _profile("win-x64-base", _scope("default", base_ids)),
+        "win-x64-cpu": _profile("win-x64-cpu", _scope("default", cpu_ids)),
+        "win-x64-cu126": _profile(
+            "win-x64-cu126",
+            _scope("default", cuda_ids),
+            _scope("gpu-runtime", (*base_ids, "gpu_runtime")),
+        ),
+    }
+
+
+def _selection_policy() -> RuntimeSelectionPolicy:
+    return RuntimeSelectionPolicy(profiles=_selection_profiles())
+
+
 def test_download_source_catalog_declares_default_and_unique_business_keys() -> None:
     catalog = download_source_catalog_payload()
 
     sources = catalog["sources"]
     assert sources, "catalog must declare at least one Backend default source"
     ids = [source["id"] for source in sources]
-    kinds = [source["kind"] for source in sources]
     assert len(set(ids)) == len(ids)
-    assert len(set(kinds)) == len(kinds)
+    assert [source["id"] for source in default_download_sources()] == ["tuna-pypi"]
+    assert {source["id"] for source in sources} == {"tuna-pypi", "pypi"}
     for source in sources:
         assert set(source) == {"kind", "id", "endpoint"}
         assert source["endpoint"].startswith("https://")
 
 
-def test_download_source_catalog_rejects_duplicate_ids_and_kinds() -> None:
+def test_download_source_catalog_rejects_duplicate_ids_but_allows_candidates() -> None:
     duplicate_id = [
         {"kind": "package_index", "id": "pypi", "endpoint": "https://a"},
         {"kind": "model_registry", "id": "pypi", "endpoint": "https://b"},
@@ -35,12 +94,13 @@ def test_download_source_catalog_rejects_duplicate_ids_and_kinds() -> None:
         download_source_catalog_payload(duplicate_id)
     assert excinfo.value.code is ErrorCode.VALIDATION_ERROR
 
-    duplicate_kind = [
+    same_kind_candidates = [
         {"kind": "package_index", "id": "pypi", "endpoint": "https://a"},
         {"kind": "package_index", "id": "mirror", "endpoint": "https://b"},
     ]
-    with pytest.raises(RuntimeSelectionError):
-        download_source_catalog_payload(duplicate_kind)
+    assert download_source_catalog_payload(same_kind_candidates) == {
+        "sources": same_kind_candidates
+    }
 
 
 def test_component_variant_catalog_lists_only_selectable_full_components() -> None:
@@ -70,9 +130,83 @@ def test_component_variant_catalog_lists_only_selectable_full_components() -> No
     }
 
 
+def test_selection_policy_resolves_exact_cuda_dependency_closure() -> None:
+    policy = _selection_policy()
+
+    gpu_only = policy.plan_start(
+        accelerator="nvidia_cuda",
+        install_component_ids=("gpu_runtime",),
+        download_source_ids=("pypi",),
+    )
+    document_parsing = policy.plan_start(
+        accelerator="nvidia_cuda",
+        install_component_ids=("document_parsing",),
+        download_source_ids=("pypi",),
+    )
+
+    assert gpu_only.requested_component_ids == ("gpu_runtime",)
+    assert gpu_only.install_scope.scope_id == "gpu-runtime"
+    assert gpu_only.effective_component_ids == (
+        "ocr_engine",
+        "pdf_document_tools",
+        "image_code_tools",
+        "runtime_host",
+        "gpu_runtime",
+    )
+    assert document_parsing.install_scope.scope_id == "default"
+    assert document_parsing.effective_component_ids == (
+        "ocr_engine",
+        "document_parsing",
+        "pdf_document_tools",
+        "image_code_tools",
+        "runtime_host",
+        "gpu_runtime",
+    )
+
+
+def test_selection_policy_canonicalizes_sources_and_rejects_same_kind() -> None:
+    policy = RuntimeSelectionPolicy(
+        profiles=_selection_profiles(),
+        sources=(
+            {
+                "kind": "package_index",
+                "id": "pypi",
+                "endpoint": "https://pypi.org/simple",
+            },
+            {
+                "kind": "package_index",
+                "id": "mirror",
+                "endpoint": "https://mirror.invalid/simple",
+            },
+            {
+                "kind": "model_registry",
+                "id": "models",
+                "endpoint": "https://models.invalid",
+            },
+        ),
+        default_download_source_ids=("pypi",),
+    )
+
+    resolved = policy.plan_start(
+        accelerator="cpu",
+        install_component_ids=None,
+        download_source_ids=("models", "pypi"),
+    )
+    assert resolved.requested_download_source_ids == ("pypi", "models")
+    assert resolved.effective_download_source_ids == ("pypi", "models")
+
+    with pytest.raises(RuntimeSelectionError) as excinfo:
+        policy.plan_start(
+            accelerator="cpu",
+            install_component_ids=None,
+            download_source_ids=("pypi", "mirror"),
+        )
+    assert excinfo.value.code is ErrorCode.VALIDATION_ERROR
+
+
 def test_normalize_download_source_ids_resolves_omission_to_backend_default() -> None:
-    assert normalize_download_source_ids(None) == ("pypi",)
-    assert normalize_download_source_ids(()) == ("pypi",)
+    assert normalize_download_source_ids(None) == ("tuna-pypi",)
+    assert normalize_download_source_ids(()) == ("tuna-pypi",)
     assert normalize_download_source_ids(["pypi"]) == ("pypi",)
 
 

@@ -1,4 +1,6 @@
 # Resolved for CPython 3.13 / Windows x64 by scripts/build_runtime_manifest.py.
+# Source-neutral lock command (uv 0.11.16; trusted TUNA index):
+# uv pip compile packages/vibeocr-backend/runtime-profiles/win-x64-base/requirements.in --no-config --no-sources --default-index https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/ --python-version 3.13 --python-platform windows --generate-hashes --output-file packages/vibeocr-backend/runtime-profiles/win-x64-base/requirements-win-x64-base.lock
 #
 # base-offline 闭包（docs/ocr-engine-runtime-profiles-execution-plan.md §4.1）：
 # 随 Classic/Next Portable 携带、禁网可安装的必备闭包。只含 Backend/Protocol

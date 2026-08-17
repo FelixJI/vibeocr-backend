@@ -152,8 +152,8 @@ async def test_start_and_retry_forward_idempotency_and_negotiation_fields(
             "required_capabilities": ("runtime.component-repair.v1",),
             "profile_id": "win-x64-cpu",
             "install_component_ids": None,
-            # 请求省略时快照当前 Settings（空）→ 空集交给 installer 解析缺省。
-            "download_source_ids": (),
+            # repair 不接受 source selection，省略时保持 None。
+            "download_source_ids": None,
         }
     ]
     assert retried.status_code == 200
