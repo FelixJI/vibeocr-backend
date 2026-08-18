@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.0
+
+### Features
+
+- **runtime:** 接入 model registry 与持久化模型 acquisition (#56) (d816a1a)
+
 ## 0.12.3
 
 ### Bug Fixes
