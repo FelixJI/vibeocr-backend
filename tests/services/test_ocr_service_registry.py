@@ -10,10 +10,15 @@ Verifies that:
 - Old OCROptions (enum pipeline) still works end-to-end
 """
 
+import json
+import sys
+import types
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from vibeocr.backend.core.pipelines import OCRPipeline
+from vibeocr.backend.core.singleton_meta import SingletonMeta
 from vibeocr.backend.models.ocr_options import OCROptions
 from vibeocr.backend.models.ocr_result import OCRResult
 from vibeocr.backend.services.ocr_service import OCRService
@@ -54,6 +59,72 @@ def _known_onednn_pir_error() -> NotImplementedError:
         "[pir::ArrayAttribute<pir::DoubleAttribute>] "
         "(at ..\\instruction\\onednn\\onednn_instruction.cc:118)"
     )
+
+
+@pytest.mark.parametrize(
+    ("pipeline", "consumer", "constructor_name", "binding_key"),
+    [
+        (
+            OCRPipeline.OCR,
+            "paddleocr",
+            "PaddleOCR",
+            "text_recognition_model_dir",
+        ),
+        (
+            OCRPipeline.PP_STRUCTURE_V3,
+            "pp_structure",
+            "PPStructureV3",
+            "layout_detection_model_dir",
+        ),
+        (
+            OCRPipeline.PADDLEOCR_VL,
+            "paddleocr_vl",
+            "PaddleOCRVL",
+            "vl_rec_model_dir",
+        ),
+    ],
+)
+def test_legacy_pipeline_factory_consumes_verified_local_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pipeline: OCRPipeline,
+    consumer: str,
+    constructor_name: str,
+    binding_key: str,
+) -> None:
+    SingletonMeta.reset_instance(OCRService)
+    model_dir = tmp_path / consumer
+    model_dir.mkdir()
+    binding = tmp_path / "resolved-models.json"
+    binding.write_text(
+        json.dumps({"consumers": {consumer: {binding_key: str(model_dir)}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VIBEOCR_RESOLVED_MODELS", str(binding))
+    captured: dict[str, object] = {}
+
+    def constructor(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "paddleocr",
+        types.SimpleNamespace(**{constructor_name: constructor}),
+    )
+    service = OCRService()
+    monkeypatch.setattr(service, "_get_device", lambda: "cpu")
+    monkeypatch.setattr(service, "_decide_enable_mkldnn", lambda _device: False)
+    monkeypatch.setattr(
+        "vibeocr.backend.services.ocr_service.is_pipeline_ever_succeeded",
+        lambda *_args: True,
+    )
+
+    service._create_pipeline(pipeline)
+
+    assert captured["device"] == "cpu"
+    assert captured[binding_key] == str(model_dir)
+    SingletonMeta.reset_instance(OCRService)
 
 
 # ---------------------------------------------------------------------------

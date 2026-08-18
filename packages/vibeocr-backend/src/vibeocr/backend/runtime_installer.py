@@ -25,6 +25,7 @@ from typing import Any
 
 from vibeocr.backend.model_registry import (
     ModelAcquisitionError,
+    ResolvedModelSet,
     acquire_models,
     load_model_assets,
     model_assets_config_path,
@@ -562,6 +563,7 @@ class RuntimeInstaller:
         self.product_root = Path(product_root).resolve()
         self.component_lock_path = Path(component_lock).resolve()
         self.manifest = load_runtime_manifest(runtime_manifest)
+        self._resolved_models: ResolvedModelSet | None = None
         self.component_lock = _load_component_lock(self.component_lock_path)
         self.paths = resolve_runtime_store(
             self.product_root,
@@ -930,15 +932,29 @@ class RuntimeInstaller:
                 source_id=model_registry.source_id if model_registry else None,
                 state_root=state,
                 models_root=self.paths.models_root,
+                resolved_models=self._resolved_models,
             )
         )
         return environment
 
     def _acquire_models(self) -> None:
         """把声明的模型资产纳入同一 durable 操作;本地已就绪则直接复用。"""
-        assets = load_model_assets(model_assets_config_path(self.paths.state_root))
+        release_identity = (
+            f"{self.manifest.backend_version}-{self.manifest.source_commit}"
+        )
+        assets_path = (
+            self.manifest.model_assets.manifest_path
+            if self.manifest.model_assets is not None
+            else model_assets_config_path(self.paths.state_root)
+        )
+        assets = load_model_assets(
+            assets_path,
+            expected_release_identity=release_identity,
+        )
         if not assets:
-            return
+            raise ModelAcquisitionError(
+                "document_parsing requires a model assets manifest"
+            )
         model_registry = next(
             (
                 source
@@ -971,11 +987,12 @@ class RuntimeInstaller:
                 )
 
         def check_cancel() -> None:
-            # heartbeat 同时承担取消检查;只在资产/文件边界调用,不随字节刷屏。
+            # ModelProgress 每个 chunk 调用；heartbeat 不依赖 Content-Length。
             self._reporter.heartbeat(message_code="runtime.install_models")
 
-        acquire_models(
+        self._resolved_models = acquire_models(
             assets=assets,
+            release_identity=release_identity,
             source_id=model_registry.source_id,
             endpoint=model_registry.endpoint,
             models_root=self.paths.models_root,

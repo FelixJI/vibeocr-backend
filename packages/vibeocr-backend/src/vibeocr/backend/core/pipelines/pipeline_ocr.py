@@ -82,9 +82,11 @@ def _create_ocr_pipeline(device: str, **kwargs: Any) -> Any:
     """
     _isolate_unused_modelscope_import()
     from paddleocr import PaddleOCR
+    from vibeocr.backend.model_registry import local_model_kwargs
 
     if device == "gpu" and "text_recognition_batch_size" not in kwargs:
         kwargs["text_recognition_batch_size"] = 8
+    kwargs.update(local_model_kwargs("paddleocr"))
     return PaddleOCR(device=device, **kwargs)
 
 

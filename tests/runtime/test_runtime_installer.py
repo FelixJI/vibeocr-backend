@@ -11,6 +11,11 @@ from pathlib import Path
 
 import pytest
 from vibeocr.backend import runtime_maintenance
+from vibeocr.backend.model_registry import (
+    ModelAcquisitionError,
+    ResolvedModel,
+    ResolvedModelSet,
+)
 from vibeocr.backend.runtime_control import RuntimeControl
 from vibeocr.backend.runtime_installer import (
     RuntimeInstaller,
@@ -436,6 +441,7 @@ def test_ensure_is_atomic_and_idempotent(tmp_path: Path) -> None:
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=install,
+        install_component_ids=(),
     )
     first = installer.ensure()
     second = installer.ensure()
@@ -477,6 +483,7 @@ def test_gpu_launch_environment_is_derived_from_installer_profile(
         runtime_manifest=manifest,
         accelerator="nvidia_cuda",
         install_runner=_fake_install,
+        install_component_ids=(),
     )
 
     launch = installer.ensure()
@@ -516,6 +523,7 @@ def test_failed_repair_preserves_previous_runtime_until_verified_commit(
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=_fake_install,
+        install_component_ids=(),
     )
     launch = initial.ensure()
     assert launch is not None
@@ -560,6 +568,7 @@ def test_component_import_probe_reports_integrity_failed_drift(
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=_fake_install,
+        install_component_ids=(),
     )
     initial.ensure()
     inspected = RuntimeInstaller(
@@ -568,6 +577,7 @@ def test_component_import_probe_reports_integrity_failed_drift(
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=_fake_install,
+        install_component_ids=(),
         component_probe=lambda _root, component_ids, _profile_id: {
             component_id: component_id != "ocr_engine" for component_id in component_ids
         },
@@ -621,6 +631,7 @@ def test_runtime_control_inspect_probes_components_once(tmp_path: Path) -> None:
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=_fake_install,
+        install_component_ids=(),
     )
     initial.ensure()
     probe_calls: list[tuple[Path, tuple[str, ...]]] = []
@@ -672,6 +683,7 @@ def test_repair_of_in_sync_component_succeeds_without_claiming_global_ready(
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=install,
+        install_component_ids=(),
     )
     initial.ensure()
     repair = RuntimeInstaller(
@@ -680,6 +692,7 @@ def test_repair_of_in_sync_component_succeeds_without_claiming_global_ready(
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=install,
+        install_component_ids=(),
         component_probe=lambda _root, component_ids, _profile_id: {
             component_id: component_id != "ocr_engine" for component_id in component_ids
         },
@@ -758,6 +771,7 @@ def test_repair_is_idempotent_when_runtime_has_no_drift(tmp_path: Path) -> None:
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=install,
+        install_component_ids=(),
     )
     installer.ensure()
     original_marker = installer.paths.runtime_root / "original.txt"
@@ -809,7 +823,10 @@ def test_failed_operation_id_replays_failure_without_reexecuting(
     assert replay.maintenance_snapshot() == failed.maintenance_snapshot()
 
 
-def test_component_repair_reports_requested_and_effective_scope(tmp_path: Path) -> None:
+def test_component_repair_reports_requested_and_effective_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", lambda _self: None)
     manifest, component = _release(tmp_path / "release")
     calls: list[Path] = []
 
@@ -851,7 +868,9 @@ def test_component_repair_reports_requested_and_effective_scope(tmp_path: Path) 
 
 def test_component_drift_uses_installed_distribution_and_selected_repair(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", lambda _self: None)
     manifest, component_lock = _release(tmp_path / "release")
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     manifest_payload["profiles"]["win-x64-cpu"]["components"] = [
@@ -1024,6 +1043,7 @@ def test_install_progress_and_http_status_share_the_persisted_snapshot(
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=_fake_install,
+        install_component_ids=(),
         event_sink=events.append,
     )
 
@@ -1312,6 +1332,7 @@ def test_online_install_uses_selected_source_and_isolates_parent_config(
         accelerator="cpu",
         component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
         download_source_ids=source_ids,
+        install_component_ids=(),
     )
     launch = runtime.ensure()
 
@@ -1584,10 +1605,12 @@ def test_ensure_with_explicit_base_only_scope_installs_base_lock(
 )
 def test_install_probe_uses_actual_install_scope_profile(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     install_component_ids: tuple[str, ...],
     expected_profile: str,
     expected_ocr_import: str,
 ) -> None:
+    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", lambda _self: None)
     manifest, component = _release(tmp_path / "release")
 
     def probe(
@@ -1689,7 +1712,9 @@ def test_repair_fails_closed_when_installed_marker_is_untrusted(
 
 def test_ensure_with_optional_components_reports_full_profile_closure(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", lambda _self: None)
     manifest, component = _release(tmp_path / "release")
     seen_profiles: list[str] = []
 
@@ -1717,7 +1742,10 @@ def test_ensure_with_optional_components_reports_full_profile_closure(
     )
 
 
-def test_ensure_reinstalls_when_scope_changes(tmp_path: Path) -> None:
+def test_ensure_reinstalls_when_scope_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", lambda _self: None)
     manifest, component = _release(tmp_path / "release")
     calls: list[Path] = []
 
@@ -1790,6 +1818,7 @@ def test_maintenance_snapshot_echoes_download_source_intent(
         accelerator="cpu",
         install_runner=_fake_install,
         download_source_ids=("pypi",),
+        install_component_ids=(),
     )
     explicit.ensure()
     snapshot = explicit.maintenance_snapshot()
@@ -1802,6 +1831,7 @@ def test_maintenance_snapshot_echoes_download_source_intent(
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=_fake_install,
+        install_component_ids=(),
     )
     omitted.ensure()
     snapshot = omitted.maintenance_snapshot()
@@ -1856,8 +1886,12 @@ def test_base_only_ensure_probes_with_base_binding_not_plan_binding(
     assert installer.ensure() is not None
 
 
-def test_full_scope_drift_still_probes_with_plan_binding(tmp_path: Path) -> None:
+def test_full_scope_drift_still_probes_with_plan_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """full（含可选组件）安装的漂移探测仍使用 accelerator 的 plan 绑定。"""
+
+    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", lambda _self: None)
 
     manifest, component = _release(tmp_path / "release")
     probe_profiles: list[str] = []
@@ -2037,15 +2071,40 @@ def test_document_parsing_ensure_acquires_models_with_selected_registry(
 
     acquired: list[dict[str, object]] = []
 
-    def fake_acquire(**kwargs: object) -> dict[str, Path]:
+    def fake_acquire(**kwargs: object) -> ResolvedModelSet:
         acquired.append(kwargs)
         (asset,) = kwargs["assets"]  # type: ignore[unreachable]
         target = kwargs["models_root"] / asset.engine / asset.target_dirname  # type: ignore[operator]
         target.mkdir(parents=True, exist_ok=True)
         (target / asset.files[0]).write_bytes(b"model")  # type: ignore[index]
-        return {f"{asset.engine}/{asset.name}": target}
+        return ResolvedModelSet(
+            "0.7.0-" + "0" * 40,
+            (
+                ResolvedModel(
+                    key=f"{asset.engine}/{asset.name}",
+                    consumer=asset.consumer,
+                    binding_key=asset.binding_key,
+                    root=target,
+                ),
+            ),
+        )
 
     monkeypatch.setattr(installer_module, "acquire_models", fake_acquire)
+
+    missing_manifest = RuntimeInstaller(
+        product_root=tmp_path / "product-missing-manifest",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
+        install_component_ids=("document_parsing",),
+        download_source_ids=("tuna-pypi", "huggingface"),
+    )
+    with pytest.raises(
+        ModelAcquisitionError,
+        match="document_parsing requires a model assets manifest",
+    ):
+        missing_manifest.ensure()
 
     product = tmp_path / "product"
     installer = RuntimeInstaller(
@@ -2062,14 +2121,25 @@ def test_document_parsing_ensure_acquires_models_with_selected_registry(
     assets_file.write_text(
         json.dumps(
             {
+                "schema_version": 1,
+                "release_identity": "0.7.0-" + "0" * 40,
                 "assets": [
                     {
                         "engine": "paddleocr",
                         "name": "PP-OCRv5-server",
+                        "repository": "PaddlePaddle/PP-OCRv5-server",
                         "revision": "v1",
-                        "files": ["inference.pdmodel"],
+                        "files": [
+                            {
+                                "path": "inference.pdmodel",
+                                "size": 5,
+                                "sha256": "0" * 64,
+                            }
+                        ],
+                        "consumer": "paddleocr",
+                        "binding_key": "text_recognition_model_dir",
                     }
-                ]
+                ],
             }
         ),
         encoding="utf-8",
@@ -2095,6 +2165,7 @@ def test_document_parsing_ensure_acquires_models_with_selected_registry(
         runtime_manifest=manifest,
         accelerator="cpu",
         component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
+        install_component_ids=(),
         download_source_ids=("tuna-pypi", "huggingface"),
     )
     base_launch = base_installer.ensure()

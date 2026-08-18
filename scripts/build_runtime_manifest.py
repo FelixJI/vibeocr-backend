@@ -25,6 +25,7 @@ for _source_root in (
         sys.path.insert(0, str(_source_root))
         break
 
+from vibeocr.backend.model_registry import load_model_assets  # noqa: E402
 from vibeocr.backend.runtime_manifest import (  # noqa: E402
     PROFILE_NAMES,
     default_profile_components,
@@ -142,6 +143,7 @@ def build_runtime_manifest(
     python_version: str,
     python_source_url: str,
     installer_archive: Path,
+    model_assets: Path | None = None,
     backend_version: str,
     source_commit: str,
     build_workflow: str,
@@ -190,6 +192,16 @@ def build_runtime_manifest(
     )
     copied_python = _copy_exact(python_archive, output_dir)
     copied_installer = _copy_exact(installer_archive, output_dir)
+    copied_model_assets: Path | None = None
+    if model_assets is not None:
+        model_assets = model_assets.resolve(strict=True)
+        if model_assets.name != "model-assets.json":
+            raise ValueError("model_assets must be named model-assets.json")
+        load_model_assets(
+            model_assets,
+            expected_release_identity=f"{backend_version}-{source_commit}",
+        )
+        copied_model_assets = _copy_exact(model_assets, output_dir)
     pack_inputs = runtime_packs or {}
     copied_packs: dict[str, list[Path]] = {
         profile: [_copy_exact(pack, output_dir) for pack in packs]
@@ -236,6 +248,16 @@ def build_runtime_manifest(
                 "runtime-installer/vibeocr-runtime-installer.exe",
             ),
         },
+        **(
+            {
+                "model_assets": {
+                    "manifest": copied_model_assets.name,
+                    "sha256": sha256_file(copied_model_assets),
+                }
+            }
+            if copied_model_assets is not None
+            else {}
+        ),
         "profiles": {
             profile: {
                 "lock": copied_profiles[profile].name,
@@ -286,6 +308,7 @@ def build_runtime_manifest(
         copied_protocol_manifest,
         copied_python,
         copied_installer,
+        *([copied_model_assets] if copied_model_assets is not None else []),
         *(pack for packs in copied_packs.values() for pack in packs),
         *(copied_profiles[profile] for profile in PROFILE_NAMES),
         copied_cu126_gpu_lock,
@@ -324,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--installer-archive", type=Path, required=True)
+    parser.add_argument("--model-assets", type=Path)
     parser.add_argument(
         "--base-runtime-pack",
         type=Path,
@@ -355,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
         python_version=args.python_version,
         python_source_url=args.python_source_url,
         installer_archive=args.installer_archive,
+        model_assets=args.model_assets,
         backend_version=args.backend_version,
         source_commit=source_commit,
         build_workflow=args.build_workflow,
