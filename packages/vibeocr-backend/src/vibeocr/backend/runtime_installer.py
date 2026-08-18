@@ -780,9 +780,11 @@ class RuntimeInstaller:
         if not installed:
             return ()
         # 已安装闭包可能来自 base profile（base-only 的 ocr_engine 绑定是
-        # RapidOCR，而 cpu plan 的同名组件绑定 PaddleOCR）。漂移探测必须按
-        # 已安装 scope 的覆盖 profile 取 import 绑定，否则会把成功的
-        # base-only 安装整体误判为漂移并让 ensure 的 launch 校验失败。
+        # RapidOCR，而 cpu plan 的同名组件绑定 PaddleOCR）。漂移探测的
+        # 组件集、声明版本与 import 绑定都必须按已安装 scope 的覆盖
+        # profile 投影；否则成功的 base-only 安装会被 plan descriptor 的
+        # 版本比对判为漂移，ensure 的 launch 校验随之失败。
+        covering = self._covering_profile(installed)
         payload = runtime_profile_status(
             self.manifest,
             accelerator=self.accelerator,
@@ -790,8 +792,9 @@ class RuntimeInstaller:
             probe_results=self._component_probe(
                 self.paths.runtime_root,
                 installed,
-                self._covering_profile(installed),
+                covering,
             ),
+            profile_id=covering,
         )
         return self._scope_drifted_from(payload)
 

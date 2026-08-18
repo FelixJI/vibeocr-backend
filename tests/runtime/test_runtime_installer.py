@@ -29,6 +29,7 @@ from vibeocr.backend.runtime_maintenance import (
     RuntimeMaintenanceReporter,
     probe_runtime_components,
     profile_descriptor,
+    runtime_profile_status,
     runtime_status_from_environment,
 )
 from vibeocr.backend.runtime_manifest import (
@@ -1881,3 +1882,135 @@ def test_full_scope_drift_still_probes_with_plan_binding(tmp_path: Path) -> None
 
     assert installer._drifted_component_ids() == ()
     assert "win-x64-cpu" in probe_profiles
+
+
+def test_drift_projection_uses_covering_profile_declared_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 单测没有真实 Python runtime：组件 import 探测统一视为通过，
+    # 使断言聚焦在“声明版本/分布绑定按哪个 profile 投影”。
+    monkeypatch.setattr(
+        runtime_maintenance,
+        "_cached_runtime_component_probe",
+        lambda _root, component_ids, **_kwargs: dict.fromkeys(component_ids, True),
+    )
+    """base-only 安装的版本比对必须用 base 声明（rapidocr），不是 cpu plan。
+
+    回归（v0.12.2 现场）：真实 manifest 的组件带声明版本；漂移投影仍按
+    accelerator 的 plan descriptor 取 distribution（cpu 的 ocr_engine 绑定
+    paddleocr），刚装好的 rapidocr 闭包被判 missing/version_mismatch，ensure
+    以 "did not verify" 失败。``runtime_profile_status(profile_id=...)`` 与
+    ``_drifted_component_ids`` 必须按已安装 scope 的覆盖 profile 投影。
+    """
+
+    manifest_path, component = _release(tmp_path / "release")
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # 声明组件必须与 loader 派生的稳定 id 顺序一致，仅注入版本差异
+    document["profiles"]["win-x64-base"]["components"] = [
+        {
+            "component_id": "ocr_engine",
+            "display_name": "Default offline OCR engine",
+            "version": "3.9.2",
+        },
+        {
+            "component_id": "pdf_document_tools",
+            "display_name": "PDF and document tools",
+        },
+        {
+            "component_id": "image_code_tools",
+            "display_name": "Image, QR, and barcode tools",
+        },
+        {"component_id": "runtime_host", "display_name": "Runtime HTTP host"},
+    ]
+    document["profiles"]["win-x64-cpu"]["components"] = [
+        {
+            "component_id": "ocr_engine",
+            "display_name": "OCR engine",
+            "version": "3.7.0",
+        },
+        {"component_id": "document_parsing", "display_name": "Document parsing"},
+        {
+            "component_id": "pdf_document_tools",
+            "display_name": "PDF and document tools",
+        },
+        {
+            "component_id": "image_code_tools",
+            "display_name": "Image, QR, and barcode tools",
+        },
+        {"component_id": "runtime_host", "display_name": "Runtime HTTP host"},
+    ]
+    manifest_path.write_text(
+        json.dumps(document, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    # 组件锁的 manifest 摘要必须跟随改写后的字节，保持绑定校验成立
+    lock_document = json.loads(component.read_text(encoding="utf-8"))
+    lock_document["backend"]["runtime_manifest_sha256"] = _sha(
+        manifest_path.read_bytes()
+    )
+    component.write_text(
+        json.dumps(lock_document, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    loaded = load_runtime_manifest(manifest_path)
+
+    runtime_root = tmp_path / "product" / "runtime"
+    dist_info = runtime_root / "Lib" / "site-packages" / "rapidocr-3.9.2.dist-info"
+    dist_info.mkdir(parents=True)
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: rapidocr\nVersion: 3.9.2\n",
+        encoding="utf-8",
+    )
+    (runtime_root / "python.exe").write_bytes(b"python")
+    (runtime_root / ".installed.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "backend_version": loaded.backend_version,
+                "manifest_sha256": loaded.sha256,
+                "accelerator": "cpu",
+                "component_ids": [
+                    "ocr_engine",
+                    "pdf_document_tools",
+                    "image_code_tools",
+                    "runtime_host",
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    base_view = runtime_profile_status(
+        loaded,
+        accelerator="cpu",
+        runtime_root=runtime_root,
+        profile_id="win-x64-base",
+    )
+    cpu_view = runtime_profile_status(
+        loaded,
+        accelerator="cpu",
+        runtime_root=runtime_root,
+    )
+    base_states = {
+        entry["component_id"]: entry["actual_state"]
+        for entry in base_view["components"]
+    }
+    cpu_states = {
+        entry["component_id"]: entry["actual_state"] for entry in cpu_view["components"]
+    }
+
+    assert base_states["ocr_engine"] == "ready"
+    assert base_states["pdf_document_tools"] == "ready"
+    # 默认 cpu 投影下同一安装是 missing（paddleocr 分布不存在）——证明
+    # profile_id 覆盖确实改变了版本比对来源，而不是恒等于 plan。
+    assert cpu_states["ocr_engine"] == "missing"
+
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest_path,
+        accelerator="cpu",
+        install_component_ids=(),
+        install_runner=_fake_install,
+        component_probe=lambda _root, ids, _profile: dict.fromkeys(ids, True),
+    )
+    assert installer._drifted_component_ids() == ()
