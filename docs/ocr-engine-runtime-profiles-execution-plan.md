@@ -22,8 +22,10 @@
 > 可选组件 `document_parsing`（原占位 `full-cpu` 不在 component-selection
 > 目录中）。模型 registry acquisition、`ResolvedModelSet` 与 Paddle/MinerU
 > 本地绑定 seam 已实现；`document_parsing` 缺 release-bound 清单时 fail closed。
-> 仍待产品 Owner 提供正式模型 revision/文件集合/size/checksum 后生成生产
-> `model-assets.json`，并完成 full 离线 inference。B0.3 隔离机验证与 B7 正式
+> 仍待产品 Owner 先决策 PaddleOCR-VL 1.5/1.6、PP-StructureV3 chart/seal
+> 闭包与 MinerU 三段回退，再提供各仓不可变 revision、文件集合、size/checksum
+> 后生成生产 `model-assets.json`；详见[正式生产模型资产闭包调查](model-assets-production-closure-research.md)。
+> full 离线 inference、B0.3 隔离机验证与 B7 正式
 > Release 交接也尚未完成。
 
 ## 1. 当前事实与目标
@@ -175,9 +177,10 @@ full 组件不得在第一次 OCR 时懒下载；不得随每次前端更新重�
 - 已完成代码 seam：model registry 只用于模型资产；严格 manifest 与逐文件完整性校验
   后返回 `ResolvedModelSet`，PaddleOCR/PPStructureV3/PaddleOCRVL 与 MinerU 显式消费
   本地路径；缺清单的 `document_parsing` 不再成功空跑。
-- 待完成发布事实：补入经产品 Owner 确认的生产模型 pin 与精确文件闭包，执行 CPU/CUDA
-  full 离线 inference；后续新增 feature 时同步增加精确 scope/lock，不回退为“任一
-  非空选择即完整 profile”。
+- 待完成发布事实：产品 Owner 需先决策 PaddleOCR-VL 版本、PP-StructureV3 chart/seal
+  闭包及 MinerU 三段回退，再提供各仓不可变 revision、精确文件/size/checksum；据此生成
+  生产清单并执行 CPU/CUDA full 离线 inference。后续新增 feature 时同步增加精确
+  scope/lock，不回退为“任一非空选择即完整 profile”。
 
 ### B7：正式 Release 与三仓交接
 

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import threading
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -15,7 +17,9 @@ from vibeocr.backend.model_registry import (
     LocalDirectoryAdapter,
     ModelAcquisitionError,
     ModelAsset,
+    ModelFileIntegrity,
     ModelScopeAdapter,
+    ResolvedModel,
     ResolvedModelSet,
     acquire_models,
     ensure_mineru_tools_config,
@@ -38,6 +42,18 @@ MODEL_ASSET = ModelAsset(
     consumer="paddleocr",
     binding_key="text_recognition_model_dir",
 )
+
+
+def _integrity(payload: bytes, path: str = "inference.pdmodel") -> ModelFileIntegrity:
+    return ModelFileIntegrity(
+        path=path,
+        size=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+
+def _verified_asset(payload: bytes) -> ModelAsset:
+    return replace(MODEL_ASSET, file_integrity=(_integrity(payload),))
 
 
 class _FixtureServer:
@@ -128,23 +144,43 @@ def test_model_assets_manifest_is_explicit_and_validated(tmp_path: Path) -> None
                 "assets": [
                     {
                         "engine": "mineru",
-                        "name": "pdf-extract-kit",
+                        "name": "pdf-extract-kit-pipeline",
                         "repository": "opendatalab/PDF-Extract-Kit",
                         "revision": "v1",
                         "files": [
                             {"path": "models.json", "size": 1, "sha256": "0" * 64}
                         ],
                         "consumer": "mineru",
-                        "binding_key": "models_dir",
-                    }
+                        "binding_key": "pipeline",
+                    },
+                    {
+                        "engine": "mineru",
+                        "name": "mineru-vlm",
+                        "repository": "opendatalab/MinerU2.5-2509-1.2B",
+                        "revision": "v1",
+                        "files": [
+                            {"path": "config.json", "size": 1, "sha256": "1" * 64}
+                        ],
+                        "consumer": "mineru",
+                        "binding_key": "vlm",
+                    },
                 ],
             }
         ),
         encoding="utf-8",
     )
-    (assets,) = load_model_assets(manifest)
-    assert assets.engine == "mineru"
-    assert assets.files == ("models.json",)
+    assets = load_model_assets(manifest)
+    assert {asset.binding_key for asset in assets} == {"pipeline", "vlm"}
+    assert assets[0].files == ("models.json",)
+
+    complete_manifest = json.loads(manifest.read_text(encoding="utf-8"))
+    missing_vlm = dict(complete_manifest)
+    missing_vlm["assets"] = missing_vlm["assets"][:1]
+    manifest.write_text(json.dumps(missing_vlm), encoding="utf-8")
+    with pytest.raises(ModelAcquisitionError, match="pipeline.*vlm"):
+        load_model_assets(manifest)
+
+    manifest.write_text(json.dumps(complete_manifest), encoding="utf-8")
 
     duplicated = json.loads(manifest.read_text(encoding="utf-8"))
     duplicated["assets"].append(dict(duplicated["assets"][0]))
@@ -253,6 +289,42 @@ def test_acquisition_revalidates_programmatic_assets_before_writing(
     assert sentinel.read_text(encoding="utf-8") == "unchanged"
 
 
+@pytest.mark.parametrize(
+    "file_integrity",
+    [
+        (),
+        (_integrity(b"model", "another.bin"),),
+        (ModelFileIntegrity("inference.pdmodel", -1, "0" * 64),),
+        (ModelFileIntegrity("inference.pdmodel", 5, "not-a-sha256"),),
+    ],
+)
+def test_acquisition_requires_complete_programmatic_file_integrity(
+    tmp_path: Path,
+    file_integrity: tuple[ModelFileIntegrity, ...],
+) -> None:
+    called = False
+
+    class WritingAdapter:
+        def fetch_file(self, **kwargs: object) -> None:
+            nonlocal called
+            called = True
+            destination = kwargs["destination"]
+            assert isinstance(destination, Path)
+            destination.write_bytes(b"model")
+
+    with pytest.raises(ModelAcquisitionError, match="integrity"):
+        acquire_models(
+            assets=(replace(MODEL_ASSET, file_integrity=file_integrity),),
+            release_identity="backend-release",
+            source_id="huggingface",
+            endpoint="unused",
+            models_root=tmp_path / "models",
+            adapter=WritingAdapter(),  # type: ignore[arg-type]
+        )
+
+    assert called is False
+
+
 def test_acquisition_rejects_reparse_parent_without_touching_target(
     tmp_path: Path,
 ) -> None:
@@ -281,7 +353,7 @@ def test_acquisition_rejects_reparse_parent_without_touching_target(
 
     with pytest.raises(ModelAcquisitionError, match="reparse"):
         acquire_models(
-            assets=(MODEL_ASSET,),
+            assets=(_verified_asset(b"model"),),
             release_identity="backend-release",
             source_id="huggingface",
             endpoint="unused",
@@ -359,7 +431,7 @@ def test_interrupted_download_keeps_base_and_staging_clean(tmp_path: Path) -> No
     try:
         with pytest.raises(ModelAcquisitionError):
             acquire_models(
-                assets=(MODEL_ASSET,),
+                assets=(_verified_asset(payload),),
                 release_identity="backend-release",
                 source_id="huggingface",
                 endpoint=server.endpoint,
@@ -393,7 +465,7 @@ def test_download_without_content_length_checks_cancel_per_chunk(
     try:
         with pytest.raises(Cancelled, match="chunked download"):
             acquire_models(
-                assets=(MODEL_ASSET,),
+                assets=(_verified_asset(payload),),
                 release_identity="backend-release",
                 source_id="huggingface",
                 endpoint=server.endpoint,
@@ -413,14 +485,14 @@ def test_retry_after_failure_succeeds_and_is_atomic(tmp_path: Path) -> None:
     try:
         with pytest.raises(ModelAcquisitionError):
             acquire_models(
-                assets=(MODEL_ASSET,),
+                assets=(_verified_asset(payload),),
                 release_identity="backend-release",
                 source_id="huggingface",
                 endpoint=broken.endpoint,
                 models_root=tmp_path,
             )
         acquired = acquire_models(
-            assets=(MODEL_ASSET,),
+            assets=(_verified_asset(payload),),
             release_identity="backend-release",
             source_id="huggingface",
             endpoint=good.endpoint,
@@ -439,7 +511,7 @@ def test_offline_reuse_of_existing_models_skips_network(tmp_path: Path) -> None:
     source.mkdir(parents=True)
     (source / "inference.pdmodel").write_bytes(b"local")
     acquired = acquire_models(
-        assets=(MODEL_ASSET,),
+        assets=(_verified_asset(b"local"),),
         release_identity="backend-release",
         source_id="huggingface",
         endpoint="unused",
@@ -453,7 +525,7 @@ def test_offline_reuse_of_existing_models_skips_network(tmp_path: Path) -> None:
             raise AssertionError("network must not be touched for local models")
 
     acquired = acquire_models(
-        assets=(MODEL_ASSET,),
+        assets=(_verified_asset(b"local"),),
         release_identity="backend-release",
         source_id="huggingface",
         endpoint="https://definitely.invalid",
@@ -477,7 +549,7 @@ def test_missing_extra_or_mismatched_marker_repairs_without_foreign_cleanup(
     adapter = LocalDirectoryAdapter(fixture)
 
     acquired = acquire_models(
-        assets=(MODEL_ASSET,),
+        assets=(_verified_asset(b"verified"),),
         release_identity="backend-release",
         source_id="huggingface",
         endpoint="unused",
@@ -492,7 +564,7 @@ def test_missing_extra_or_mismatched_marker_repairs_without_foreign_cleanup(
 
     (target / "inference.pdmodel").unlink()
     acquire_models(
-        assets=(MODEL_ASSET,),
+        assets=(_verified_asset(b"verified"),),
         release_identity="backend-release",
         source_id="huggingface",
         endpoint="unused",
@@ -501,7 +573,7 @@ def test_missing_extra_or_mismatched_marker_repairs_without_foreign_cleanup(
     )
     (target / "extra.bin").write_bytes(b"conflict")
     acquire_models(
-        assets=(MODEL_ASSET,),
+        assets=(_verified_asset(b"verified"),),
         release_identity="backend-release",
         source_id="huggingface",
         endpoint="unused",
@@ -510,7 +582,7 @@ def test_missing_extra_or_mismatched_marker_repairs_without_foreign_cleanup(
     )
     marker.write_text("{}", encoding="utf-8")
     acquire_models(
-        assets=(MODEL_ASSET,),
+        assets=(_verified_asset(b"verified"),),
         release_identity="backend-release",
         source_id="huggingface",
         endpoint="unused",
@@ -533,7 +605,7 @@ def test_local_directory_adapter_serves_fixtures(tmp_path: Path) -> None:
 
     models = tmp_path / "models"
     acquired = acquire_models(
-        assets=(MODEL_ASSET,),
+        assets=(_verified_asset(b"fixture-bytes"),),
         release_identity="backend-release",
         source_id="huggingface",
         endpoint="ignored",
@@ -557,7 +629,7 @@ def test_resolved_model_environment_binds_paddle_locally(
     source.mkdir(parents=True)
     (source / "inference.pdmodel").write_bytes(b"fixture-bytes")
     resolved = acquire_models(
-        assets=(MODEL_ASSET,),
+        assets=(_verified_asset(b"fixture-bytes"),),
         release_identity="backend-release",
         source_id="huggingface",
         endpoint="unused",
@@ -591,7 +663,10 @@ def test_mineru_config_and_source_environment_are_state_scoped(
     config_path = Path(environment["MINERU_TOOLS_CONFIG_JSON"])
     assert config_path == state / "config" / "mineru.json"
     assert json.loads(config_path.read_text(encoding="utf-8")) == {
-        "models-dir": str(models / "mineru")
+        "models-dir": {
+            "pipeline": str(models / "mineru" / "pipeline"),
+            "vlm": str(models / "mineru" / "vlm"),
+        }
     }
     # Portable 移动后必须从当前 root 重建，不能保留旧绝对路径。
     config_path.write_text("{}", encoding="utf-8")
@@ -600,7 +675,14 @@ def test_mineru_config_and_source_environment_are_state_scoped(
     stale_config = moved_state / "config" / "mineru.json"
     stale_config.parent.mkdir(parents=True)
     stale_config.write_text(
-        json.dumps({"models-dir": str(models / "mineru")}),
+        json.dumps(
+            {
+                "models-dir": {
+                    "pipeline": str(models / "mineru" / "pipeline"),
+                    "vlm": str(models / "mineru" / "vlm"),
+                }
+            }
+        ),
         encoding="utf-8",
     )
     again = model_source_environment(
@@ -611,7 +693,57 @@ def test_mineru_config_and_source_environment_are_state_scoped(
     assert "PADDLE_PDX_MODEL_SOURCE" not in again
     moved_config = Path(again["MINERU_TOOLS_CONFIG_JSON"])
     assert json.loads(moved_config.read_text(encoding="utf-8")) == {
-        "models-dir": str(moved_models / "mineru")
+        "models-dir": {
+            "pipeline": str(moved_models / "mineru" / "pipeline"),
+            "vlm": str(moved_models / "mineru" / "vlm"),
+        }
     }
     assert model_assets_config_path(state) == state / "config" / "model-assets.json"
     ensure_mineru_tools_config(tmp_path / "fresh", tmp_path / "fresh-models")
+
+
+def test_resolved_mineru_uses_local_source_and_pipeline_vlm_roots(
+    tmp_path: Path,
+) -> None:
+    pipeline = tmp_path / "state" / "models" / "mineru" / "pipeline"
+    vlm = tmp_path / "state" / "models" / "mineru" / "vlm"
+    pipeline.mkdir(parents=True)
+    vlm.mkdir(parents=True)
+    resolved = ResolvedModelSet(
+        "backend-release",
+        (
+            ResolvedModel("mineru/pipeline", "mineru", "pipeline", pipeline),
+            ResolvedModel("mineru/vlm", "mineru", "vlm", vlm),
+        ),
+    )
+
+    environment = model_source_environment(
+        source_id="modelscope",
+        state_root=tmp_path / "state",
+        models_root=tmp_path / "state" / "models",
+        resolved_models=resolved,
+    )
+
+    assert environment["MINERU_MODEL_SOURCE"] == "local"
+    assert json.loads(
+        Path(environment["MINERU_TOOLS_CONFIG_JSON"]).read_text(encoding="utf-8")
+    ) == {"models-dir": {"pipeline": str(pipeline), "vlm": str(vlm)}}
+
+
+def test_resolved_mineru_requires_both_pipeline_and_vlm_bindings(
+    tmp_path: Path,
+) -> None:
+    pipeline = tmp_path / "pipeline"
+    pipeline.mkdir()
+    resolved = ResolvedModelSet(
+        "backend-release",
+        (ResolvedModel("mineru/pipeline", "mineru", "pipeline", pipeline),),
+    )
+
+    with pytest.raises(ModelAcquisitionError, match="pipeline.*vlm"):
+        model_source_environment(
+            source_id="modelscope",
+            state_root=tmp_path / "state",
+            models_root=tmp_path / "state" / "models",
+            resolved_models=resolved,
+        )

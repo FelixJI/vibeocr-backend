@@ -4,7 +4,8 @@
 本模块把声明的模型资产下载纳入 durable ensure:staging 位于
 ``state/models/downloads``,成功后原子切换到 ``state/models/<engine>``,
 已存在的本地模型在断网时直接复用,不做懒下载。生产 Adapter 只经 HTTP
-取数并把源 id 映射为 ``PADDLE_PDX_MODEL_SOURCE``/``MINERU_MODEL_SOURCE``;
+取数并把源 id 映射为 ``PADDLE_PDX_MODEL_SOURCE``;MinerU 已解析资产则固定
+使用 ``MINERU_MODEL_SOURCE=local`` 与 pipeline/vlm 双本地根;
 仓库内部布局(endpoint/revision/file 映射)按公开 CLI 契约构造。
 """
 
@@ -19,6 +20,7 @@ import stat
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Protocol
@@ -34,6 +36,7 @@ _MINERU_TOOLS_FILENAME = "mineru.json"
 _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SAFE_BINDING_KEY = re.compile(r"^[a-z][a-z0-9_]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_MINERU_BINDING_KEYS = frozenset({"pipeline", "vlm"})
 _WINDOWS_RESERVED_NAMES = {
     "CON",
     "PRN",
@@ -258,6 +261,44 @@ def _validate_manifest_path(value: str, *, field_name: str, nested: bool) -> Non
             raise ModelAcquisitionError(f"unsafe model {field_name}: {value!r}")
 
 
+def _validated_file_integrity(
+    asset: ModelAsset,
+) -> dict[str, ModelFileIntegrity]:
+    """Validate the complete byte-integrity contract for one model asset."""
+    if not asset.files or len(set(asset.files)) != len(asset.files):
+        raise ModelAcquisitionError("model asset files must be non-empty and unique")
+    integrity_by_path: dict[str, ModelFileIntegrity] = {}
+    for item in asset.file_integrity:
+        if not isinstance(item, ModelFileIntegrity):
+            raise ModelAcquisitionError("model file integrity declaration is invalid")
+        if (
+            not isinstance(item.path, str)
+            or not isinstance(item.size, int)
+            or isinstance(item.size, bool)
+            or item.size < 0
+            or not isinstance(item.sha256, str)
+            or not _SHA256.fullmatch(item.sha256)
+        ):
+            raise ModelAcquisitionError("model file integrity declaration is invalid")
+        _validate_manifest_path(item.path, field_name="integrity path", nested=True)
+        if item.path in integrity_by_path:
+            raise ModelAcquisitionError("model file integrity paths must be unique")
+        integrity_by_path[item.path] = item
+    if tuple(integrity_by_path) != asset.files:
+        raise ModelAcquisitionError(
+            "model file integrity must correspond one-to-one with asset files"
+        )
+    return integrity_by_path
+
+
+def _validate_mineru_bindings(assets: tuple[ModelAsset, ...]) -> None:
+    binding_keys = {asset.binding_key for asset in assets if asset.consumer == "mineru"}
+    if binding_keys and binding_keys != _MINERU_BINDING_KEYS:
+        raise ModelAcquisitionError(
+            "MinerU model bindings must contain exactly pipeline and vlm"
+        )
+
+
 def _is_reparse_point(path: Path) -> bool:
     try:
         metadata = path.lstat()
@@ -477,7 +518,9 @@ def load_model_assets(
                 file_integrity=tuple(file_integrity),
             )
         )
-    return tuple(assets)
+    resolved_assets = tuple(assets)
+    _validate_mineru_bindings(resolved_assets)
+    return resolved_assets
 
 
 def model_assets_config_path(state_root: Path) -> Path:
@@ -488,16 +531,33 @@ def ensure_mineru_tools_config(
     state_root: Path,
     models_root: Path,
     *,
-    mineru_models_dir: Path | None = None,
+    mineru_model_dirs: Mapping[str, Path] | None = None,
 ) -> Path:
     """按当前 Portable 根重建 MinerU 配置，不复用旧绝对路径。"""
+    model_dirs = (
+        {
+            "pipeline": models_root / "mineru" / "pipeline",
+            "vlm": models_root / "mineru" / "vlm",
+        }
+        if mineru_model_dirs is None
+        else mineru_model_dirs
+    )
+    if set(model_dirs) != _MINERU_BINDING_KEYS:
+        raise ModelAcquisitionError(
+            "MinerU model bindings must contain exactly pipeline and vlm"
+        )
     config_dir = state_root / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / _MINERU_TOOLS_FILENAME
     temporary = config_path.with_suffix(".tmp")
     temporary.write_text(
         json.dumps(
-            {"models-dir": str(mineru_models_dir or (models_root / "mineru"))},
+            {
+                "models-dir": {
+                    binding_key: str(model_dirs[binding_key])
+                    for binding_key in ("pipeline", "vlm")
+                }
+            },
             indent=2,
         )
         + "\n",
@@ -515,19 +575,21 @@ def model_source_environment(
     resolved_models: ResolvedModelSet | None = None,
 ) -> dict[str, str]:
     """把已选 model_registry 源映射为推理进程环境,并收口 MinerU 配置。"""
-    mineru_models_dir: Path | None = None
+    mineru_model_dirs: dict[str, Path] | None = None
     if resolved_models is not None:
         mineru = [
             model for model in resolved_models.models if model.consumer == "mineru"
         ]
         if mineru:
             bindings = resolved_models.binding_kwargs("mineru")
-            value = bindings.get("models_dir")
-            if value is None:
+            if set(bindings) != _MINERU_BINDING_KEYS:
                 raise ModelAcquisitionError(
-                    "MinerU local models_dir binding is required"
+                    "MinerU local bindings must contain exactly pipeline and vlm"
                 )
-            mineru_models_dir = Path(value)
+            mineru_model_dirs = {
+                binding_key: Path(bindings[binding_key])
+                for binding_key in ("pipeline", "vlm")
+            }
         resolved_path = state_root / "config" / _RESOLVED_MODELS_FILENAME
         resolved_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = resolved_path.with_suffix(".tmp")
@@ -547,7 +609,7 @@ def model_source_environment(
             ensure_mineru_tools_config(
                 state_root,
                 models_root,
-                mineru_models_dir=mineru_models_dir,
+                mineru_model_dirs=mineru_model_dirs,
             )
         )
     }
@@ -555,6 +617,9 @@ def model_source_environment(
         environment["VIBEOCR_RESOLVED_MODELS"] = str(resolved_path)
     if source_id is not None:
         environment["PADDLE_PDX_MODEL_SOURCE"] = source_id
+    if mineru_model_dirs is not None:
+        environment["MINERU_MODEL_SOURCE"] = "local"
+    elif source_id is not None:
         environment["MINERU_MODEL_SOURCE"] = source_id
     return environment
 
@@ -607,6 +672,7 @@ def acquire_models(
         return ResolvedModelSet(release_identity, ())
     asset_keys: set[tuple[str, str]] = set()
     binding_keys: set[tuple[str, str]] = set()
+    integrity_by_asset: dict[tuple[str, str], dict[str, ModelFileIntegrity]] = {}
     for asset in assets:
         if asset.engine not in MODEL_ENGINES:
             raise ModelAcquisitionError(f"invalid model engine: {asset.engine!r}")
@@ -629,6 +695,8 @@ def acquire_models(
             raise ModelAcquisitionError("model asset ids and bindings must be unique")
         asset_keys.add(asset_key)
         binding_keys.add(binding)
+        integrity_by_asset[asset_key] = _validated_file_integrity(asset)
+    _validate_mineru_bindings(assets)
     resolved_adapter = adapter if adapter is not None else adapter_for_source(source_id)
     models_root = models_root.absolute()
     models_root.mkdir(parents=True, exist_ok=True)
@@ -665,7 +733,7 @@ def acquire_models(
             _listeners=(progress_listener,) if progress_listener else (),
             _cancel_check=cancel_check,
         )
-        integrity_by_path = {item.path: item for item in asset.file_integrity}
+        integrity_by_path = integrity_by_asset[(asset.engine, asset.name)]
         try:
             for file_name in asset.files:
                 if cancel_check is not None:
@@ -683,8 +751,8 @@ def acquire_models(
                     destination=destination,
                     progress=progress,
                 )
-                declared = integrity_by_path.get(file_name)
-                if declared is not None and (
+                declared = integrity_by_path[file_name]
+                if (
                     destination.stat().st_size != declared.size
                     or _sha256_file(destination) != declared.sha256
                 ):
