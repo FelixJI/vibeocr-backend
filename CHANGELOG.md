@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.3
+
+### Bug Fixes
+
+- **runtime:** 漂移投影按覆盖 profile 取声明版本与分布绑定 (#54) (9bffd70)
+
 ## 0.12.2
 
 ### Bug Fixes
