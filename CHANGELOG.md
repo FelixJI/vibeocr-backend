@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.2
+
+### Bug Fixes
+
+- **runtime:** base-only 安装的漂移探测改用覆盖 profile 绑定 (#52) (eca677b)
+
 ## 0.12.1
 
 ### Features
