@@ -996,15 +996,29 @@ def runtime_profile_status(
     accelerator: str,
     runtime_root: Path | None,
     probe_results: dict[str, bool] | None = None,
+    profile_id: str | None = None,
 ) -> dict[str, Any]:
-    """Project one desired/actual component view for every transport."""
-    plan = ACCELERATOR_TO_PLAN[accelerator]
-    descriptor = profile_descriptor(manifest.profiles[plan], accelerator=accelerator)
+    """Project one desired/actual component view for every transport.
+
+    ``profile_id`` overrides the accelerator's plan profile for the projected
+    component set, declared versions, and import bindings. The installer uses
+    it to evaluate drift against the covering profile of the *installed*
+    closure: a base-only install binds ``ocr_engine`` to RapidOCR while the
+    cpu plan binds the same component id to PaddleOCR. Callers that omit it
+    keep the historical accelerator-plan projection.
+    """
+
+    selected = (
+        profile_id if profile_id is not None else ACCELERATOR_TO_PLAN[accelerator]
+    )
+    descriptor = profile_descriptor(
+        manifest.profiles[selected], accelerator=accelerator
+    )
     if probe_results is None and runtime_root is not None:
         probe_results = _cached_runtime_component_probe(
             runtime_root,
             tuple(component.component_id for component in descriptor.components),
-            profile_id=plan,
+            profile_id=selected,
         )
     return {
         "profile_id": descriptor.profile_id,
