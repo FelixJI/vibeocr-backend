@@ -90,7 +90,12 @@ async def test_health_declares_selection_capability_catalogs(
     sources = source_descriptor["download_source_catalog"]["sources"]
     assert sources == download_source_catalog_payload()["sources"]
     assert len({s["id"] for s in sources}) == len(sources)
-    assert {s["id"] for s in sources} == {"tuna-pypi", "pypi"}
+    assert {s["id"] for s in sources} == {
+        "tuna-pypi",
+        "pypi",
+        "huggingface",
+        "modelscope",
+    }
 
     variants = variant_descriptor["component_variant_catalog"]["variants"]
     assert variants == component_variant_catalog_payload()["variants"]
@@ -123,6 +128,32 @@ async def test_settings_roundtrips_download_source_ids(
 
         got = await client.get("/v2/settings")
         assert got.json().get("download_source_ids") == ["pypi"]
+
+        models = await client.put(
+            "/v2/settings",
+            json={
+                "schema_version": 2,
+                "residency": {"default_ttl_seconds": 300, "pipelines": []},
+                "extra": {},
+                "download_source_ids": ["tuna-pypi", "huggingface"],
+            },
+        )
+        assert models.status_code == 200
+        assert models.json()["download_source_ids"] == [
+            "tuna-pypi",
+            "huggingface",
+        ]
+
+        same_kind = await client.put(
+            "/v2/settings",
+            json={
+                "schema_version": 2,
+                "residency": {"default_ttl_seconds": 300, "pipelines": []},
+                "extra": {},
+                "download_source_ids": ["huggingface", "modelscope"],
+            },
+        )
+        assert same_kind.status_code == 400
 
         unknown = await client.put(
             "/v2/settings",
