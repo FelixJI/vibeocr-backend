@@ -42,6 +42,16 @@ _DOWNLOAD_SOURCES: tuple[dict[str, str], ...] = (
         "id": "pypi",
         "endpoint": get_pip_mirror("international"),
     },
+    {
+        "kind": DOWNLOAD_SOURCE_KIND_MODEL_REGISTRY,
+        "id": "huggingface",
+        "endpoint": "https://huggingface.co",
+    },
+    {
+        "kind": DOWNLOAD_SOURCE_KIND_MODEL_REGISTRY,
+        "id": "modelscope",
+        "endpoint": "https://www.modelscope.cn",
+    },
 )
 _DEFAULT_DOWNLOAD_SOURCE_IDS = ("tuna-pypi",)
 

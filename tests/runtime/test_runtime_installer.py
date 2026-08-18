@@ -2014,3 +2014,89 @@ def test_drift_projection_uses_covering_profile_declared_versions(
         component_probe=lambda _root, ids, _profile: dict.fromkeys(ids, True),
     )
     assert installer._drifted_component_ids() == ()
+
+
+def test_document_parsing_ensure_acquires_models_with_selected_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """模型 acquisition 纳入 durable ensure,并把源映射进推理环境。"""
+    from vibeocr.backend import runtime_installer as installer_module
+
+    manifest, component = _release(tmp_path / "release")
+
+    def fake_run(command, *, timeout, env, reporter, heartbeat_code):  # type: ignore[no-untyped-def]
+        return None
+
+    def fake_extract_python(archive_path, destination, *, progress=None):  # type: ignore[no-untyped-def]
+        (destination / "python.exe").write_bytes(b"python")
+
+    monkeypatch.setattr(installer_module, "_run_install_command", fake_run)
+    monkeypatch.setattr(
+        installer_module, "_extract_python_archive", fake_extract_python
+    )
+
+    acquired: list[dict[str, object]] = []
+
+    def fake_acquire(**kwargs: object) -> dict[str, Path]:
+        acquired.append(kwargs)
+        (asset,) = kwargs["assets"]  # type: ignore[unreachable]
+        target = kwargs["models_root"] / asset.engine / asset.target_dirname  # type: ignore[operator]
+        target.mkdir(parents=True, exist_ok=True)
+        (target / asset.files[0]).write_bytes(b"model")  # type: ignore[index]
+        return {f"{asset.engine}/{asset.name}": target}
+
+    monkeypatch.setattr(installer_module, "acquire_models", fake_acquire)
+
+    product = tmp_path / "product"
+    installer = RuntimeInstaller(
+        product_root=product,
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
+        install_component_ids=("document_parsing",),
+        download_source_ids=("tuna-pypi", "huggingface"),
+    )
+    assets_file = product / "state" / "config" / "model-assets.json"
+    assets_file.parent.mkdir(parents=True, exist_ok=True)
+    assets_file.write_text(
+        json.dumps(
+            {
+                "assets": [
+                    {
+                        "engine": "paddleocr",
+                        "name": "PP-OCRv5-server",
+                        "revision": "v1",
+                        "files": ["inference.pdmodel"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    launch = installer.ensure()
+
+    assert launch is not None
+    assert len(acquired) == 1
+    assert acquired[0]["source_id"] == "huggingface"
+    assert acquired[0]["endpoint"] == "https://huggingface.co"
+    assert launch.environment["PADDLE_PDX_MODEL_SOURCE"] == "huggingface"
+    assert launch.environment["MINERU_MODEL_SOURCE"] == "huggingface"
+    mineru_config = Path(launch.environment["MINERU_TOOLS_CONFIG_JSON"])
+    assert mineru_config.is_file()
+    assert json.loads(mineru_config.read_text(encoding="utf-8"))["models-dir"]
+
+    # base-only 闭包不触发模型 acquisition(无 document_parsing)。
+    acquired.clear()
+    base_installer = RuntimeInstaller(
+        product_root=tmp_path / "product-base",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
+        download_source_ids=("tuna-pypi", "huggingface"),
+    )
+    base_launch = base_installer.ensure()
+    assert base_launch is not None
+    assert acquired == []

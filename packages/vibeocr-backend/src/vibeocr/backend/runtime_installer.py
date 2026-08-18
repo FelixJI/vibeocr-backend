@@ -23,6 +23,13 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+from vibeocr.backend.model_registry import (
+    ModelAcquisitionError,
+    acquire_models,
+    load_model_assets,
+    model_assets_config_path,
+    model_source_environment,
+)
 from vibeocr.backend.runtime_layout import resolve_runtime_store
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_maintenance import (
@@ -910,7 +917,71 @@ class RuntimeInstaller:
         )
         if package_indexes:
             environment["PIP_INDEX_URL"] = package_indexes[0].endpoint
+        model_registry = next(
+            (
+                source
+                for source in self._selection.effective_download_sources
+                if source.kind == "model_registry"
+            ),
+            None,
+        )
+        environment.update(
+            model_source_environment(
+                source_id=model_registry.source_id if model_registry else None,
+                state_root=state,
+                models_root=self.paths.models_root,
+            )
+        )
         return environment
+
+    def _acquire_models(self) -> None:
+        """把声明的模型资产纳入同一 durable 操作;本地已就绪则直接复用。"""
+        assets = load_model_assets(model_assets_config_path(self.paths.state_root))
+        if not assets:
+            return
+        model_registry = next(
+            (
+                source
+                for source in self._selection.effective_download_sources
+                if source.kind == "model_registry"
+            ),
+            None,
+        )
+        if model_registry is None:
+            raise ModelAcquisitionError(
+                "model assets are declared but no model_registry source is selected"
+            )
+        self._reporter.advance(
+            phase="install_profile",
+            current=4,
+            total=7,
+            message_code="runtime.install_models",
+            component_id="document_parsing",
+        )
+
+        def report_bytes(progress) -> None:
+            if progress.total:
+                self._reporter.advance_measured(
+                    phase="install_profile",
+                    unit="bytes",
+                    current=progress.current,
+                    total=progress.total,
+                    message_code="runtime.install_models",
+                    component_id="document_parsing",
+                )
+
+        def check_cancel() -> None:
+            # heartbeat 同时承担取消检查;只在资产/文件边界调用,不随字节刷屏。
+            self._reporter.heartbeat(message_code="runtime.install_models")
+
+        acquire_models(
+            assets=assets,
+            source_id=model_registry.source_id,
+            endpoint=model_registry.endpoint,
+            models_root=self.paths.models_root,
+            progress_listener=report_bytes,
+            cancel_check=check_cancel,
+        )
 
     def ensure(self) -> RuntimeLaunch | None:
         # ready 额外要求已安装闭包等于期望闭包：从 base-only 扩到 full
@@ -952,6 +1023,8 @@ class RuntimeInstaller:
                     total=7,
                     message_code="runtime.verify_runtime",
                 )
+            if "document_parsing" in self._active_install_ids:
+                self._acquire_models()
             self._save_preference()
             launch = self._launch()
             self._reporter.succeed(

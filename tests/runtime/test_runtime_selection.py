@@ -79,7 +79,12 @@ def test_download_source_catalog_declares_default_and_unique_business_keys() -> 
     ids = [source["id"] for source in sources]
     assert len(set(ids)) == len(ids)
     assert [source["id"] for source in default_download_sources()] == ["tuna-pypi"]
-    assert {source["id"] for source in sources} == {"tuna-pypi", "pypi"}
+    assert {source["id"] for source in sources} == {
+        "tuna-pypi",
+        "pypi",
+        "huggingface",
+        "modelscope",
+    }
     for source in sources:
         assert set(source) == {"kind", "id", "endpoint"}
         assert source["endpoint"].startswith("https://")
