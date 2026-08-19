@@ -111,7 +111,7 @@ def test_gpu_scope_input_is_source_neutral_and_excludes_document_parsing() -> No
         line for line in content.splitlines() if line and not line.startswith("#")
     ]
 
-    assert "uv 0.11.16" in content
+    assert "uv 0.12.5" in content
     assert (
         "--no-config --no-sources --default-index "
         "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"

@@ -1,5 +1,5 @@
 # Resolved for CPython 3.13 / Windows x64 by scripts/build_runtime_manifest.py.
-# Source-neutral lock command (uv 0.11.16; trusted TUNA index):
+# Source-neutral lock command (uv 0.12.5; trusted TUNA index):
 # uv pip compile packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in --no-config --no-sources --default-index https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/ --python-version 3.13 --python-platform windows --generate-hashes --output-file packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements-win-x64-cpu.lock
 pillow>=12.3.0
 numpy>=2.3.5
