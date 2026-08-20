@@ -1,6 +1,6 @@
 # GPU-only install scope for CPython 3.13 / Windows x64.
 #
-# Source-neutral lock regeneration (uv 0.11.16; no user or repository config):
+# Source-neutral lock regeneration (uv 0.12.5; no user or repository config):
 # uv pip compile packages/vibeocr-backend/runtime-profiles/win-x64-cu126-gpu/requirements.in --no-config --no-sources --default-index https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/ --python-version 3.13 --python-platform windows --generate-hashes --output-file packages/vibeocr-backend/runtime-profiles/win-x64-cu126-gpu/requirements-win-x64-cu126-gpu.lock
 #
 # Reuse the complete offline base; exclude PaddleOCR/MinerU/document parsing.
