@@ -205,8 +205,13 @@ def _submit_ocr(url: str, token: str, image: Path) -> str:
 
 def _wait_for_ocr(url: str, token: str, job_id: str) -> None:
     deadline = time.monotonic() + 120
+    last_status: dict[str, Any] | None = None
     while time.monotonic() < deadline:
         update = _json_request(f"{url}/v2/jobs/{job_id}/observe", token)
+        last_status = {
+            "snapshot": update.get("snapshot"),
+            "events": update.get("events"),
+        }
         snapshot = update.get("snapshot")
         state = snapshot.get("state") if isinstance(snapshot, dict) else None
         if state == "succeeded":
@@ -221,7 +226,8 @@ def _wait_for_ocr(url: str, token: str, job_id: str) -> None:
         if state in {"failed", "cancelled"}:
             raise BaseRuntimeSmokeError(f"RapidOCR terminal state: {state}")
         time.sleep(0.1)
-    raise BaseRuntimeSmokeError("RapidOCR job timed out")
+    detail = json.dumps(last_status, ensure_ascii=False, sort_keys=True)
+    raise BaseRuntimeSmokeError(f"RapidOCR job timed out; last status: {detail}")
 
 
 def _read_ready_line(process: subprocess.Popen[str]) -> dict[str, Any]:

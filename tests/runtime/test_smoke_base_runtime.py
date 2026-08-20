@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.smoke_base_runtime import _base_ensure_request, _offline_environment
+import pytest
+
+from scripts import smoke_base_runtime
+from scripts.smoke_base_runtime import (
+    BaseRuntimeSmokeError,
+    _base_ensure_request,
+    _offline_environment,
+)
 
 
 def test_base_smoke_forces_offline_environment(monkeypatch) -> None:
@@ -33,3 +40,26 @@ def test_base_smoke_ensure_request_explicitly_selects_no_optional_components(
     assert request["operation"] == "ensure"
     assert request["accelerator"] == "cpu"
     assert request["install_component_ids"] == []
+
+
+def test_rapidocr_timeout_reports_last_job_state(monkeypatch) -> None:
+    clock = iter((0.0, 0.0, 121.0))
+    monkeypatch.setattr(smoke_base_runtime.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(smoke_base_runtime.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        smoke_base_runtime,
+        "_json_request",
+        lambda *_args, **_kwargs: {
+            "snapshot": {"state": "running"},
+            "events": [
+                {"sequence": 3, "event_type": "batch_plan"},
+            ],
+        },
+    )
+
+    with pytest.raises(BaseRuntimeSmokeError) as exc_info:
+        smoke_base_runtime._wait_for_ocr("http://127.0.0.1:1", "token", "job")
+
+    message = str(exc_info.value)
+    assert '"state": "running"' in message
+    assert '"event_type": "batch_plan"' in message
