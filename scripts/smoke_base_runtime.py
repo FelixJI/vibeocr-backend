@@ -1,8 +1,12 @@
-"""Run the released base Runtime through offline ensure and real inference.
+"""Run the released base Runtime through client-offline ensure and inference.
 
 This gate executes the frozen installer and the installed Supervisor.  It is
 not a static archive inspection: the test performs RapidOCR and PDF work, then
 proves a second offline ensure reuses the same installed marker.
+
+The environment disables supported dependency clients and routes proxy-aware
+traffic to a closed local port.  It is not an OS-level outbound firewall; the
+separate clean-machine gate remains authoritative for physically offline use.
 """
 
 from __future__ import annotations
@@ -271,8 +275,17 @@ def verify_base_runtime(artifacts_dir: Path) -> dict[str, Any]:
         marker_before = installed_marker.read_bytes()
         mtime_before = installed_marker.stat().st_mtime_ns
         second = _run_installer(executable, request, cwd=root, environment=offline)
-        if second.get("launch") is None:
+        second_launch = second.get("launch")
+        if not isinstance(second_launch, dict):
             raise BaseRuntimeSmokeError("idempotent base ensure returned no launch")
+        second_environment = second_launch.get("environment")
+        if (
+            not isinstance(second_environment, dict)
+            or second_environment.get("VIBEOCR_RUNTIME_ROOT") != str(runtime_root)
+        ):
+            raise BaseRuntimeSmokeError(
+                "idempotent base ensure returned a different runtime root"
+            )
         if (
             installed_marker.read_bytes() != marker_before
             or installed_marker.stat().st_mtime_ns != mtime_before

@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from vibeocr.backend import model_registry as model_registry_module
 from vibeocr.backend.model_registry import (
     MODEL_READY_FILENAME,
     HuggingFaceAdapter,
@@ -24,6 +25,7 @@ from vibeocr.backend.model_registry import (
     acquire_models,
     ensure_mineru_tools_config,
     load_model_assets,
+    load_resolved_models,
     local_model_kwargs,
     model_assets_config_path,
     model_source_environment,
@@ -452,6 +454,7 @@ def test_download_without_content_length_checks_cancel_per_chunk(
     payload = b"z" * (192 * 1024)
     server = _FixtureServer(payload, content_length=False)
     checks = 0
+    totals: list[int] = []
 
     class Cancelled(RuntimeError):
         pass
@@ -459,7 +462,7 @@ def test_download_without_content_length_checks_cancel_per_chunk(
     def cancel_check() -> None:
         nonlocal checks
         checks += 1
-        if checks >= 3:
+        if checks >= 4:
             raise Cancelled("cancelled during chunked download")
 
     try:
@@ -471,8 +474,10 @@ def test_download_without_content_length_checks_cancel_per_chunk(
                 endpoint=server.endpoint,
                 models_root=tmp_path,
                 cancel_check=cancel_check,
+                progress_listener=lambda progress: totals.append(progress.total),
             )
-        assert checks >= 3
+        assert checks >= 4
+        assert totals and set(totals) == {0}
         assert not (tmp_path / "paddleocr").exists()
     finally:
         server.stop()
@@ -505,7 +510,9 @@ def test_retry_after_failure_succeeds_and_is_atomic(tmp_path: Path) -> None:
         good.stop()
 
 
-def test_offline_reuse_of_existing_models_skips_network(tmp_path: Path) -> None:
+def test_offline_reuse_of_existing_models_skips_network_and_rehash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fixture = tmp_path / "fixture"
     source = fixture / "huggingface" / MODEL_ASSET.repository / MODEL_ASSET.revision
     source.mkdir(parents=True)
@@ -524,6 +531,11 @@ def test_offline_reuse_of_existing_models_skips_network(tmp_path: Path) -> None:
         def fetch_file(self, **kwargs: object) -> None:
             raise AssertionError("network must not be touched for local models")
 
+    monkeypatch.setattr(
+        model_registry_module,
+        "_sha256_file",
+        lambda _path: (_ for _ in ()).throw(AssertionError("must not rehash")),
+    )
     acquired = acquire_models(
         assets=(_verified_asset(b"local"),),
         release_identity="backend-release",
@@ -533,6 +545,39 @@ def test_offline_reuse_of_existing_models_skips_network(tmp_path: Path) -> None:
         adapter=FailingAdapter(),  # type: ignore[arg-type]
     )
     assert acquired["paddleocr/pp-ocrv5-server-rec"] == target
+
+
+def test_explicit_integrity_verification_repairs_same_size_corruption(
+    tmp_path: Path,
+) -> None:
+    fixture = tmp_path / "fixture"
+    source = fixture / "huggingface" / MODEL_ASSET.repository / MODEL_ASSET.revision
+    source.mkdir(parents=True)
+    (source / "inference.pdmodel").write_bytes(b"local")
+    models = tmp_path / "models"
+    adapter = LocalDirectoryAdapter(fixture)
+    acquired = acquire_models(
+        assets=(_verified_asset(b"local"),),
+        release_identity="backend-release",
+        source_id="huggingface",
+        endpoint="unused",
+        models_root=models,
+        adapter=adapter,
+    )
+    target = acquired["paddleocr/pp-ocrv5-server-rec"]
+    (target / "inference.pdmodel").write_bytes(b"wrong")
+
+    acquire_models(
+        assets=(_verified_asset(b"local"),),
+        release_identity="backend-release",
+        source_id="huggingface",
+        endpoint="unused",
+        models_root=models,
+        adapter=adapter,
+        verify_existing_integrity=True,
+    )
+
+    assert (target / "inference.pdmodel").read_bytes() == b"local"
 
 
 def test_missing_extra_or_mismatched_marker_repairs_without_foreign_cleanup(
@@ -648,6 +693,83 @@ def test_resolved_model_environment_binds_paddle_locally(
     )
 
     assert local_model_kwargs("paddleocr") == resolved.binding_kwargs("paddleocr")
+
+
+def test_persisted_resolved_models_are_revalidated_before_launch(
+    tmp_path: Path,
+) -> None:
+    payload = b"fixture-bytes"
+    asset = _verified_asset(payload)
+    fixture = tmp_path / "fixture"
+    source = fixture / "huggingface" / asset.repository / asset.revision
+    source.mkdir(parents=True)
+    (source / asset.files[0]).write_bytes(payload)
+    models_root = tmp_path / "state" / "models"
+    resolved = acquire_models(
+        assets=(asset,),
+        release_identity="backend-release",
+        source_id="huggingface",
+        endpoint="unused",
+        models_root=models_root,
+        adapter=LocalDirectoryAdapter(fixture),
+    )
+    environment = model_source_environment(
+        source_id="huggingface",
+        state_root=tmp_path / "state",
+        models_root=models_root,
+        resolved_models=resolved,
+    )
+    binding_path = Path(environment["VIBEOCR_RESOLVED_MODELS"])
+
+    restored = load_resolved_models(
+        binding_path,
+        assets=(asset,),
+        expected_release_identity="backend-release",
+        models_root=models_root,
+    )
+    assert restored == resolved
+
+    document = json.loads(binding_path.read_text(encoding="utf-8"))
+    document["release_identity"] = "stale-release"
+    binding_path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(ModelAcquisitionError, match="release identity"):
+        load_resolved_models(
+            binding_path,
+            assets=(asset,),
+            expected_release_identity="backend-release",
+            models_root=models_root,
+        )
+
+
+def test_persisted_resolved_models_reject_unbound_paths(tmp_path: Path) -> None:
+    asset = _verified_asset(b"fixture-bytes")
+    models_root = tmp_path / "state" / "models"
+    target = models_root / asset.engine / asset.target_dirname
+    target.mkdir(parents=True)
+    binding_path = tmp_path / "state" / "config" / "resolved-models.json"
+    binding_path.parent.mkdir(parents=True)
+    binding_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "release_identity": "backend-release",
+                "consumers": {
+                    "paddleocr": {
+                        "text_recognition_model_dir": str(tmp_path / "elsewhere")
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ModelAcquisitionError, match="binding"):
+        load_resolved_models(
+            binding_path,
+            assets=(asset,),
+            expected_release_identity="backend-release",
+            models_root=models_root,
+        )
 
 
 def test_mineru_config_and_source_environment_are_state_scoped(

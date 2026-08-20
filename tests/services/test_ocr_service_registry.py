@@ -112,19 +112,21 @@ def test_legacy_pipeline_factory_consumes_verified_local_binding(
         "paddleocr",
         types.SimpleNamespace(**{constructor_name: constructor}),
     )
-    service = OCRService()
-    monkeypatch.setattr(service, "_get_device", lambda: "cpu")
-    monkeypatch.setattr(service, "_decide_enable_mkldnn", lambda _device: False)
-    monkeypatch.setattr(
-        "vibeocr.backend.services.ocr_service.is_pipeline_ever_succeeded",
-        lambda *_args: True,
-    )
+    try:
+        service = OCRService()
+        monkeypatch.setattr(service, "_get_device", lambda: "cpu")
+        monkeypatch.setattr(service, "_decide_enable_mkldnn", lambda _device: False)
+        monkeypatch.setattr(
+            "vibeocr.backend.services.ocr_service.is_pipeline_ever_succeeded",
+            lambda *_args: True,
+        )
 
-    service._create_pipeline(pipeline)
+        service._create_pipeline(pipeline)
 
-    assert captured["device"] == "cpu"
-    assert captured[binding_key] == str(model_dir)
-    SingletonMeta.reset_instance(OCRService)
+        assert captured["device"] == "cpu"
+        assert captured[binding_key] == str(model_dir)
+    finally:
+        SingletonMeta.reset_instance(OCRService)
 
 
 # ---------------------------------------------------------------------------

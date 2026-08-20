@@ -704,15 +704,9 @@ class OCRService(metaclass=SingletonMeta):
         # （指令集产品门槛 + 已验证版本范围），而非硬编码 False。
         enable_mkldnn = self._decide_enable_mkldnn(device)
         kwargs = {"enable_mkldnn": enable_mkldnn} if device == "cpu" else {}
-        from vibeocr.backend.model_registry import local_model_kwargs
+        from vibeocr.backend.model_registry import local_model_kwargs_for_pipeline
 
-        consumer = {
-            OCRPipeline.OCR: "paddleocr",
-            OCRPipeline.PP_STRUCTURE_V3: "pp_structure",
-            OCRPipeline.PADDLEOCR_VL: "paddleocr_vl",
-        }.get(pipeline)
-        if consumer is not None:
-            kwargs.update(local_model_kwargs(consumer))
+        kwargs.update(local_model_kwargs_for_pipeline(pipeline.value))
 
         if pipeline == OCRPipeline.OCR:
             from paddleocr import PaddleOCR

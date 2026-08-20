@@ -1204,6 +1204,10 @@ class RuntimeMaintenanceReporter:
             component_id=self._snapshot.get("component_id"),
         )
 
+    def check_cancelled(self) -> None:
+        """Observe cancellation without publishing a durable event."""
+        self._abort_if_cancel_requested()
+
     def succeed(
         self,
         *,

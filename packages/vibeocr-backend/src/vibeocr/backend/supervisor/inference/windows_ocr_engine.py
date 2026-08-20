@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import threading
 from typing import Any
@@ -48,13 +49,15 @@ class _AsyncRunner:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
-    def run(self, coro: Any) -> Any:
+    def run(self, awaitable: Any) -> Any:
+        if not inspect.isawaitable(awaitable):
+            return awaitable
         with self._lock:
             if self._loop is None or not self._loop.is_running():
                 self._start_locked()
         assert self._loop is not None
         return asyncio.run_coroutine_threadsafe(
-            self._as_coroutine(coro), self._loop
+            self._as_coroutine(awaitable), self._loop
         ).result()
 
     @staticmethod

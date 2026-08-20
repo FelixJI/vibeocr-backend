@@ -93,6 +93,19 @@ def _input(item_id: str = "w-1") -> InputItem:
 
 
 class TestDescriptor:
+    def test_accepts_sync_pywinrt_factory_result(self) -> None:
+        class _ProjectedOcrEngine:
+            @staticmethod
+            def try_create_from_user_profile_languages() -> object:
+                return object()
+
+        engine = WindowsMediaOcrEngine()
+        engine._import_ocr_engine_cls = lambda: _ProjectedOcrEngine  # type: ignore[method-assign]
+        try:
+            assert engine.descriptor().availability is EngineAvailability.READY
+        finally:
+            engine.close()
+
     def test_accepts_winrt_awaitable_that_is_not_a_coroutine(self) -> None:
         class _WinRtAwaitable:
             def __await__(self):  # type: ignore[no-untyped-def]

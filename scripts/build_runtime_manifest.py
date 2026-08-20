@@ -197,10 +197,12 @@ def build_runtime_manifest(
         model_assets = model_assets.resolve(strict=True)
         if model_assets.name != "model-assets.json":
             raise ValueError("model_assets must be named model-assets.json")
-        load_model_assets(
+        declared_assets = load_model_assets(
             model_assets,
             expected_release_identity=f"{backend_version}-{source_commit}",
         )
+        if not declared_assets:
+            raise ValueError("model_assets must declare at least one asset")
         copied_model_assets = _copy_exact(model_assets, output_dir)
     pack_inputs = runtime_packs or {}
     copied_packs: dict[str, list[Path]] = {

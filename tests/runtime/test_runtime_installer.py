@@ -50,6 +50,16 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _skip_model_acquisition(
+    installer: RuntimeInstaller,
+    **_kwargs: object,
+) -> None:
+    installer._resolved_models = ResolvedModelSet(  # noqa: SLF001
+        installer._model_release_identity(),  # noqa: SLF001
+        (),
+    )
+
+
 def _lock_text(profile: str) -> str:
     base = "fastapi==1.0.0 \\\n    --hash=sha256:" + "1" * 64 + "\n"
     if profile == "win-x64-base":
@@ -826,7 +836,7 @@ def test_failed_operation_id_replays_failure_without_reexecuting(
 def test_component_repair_reports_requested_and_effective_scope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", lambda _self: None)
+    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", _skip_model_acquisition)
     manifest, component = _release(tmp_path / "release")
     calls: list[Path] = []
 
@@ -870,7 +880,7 @@ def test_component_drift_uses_installed_distribution_and_selected_repair(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", lambda _self: None)
+    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", _skip_model_acquisition)
     manifest, component_lock = _release(tmp_path / "release")
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     manifest_payload["profiles"]["win-x64-cpu"]["components"] = [
@@ -1118,6 +1128,10 @@ def test_long_install_command_emits_heartbeat(
         total=7,
         message_code="runtime.install_profile",
     )
+    events_before_cancel_checks = list(events)
+    for _ in range(100):
+        reporter.check_cancelled()
+    assert events == events_before_cancel_checks
 
     class FakeProcess:
         returncode = 0
@@ -1610,7 +1624,7 @@ def test_install_probe_uses_actual_install_scope_profile(
     expected_profile: str,
     expected_ocr_import: str,
 ) -> None:
-    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", lambda _self: None)
+    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", _skip_model_acquisition)
     manifest, component = _release(tmp_path / "release")
 
     def probe(
@@ -1714,7 +1728,7 @@ def test_ensure_with_optional_components_reports_full_profile_closure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", lambda _self: None)
+    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", _skip_model_acquisition)
     manifest, component = _release(tmp_path / "release")
     seen_profiles: list[str] = []
 
@@ -1745,7 +1759,7 @@ def test_ensure_with_optional_components_reports_full_profile_closure(
 def test_ensure_reinstalls_when_scope_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", lambda _self: None)
+    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", _skip_model_acquisition)
     manifest, component = _release(tmp_path / "release")
     calls: list[Path] = []
 
@@ -1891,7 +1905,7 @@ def test_full_scope_drift_still_probes_with_plan_binding(
 ) -> None:
     """full（含可选组件）安装的漂移探测仍使用 accelerator 的 plan 绑定。"""
 
-    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", lambda _self: None)
+    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", _skip_model_acquisition)
 
     manifest, component = _release(tmp_path / "release")
     probe_profiles: list[str] = []
@@ -2054,6 +2068,7 @@ def test_document_parsing_ensure_acquires_models_with_selected_registry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """模型 acquisition 纳入 durable ensure,并把源映射进推理环境。"""
+    from vibeocr.backend import model_registry as model_registry_module
     from vibeocr.backend import runtime_installer as installer_module
 
     manifest, component = _release(tmp_path / "release")
@@ -2077,6 +2092,11 @@ def test_document_parsing_ensure_acquires_models_with_selected_registry(
         target = kwargs["models_root"] / asset.engine / asset.target_dirname  # type: ignore[operator]
         target.mkdir(parents=True, exist_ok=True)
         (target / asset.files[0]).write_bytes(b"model")  # type: ignore[index]
+        model_registry_module._write_ready_marker(  # noqa: SLF001
+            target,
+            asset,
+            "0.7.0-" + "0" * 40,
+        )
         return ResolvedModelSet(
             "0.7.0-" + "0" * 40,
             (
@@ -2099,6 +2119,7 @@ def test_document_parsing_ensure_acquires_models_with_selected_registry(
         component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
         install_component_ids=("document_parsing",),
         download_source_ids=("tuna-pypi", "huggingface"),
+        operation_id="document-model-ensure",
     )
     with pytest.raises(
         ModelAcquisitionError,
@@ -2115,6 +2136,7 @@ def test_document_parsing_ensure_acquires_models_with_selected_registry(
         component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
         install_component_ids=("document_parsing",),
         download_source_ids=("tuna-pypi", "huggingface"),
+        operation_id="document-model-ensure",
     )
     assets_file = product / "state" / "config" / "model-assets.json"
     assets_file.parent.mkdir(parents=True, exist_ok=True)
@@ -2153,11 +2175,32 @@ def test_document_parsing_ensure_acquires_models_with_selected_registry(
     assert acquired[0]["endpoint"] == "https://huggingface.co"
     assert launch.environment["PADDLE_PDX_MODEL_SOURCE"] == "huggingface"
     assert launch.environment["MINERU_MODEL_SOURCE"] == "huggingface"
+    assert Path(launch.environment["VIBEOCR_RESOLVED_MODELS"]).is_file()
     mineru_config = Path(launch.environment["MINERU_TOOLS_CONFIG_JSON"])
     assert mineru_config.is_file()
     assert json.loads(mineru_config.read_text(encoding="utf-8"))["models-dir"]
 
+    def unexpected_acquire(**_kwargs: object) -> ResolvedModelSet:
+        raise AssertionError("replayed ensure must load the persisted binding")
+
+    monkeypatch.setattr(installer_module, "acquire_models", unexpected_acquire)
+    replayed = RuntimeInstaller(
+        product_root=product,
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
+        install_component_ids=("document_parsing",),
+        download_source_ids=("tuna-pypi", "huggingface"),
+        operation_id="document-model-ensure",
+    ).ensure()
+    assert replayed is not None
+    assert replayed.environment["VIBEOCR_RESOLVED_MODELS"] == launch.environment[
+        "VIBEOCR_RESOLVED_MODELS"
+    ]
+
     # base-only 闭包不触发模型 acquisition(无 document_parsing)。
+    monkeypatch.setattr(installer_module, "acquire_models", fake_acquire)
     acquired.clear()
     base_installer = RuntimeInstaller(
         product_root=tmp_path / "product-base",

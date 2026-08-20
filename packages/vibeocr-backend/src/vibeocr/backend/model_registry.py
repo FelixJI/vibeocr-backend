@@ -28,6 +28,11 @@ from typing import Any, Callable, Protocol
 DOWNLOAD_SOURCE_KIND_MODEL_REGISTRY = "model_registry"
 MODEL_ENGINES = ("paddleocr", "mineru")
 MODEL_CONSUMERS = ("paddleocr", "pp_structure", "paddleocr_vl", "mineru")
+PIPELINE_MODEL_CONSUMERS = {
+    "OCR": "paddleocr",
+    "PP-StructureV3": "pp_structure",
+    "PaddleOCR-VL": "paddleocr_vl",
+}
 MODEL_STAGING_DIRNAME = "downloads"
 MODEL_READY_FILENAME = ".ready.json"
 _MODEL_ASSETS_FILENAME = "model-assets.json"
@@ -377,15 +382,20 @@ def _model_is_ready(
     target: Path,
     asset: ModelAsset,
     release_identity: str,
+    *,
+    verify_integrity: bool = False,
 ) -> bool:
-    if not target.is_dir() or _is_reparse_point(target):
-        return False
-    actual_files: set[str] = set()
-    for path in target.rglob("*"):
-        if _is_reparse_point(path):
+    try:
+        if not target.is_dir() or _is_reparse_point(target):
             return False
-        if path.is_file():
-            actual_files.add(path.relative_to(target).as_posix())
+        actual_files: set[str] = set()
+        for path in target.rglob("*"):
+            if _is_reparse_point(path):
+                return False
+            if path.is_file():
+                actual_files.add(path.relative_to(target).as_posix())
+    except OSError:
+        return False
     if actual_files != {*asset.files, MODEL_READY_FILENAME}:
         return False
     try:
@@ -396,13 +406,15 @@ def _model_is_ready(
         return False
     if marker != _ready_payload(asset, release_identity):
         return False
-    for declared in asset.file_integrity:
-        path = target.joinpath(*PurePosixPath(declared.path).parts)
-        if (
-            path.stat().st_size != declared.size
-            or _sha256_file(path) != declared.sha256
-        ):
-            return False
+    try:
+        for declared in asset.file_integrity:
+            path = target.joinpath(*PurePosixPath(declared.path).parts)
+            if path.stat().st_size != declared.size:
+                return False
+            if verify_integrity and _sha256_file(path) != declared.sha256:
+                return False
+    except OSError:
+        return False
     return True
 
 
@@ -525,6 +537,64 @@ def load_model_assets(
 
 def model_assets_config_path(state_root: Path) -> Path:
     return state_root / "config" / _MODEL_ASSETS_FILENAME
+
+
+def load_resolved_models(
+    config_file: Path,
+    *,
+    assets: tuple[ModelAsset, ...],
+    expected_release_identity: str,
+    models_root: Path,
+    verify_integrity: bool = False,
+) -> ResolvedModelSet:
+    """Load a persisted launch binding and revalidate it against model assets."""
+    try:
+        payload: Any = json.loads(config_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ModelAcquisitionError("resolved model binding is invalid") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != 1
+        or payload.get("release_identity") != expected_release_identity
+    ):
+        raise ModelAcquisitionError("resolved model release identity is invalid")
+    consumers = payload.get("consumers")
+    if not isinstance(consumers, dict):
+        raise ModelAcquisitionError("resolved model binding is invalid")
+
+    models_root = models_root.absolute()
+    expected_consumers: dict[str, dict[str, str]] = {}
+    restored: list[ResolvedModel] = []
+    for asset in assets:
+        target = _safe_model_path(
+            models_root,
+            asset.engine,
+            asset.target_dirname,
+        )
+        expected_consumers.setdefault(asset.consumer, {})[asset.binding_key] = str(
+            target
+        )
+        restored.append(
+            ResolvedModel(
+                key=f"{asset.engine}/{asset.name}",
+                consumer=asset.consumer,
+                binding_key=asset.binding_key,
+                root=target,
+            )
+        )
+    if consumers != expected_consumers:
+        raise ModelAcquisitionError("resolved model binding is invalid")
+    for asset, model in zip(assets, restored, strict=True):
+        if not _model_is_ready(
+            model.root,
+            asset,
+            expected_release_identity,
+            verify_integrity=verify_integrity,
+        ):
+            raise ModelAcquisitionError(
+                f"resolved model is not ready: {asset.engine}/{asset.name}"
+            )
+    return ResolvedModelSet(expected_release_identity, tuple(restored))
 
 
 def ensure_mineru_tools_config(
@@ -650,6 +720,12 @@ def local_model_kwargs(consumer: str) -> dict[str, str]:
     return result
 
 
+def local_model_kwargs_for_pipeline(pipeline: str) -> dict[str, str]:
+    """Map a stable pipeline id to its Installer-owned local model binding."""
+    consumer = PIPELINE_MODEL_CONSUMERS.get(pipeline)
+    return {} if consumer is None else local_model_kwargs(consumer)
+
+
 def acquire_models(
     *,
     assets: tuple[ModelAsset, ...],
@@ -660,6 +736,7 @@ def acquire_models(
     adapter: ModelRegistryAdapter | None = None,
     progress_listener: Callable[[ModelProgress], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
+    verify_existing_integrity: bool = False,
 ) -> ResolvedModelSet:
     """下载声明资产到 staging 后原子切换;本地已有则直接复用(断网可用)。
 
@@ -708,7 +785,12 @@ def acquire_models(
         if cancel_check is not None:
             cancel_check()
         target = _safe_model_path(models_root, asset.engine, asset.target_dirname)
-        if _model_is_ready(target, asset, release_identity):
+        if _model_is_ready(
+            target,
+            asset,
+            release_identity,
+            verify_integrity=verify_existing_integrity,
+        ):
             # 断网本地复用只接受绑定当前 release/file-set 的完成 marker。
             acquired.append(
                 ResolvedModel(
@@ -760,7 +842,6 @@ def acquire_models(
                         f"model file integrity mismatch: {asset.name}/{file_name}"
                     )
             _write_ready_marker(asset_staging, asset, release_identity)
-            _safe_model_path(models_root, asset.engine)
             target.parent.mkdir(parents=True, exist_ok=True)
             _safe_model_path(models_root, asset.engine)
             previous = operation_root / "previous"

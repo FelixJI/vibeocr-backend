@@ -99,9 +99,12 @@ def _build_ocr_engine_registry(
     """
     from vibeocr.runtime_contracts.dtos import OcrEngine
 
+    from .inference.native_runtime import prepare_windows_ocr_native_runtime
     from .inference.ocr_engines import LazyEngineHandle, OcrEngineRegistry
     from .inference.rapidocr_engine import RapidOcrEngine
     from .inference.windows_ocr_engine import WindowsMediaOcrEngine
+
+    prepare_windows_ocr_native_runtime()
 
     def paddle_descriptor() -> Any:
         from .inference.paddle_adapter import PaddlePipelineAdapter

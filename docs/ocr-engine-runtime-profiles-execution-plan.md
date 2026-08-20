@@ -35,8 +35,9 @@
 - 稳定 OCR wire id 为 `rapidocr`、`windows`、`paddleocr`；RapidOCR 是新配置的
   Backend 缺省引擎，不可用时不静默切换到另一引擎。
 - `base-offline` 包含 RapidOCR、模型、单份 ONNX Runtime、图片/PDF 基础闭包和
-  Runtime Host；Backend release smoke 已接入禁网 ensure、Supervisor、RapidOCR、
-  PDF 与幂等复用脚本，真实发布包结果仍以 CI 执行为准。
+  Runtime Host；Backend release smoke 已接入依赖客户端 offline flag 与闭合代理、
+  Supervisor、RapidOCR、PDF 与幂等复用脚本。该脚本不等同于 OS 级出站防火墙，
+  真实无网发布包结果仍以 clean-machine CI 门禁为准。
 - `profile_id` 与 accelerator 描述 Runtime 档位，现有 durable maintenance、
   journal、observe/SSE、cancel/retry、组件 repair 继续作为唯一安装状态机。
 - Windows OCR adapter 随 base 提供，系统 OCR/语言包按 Windows 实际能力探测；
