@@ -231,6 +231,54 @@ def test_selection_policy_canonicalizes_sources_and_rejects_same_kind() -> None:
     assert excinfo.value.code is ErrorCode.VALIDATION_ERROR
 
 
+def test_selection_policy_overlays_explicit_sources_by_kind() -> None:
+    policy = RuntimeSelectionPolicy(
+        profiles=_selection_profiles(),
+        sources=(
+            {
+                "kind": "package_index",
+                "id": "tuna-pypi",
+                "endpoint": "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/",
+            },
+            {
+                "kind": "package_index",
+                "id": "pypi",
+                "endpoint": "https://pypi.org/simple",
+            },
+            {
+                "kind": "model_registry",
+                "id": "huggingface",
+                "endpoint": "https://huggingface.co",
+            },
+            {
+                "kind": "model_registry",
+                "id": "modelscope",
+                "endpoint": "https://www.modelscope.cn",
+            },
+        ),
+        default_download_source_ids=("tuna-pypi", "modelscope"),
+    )
+
+    model_override = policy.plan_start(
+        accelerator="cpu",
+        install_component_ids=None,
+        download_source_ids=("huggingface",),
+    )
+    package_override = policy.plan_start(
+        accelerator="cpu",
+        install_component_ids=None,
+        download_source_ids=("pypi",),
+    )
+
+    assert model_override.requested_download_source_ids == ("huggingface",)
+    assert model_override.effective_download_source_ids == (
+        "tuna-pypi",
+        "huggingface",
+    )
+    assert package_override.requested_download_source_ids == ("pypi",)
+    assert package_override.effective_download_source_ids == ("pypi", "modelscope")
+
+
 def test_normalize_download_source_ids_resolves_omission_to_backend_default() -> None:
     assert normalize_download_source_ids(None) == ("tuna-pypi",)
     assert normalize_download_source_ids(()) == ("tuna-pypi",)

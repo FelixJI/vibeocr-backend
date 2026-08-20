@@ -75,8 +75,8 @@
 | `runtime.component-selection.v1` / `component_variant_catalog` | 当前 Backend Release 的 manifest/component lock 生成 `feature_id + accelerator -> component_id` | `feature_id` 是能力族，不等同 OCR engine；MinerU 不能被命名为 OCR engine |
 | `install_component_ids` | ensure/retry 的可选组件意图 | 省略=Backend 默认；`[]`=明确只保留 base；未知 id 返回 `RUNTIME_COMPONENT_UNKNOWN` |
 | `runtime.download-sources.v1` / `download_source_catalog` | Backend 声明 package index 与模型 registry 的稳定 id/endpoint | 每个 kind 单次至多选择一个；`model_registry` 仅映射为官方上游环境值，未知 id 返回 `DOWNLOAD_SOURCE_UNKNOWN` |
-| Settings `download_source_ids` | 持久化用户默认偏好 | 省略=Backend 声明的默认源，不在 Protocol 写死“official” |
-| maintenance `download_source_ids` | start/retry 显式覆盖并固化本次 operation source intent | 仅 ensure/retry 合法；省略时在开始瞬间快照当前 Settings/Backend default |
+| Settings `download_source_ids` | 持久化用户默认偏好 | 省略=Backend 声明的默认源；显式值按 kind 覆盖同 kind 默认，未提供的 kind 保留 Backend 默认 |
+| maintenance `download_source_ids` | start/retry 显式覆盖并固化本次 operation source intent | 仅 ensure/retry 合法；requested 只回显用户值，effective 回显按 kind 合并后的完整源集合 |
 | `requested_*` / `effective_*` | durable operation status 回显规范化前后的组件与源 | observe、SSE、receipt、runtime status 必须一致，重启后可恢复 |
 
 `DownloadSourceKind` 在 Protocol 中仍是开放 response string。Backend 发布 `package_index`
@@ -111,6 +111,8 @@ Host 三条 adapter 的共同 seam：
 - 区分 `None`（省略）和空 component list（base only）。
 - 检查每个 source kind 至多一个；将 package index endpoint 与模型 source id 到官方环境值的
   映射留在 Backend 内部。
+- 显式 source 只覆盖同 kind 的 Backend default，其他 kind 默认继续生效；requested intent
+  保留用户原值，effective intent 固化合并结果。
 - 输出不可变的 normalized intent，交给 durable operation store 持久化。
 
 推荐落点为 `runtime_selection.py`（纯领域/校验）和已有

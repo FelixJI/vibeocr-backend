@@ -200,7 +200,9 @@ class RuntimeSelectionPolicy:
             else self._default_download_source_ids
         )
         effective_source_ids = (
-            default_sources if requested_sources is None else requested_sources
+            default_sources
+            if requested_sources is None
+            else self._overlay_source_ids(default_sources, requested_sources)
         )
         selected = set(effective_source_ids)
         return ResolvedRuntimeSelection(
@@ -245,6 +247,23 @@ class RuntimeSelectionPolicy:
             source.source_id
             for source in self._sources
             if source.source_id in requested_set
+        )
+
+    def _overlay_source_ids(
+        self,
+        defaults: tuple[str, ...],
+        requested: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        by_id = {source.source_id: source for source in self._sources}
+        requested_kinds = {by_id[source_id].kind for source_id in requested}
+        selected = set(requested)
+        selected.update(
+            source_id
+            for source_id in defaults
+            if by_id[source_id].kind not in requested_kinds
+        )
+        return tuple(
+            source.source_id for source in self._sources if source.source_id in selected
         )
 
     @staticmethod

@@ -2133,19 +2133,29 @@ def test_document_parsing_ensure_passes_selected_model_source_to_native_clients(
         )
     )
 
-    launch = control.execute_with_result(
+    result = control.execute_with_result(
         operation="ensure",
         install_component_ids=("document_parsing",),
-        download_source_ids=("tuna-pypi", model_source_id),
-    ).launch
+        download_source_ids=(model_source_id,),
+    )
+    launch = result.launch
 
     assert launch is not None
+    snapshot = result.receipt["snapshot"]
+    assert snapshot["requested_download_source_ids"] == [model_source_id]
+    assert snapshot["effective_download_source_ids"] == [
+        "tuna-pypi",
+        model_source_id,
+    ]
     state_root = Path(launch.environment["VIBEOCR_RUNTIME_STATE_ROOT"])
     assert Path(launch.model_root) == state_root / "models"
     assert Path(launch.model_root).is_dir()
     assert Path(launch.environment["HF_HOME"]).is_relative_to(state_root)
     assert Path(launch.environment["MODELSCOPE_CACHE"]).is_relative_to(state_root)
     assert Path(launch.environment["PADDLE_PDX_CACHE_HOME"]).is_relative_to(state_root)
+    assert launch.environment["PIP_INDEX_URL"] == (
+        "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+    )
     mineru_config = Path(launch.environment["MINERU_TOOLS_CONFIG_JSON"])
     assert mineru_config == state_root / "config" / "mineru.json"
     assert mineru_config.parent.is_dir()
