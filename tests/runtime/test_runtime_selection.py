@@ -79,14 +79,24 @@ def test_download_source_catalog_declares_default_and_unique_business_keys() -> 
     ids = [source["id"] for source in sources]
     assert len(set(ids)) == len(ids)
     assert [source["id"] for source in default_download_sources()] == ["tuna-pypi"]
-    assert {source["id"] for source in sources} == {"tuna-pypi", "pypi"}
-    assert {source["kind"] for source in sources} == {"package_index"}
+    assert {source["id"] for source in sources} == {
+        "tuna-pypi",
+        "pypi",
+        "huggingface",
+        "modelscope",
+    }
+    assert {source["kind"] for source in sources} == {
+        "package_index",
+        "model_registry",
+    }
     for source in sources:
         assert set(source) == {"kind", "id", "endpoint"}
         assert source["endpoint"].startswith("https://")
 
 
-def test_download_source_catalog_rejects_duplicate_ids_and_model_sources() -> None:
+def test_download_source_catalog_rejects_duplicate_ids_and_unknown_model_sources() -> (
+    None
+):
     duplicate_id = [
         {"kind": "package_index", "id": "pypi", "endpoint": "https://a"},
         {"kind": "package_index", "id": "pypi", "endpoint": "https://b"},
@@ -95,15 +105,15 @@ def test_download_source_catalog_rejects_duplicate_ids_and_model_sources() -> No
         download_source_catalog_payload(duplicate_id)
     assert excinfo.value.code is ErrorCode.VALIDATION_ERROR
 
-    model_source = [
+    unsupported_model_source = [
         {
             "kind": "model_registry",
-            "id": "huggingface",
-            "endpoint": "https://huggingface.co",
+            "id": "unknown-registry",
+            "endpoint": "https://example.invalid",
         }
     ]
     with pytest.raises(RuntimeSelectionError) as excinfo:
-        download_source_catalog_payload(model_source)
+        download_source_catalog_payload(unsupported_model_source)
     assert excinfo.value.code is ErrorCode.VALIDATION_ERROR
 
     same_kind_candidates = [
@@ -190,6 +200,16 @@ def test_selection_policy_canonicalizes_sources_and_rejects_same_kind() -> None:
                 "id": "mirror",
                 "endpoint": "https://mirror.invalid/simple",
             },
+            {
+                "kind": "model_registry",
+                "id": "huggingface",
+                "endpoint": "https://huggingface.co",
+            },
+            {
+                "kind": "model_registry",
+                "id": "modelscope",
+                "endpoint": "https://www.modelscope.cn",
+            },
         ),
         default_download_source_ids=("pypi",),
     )
@@ -197,16 +217,16 @@ def test_selection_policy_canonicalizes_sources_and_rejects_same_kind() -> None:
     resolved = policy.plan_start(
         accelerator="cpu",
         install_component_ids=None,
-        download_source_ids=("pypi",),
+        download_source_ids=("pypi", "huggingface"),
     )
-    assert resolved.requested_download_source_ids == ("pypi",)
-    assert resolved.effective_download_source_ids == ("pypi",)
+    assert resolved.requested_download_source_ids == ("pypi", "huggingface")
+    assert resolved.effective_download_source_ids == ("pypi", "huggingface")
 
     with pytest.raises(RuntimeSelectionError) as excinfo:
         policy.plan_start(
             accelerator="cpu",
             install_component_ids=None,
-            download_source_ids=("pypi", "mirror"),
+            download_source_ids=("pypi", "huggingface", "modelscope"),
         )
     assert excinfo.value.code is ErrorCode.VALIDATION_ERROR
 

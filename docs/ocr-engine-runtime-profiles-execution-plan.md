@@ -23,7 +23,8 @@
 > 目录中）。高级 Paddle/PaddleX/MinerU/CUDA 依赖仍由 Runtime installer 按档位
 > 安装；模型则交给 PaddleX/MinerU 原生 downloader 管理。Backend 只在启动环境中
 > 提供 Portable `HF_HOME`、`MODELSCOPE_CACHE`、`PADDLE_PDX_CACHE_HOME` 与
-> `MINERU_TOOLS_CONFIG_JSON` 路径，不选择模型源，也不解析、校验或修复模型内部文件。
+> `MINERU_TOOLS_CONFIG_JSON` 路径。用户可选择稳定的模型源 id，Backend 仅将它浅映射为
+> PaddleX/MinerU 官方环境值；不解析、校验或修复模型内部文件。
 > Protocol v2 必填的 `RuntimeLaunch.model_root` 继续返回 `state/models` 绝对路径，但它
 > 只是 Classic/Next 兼容所需的 legacy opaque response，不代表 Backend 拥有模型存储。
 > B0.3 隔离机验证与 B7 正式 Release 交接尚未完成。
@@ -73,13 +74,14 @@
 | `PipelineSelection.engine` | job adapter 解析后交给 OCR resolver | 仅纯文本 `OCR` pipeline 有效；未知/不可用/需准备均 fail closed，不回退 |
 | `runtime.component-selection.v1` / `component_variant_catalog` | 当前 Backend Release 的 manifest/component lock 生成 `feature_id + accelerator -> component_id` | `feature_id` 是能力族，不等同 OCR engine；MinerU 不能被命名为 OCR engine |
 | `install_component_ids` | ensure/retry 的可选组件意图 | 省略=Backend 默认；`[]`=明确只保留 base；未知 id 返回 `RUNTIME_COMPONENT_UNKNOWN` |
-| `runtime.download-sources.v1` / `download_source_catalog` | Backend 声明 package index 的稳定 id 与 endpoint | catalog 可有多个 package index 候选；单次至多选择一个；未知 id 返回 `DOWNLOAD_SOURCE_UNKNOWN` |
+| `runtime.download-sources.v1` / `download_source_catalog` | Backend 声明 package index 与模型 registry 的稳定 id/endpoint | 每个 kind 单次至多选择一个；`model_registry` 仅映射为官方上游环境值，未知 id 返回 `DOWNLOAD_SOURCE_UNKNOWN` |
 | Settings `download_source_ids` | 持久化用户默认偏好 | 省略=Backend 声明的默认源，不在 Protocol 写死“official” |
 | maintenance `download_source_ids` | start/retry 显式覆盖并固化本次 operation source intent | 仅 ensure/retry 合法；省略时在开始瞬间快照当前 Settings/Backend default |
 | `requested_*` / `effective_*` | durable operation status 回显规范化前后的组件与源 | observe、SSE、receipt、runtime status 必须一致，重启后可恢复 |
 
-`DownloadSourceKind` 在 Protocol 中仍是开放 response string，但 Backend 当前只发布
-`package_index`；模型下载源由上游原生 downloader 自行管理。
+`DownloadSourceKind` 在 Protocol 中仍是开放 response string。Backend 发布 `package_index`
+与 `model_registry` 两类候选；后者只提供 `huggingface`/`modelscope` 的稳定 id 到 PaddleX/
+MinerU 官方环境值的映射，模型下载与文件生命周期仍由上游原生 downloader 自行管理。
 
 JSON Schema 的 `uniqueItems` 只能拒绝重复字符串/完全相同对象，不能证明 source id
 跨 kind 唯一或 `(feature_id, accelerator)` 唯一。因此 catalog builder 必须以业务键做
@@ -107,7 +109,8 @@ Host 三条 adapter 的共同 seam：
 - 从 manifest/lock 构建并验证 component/source catalog。
 - 规范化 profile、component 与 source intent。
 - 区分 `None`（省略）和空 component list（base only）。
-- 检查 package index 至多一个，并将 endpoint 解析留在 Backend 内部。
+- 检查每个 source kind 至多一个；将 package index endpoint 与模型 source id 到官方环境值的
+  映射留在 Backend 内部。
 - 输出不可变的 normalized intent，交给 durable operation store 持久化。
 
 推荐落点为 `runtime_selection.py`（纯领域/校验）和已有
@@ -199,8 +202,8 @@ full 组件不得在第一次 OCR 时懒下载；不得随每次前端更新重�
   `component_id` 唯一（`document_parsing` 合法出现在 cpu 与 nvidia_cuda 两个
   variant，协议仅 MUST 约束业务键，比原文的“component id 全局唯一”更准确）；
   base 必备组件不进入可选目录。
-- source id 全局唯一；catalog 只发布 package index 候选，单次 selection 至多一个；
-  模型 registry id 作为未知来源 fail closed。
+- source id 全局唯一；catalog 发布 package index 与 `huggingface`/`modelscope` 模型 registry
+  候选，单次每个 kind 至多一个；未知来源 fail closed。
 - Settings omission、source selection、同 kind 冲突和未知 id；operation start 时的快照竞态。
 - component `None`、`[]`、非空、unknown；ensure/retry 合法，inspect/repair/cancel 非法。
 - retry 省略复用旧 intent、显式重选产生新 intent；重启恢复后 requested/effective 不变。

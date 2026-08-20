@@ -2094,24 +2094,50 @@ def test_drift_projection_uses_covering_profile_declared_versions(
     assert installer._drifted_component_ids() == ()
 
 
-def test_document_parsing_ensure_delegates_models_to_native_clients(
+@pytest.mark.parametrize(
+    ("model_source_id", "expected_source_environment"),
+    [
+        (
+            "huggingface",
+            {
+                "PADDLE_PDX_MODEL_SOURCE": "HuggingFace",
+                "MINERU_MODEL_SOURCE": "huggingface",
+            },
+        ),
+        (
+            "modelscope",
+            {
+                "PADDLE_PDX_MODEL_SOURCE": "ModelScope",
+                "MINERU_MODEL_SOURCE": "modelscope",
+            },
+        ),
+    ],
+)
+def test_document_parsing_ensure_passes_selected_model_source_to_native_clients(
     tmp_path: Path,
+    model_source_id: str,
+    expected_source_environment: dict[str, str],
 ) -> None:
-    """高级依赖安装后，由上游客户端在 Portable cache 中按需下载模型。"""
+    """Runtime control 仅把选择投影为上游 downloader 的环境变量。"""
     manifest, component = _release(tmp_path / "release")
     product = tmp_path / "product"
-    installer = RuntimeInstaller(
-        product_root=product,
-        component_lock=component,
-        runtime_manifest=manifest,
-        accelerator="cpu",
-        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
-        install_runner=_fake_install,
-        install_component_ids=("document_parsing",),
-        download_source_ids=("tuna-pypi",),
+    control = RuntimeControl.from_installer_factory(
+        lambda **kwargs: RuntimeInstaller(
+            product_root=product,
+            component_lock=component,
+            runtime_manifest=manifest,
+            accelerator="cpu",
+            component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
+            install_runner=_fake_install,
+            **kwargs,
+        )
     )
 
-    launch = installer.ensure()
+    launch = control.execute_with_result(
+        operation="ensure",
+        install_component_ids=("document_parsing",),
+        download_source_ids=("tuna-pypi", model_source_id),
+    ).launch
 
     assert launch is not None
     state_root = Path(launch.environment["VIBEOCR_RUNTIME_STATE_ROOT"])
@@ -2125,8 +2151,7 @@ def test_document_parsing_ensure_delegates_models_to_native_clients(
     assert mineru_config.parent.is_dir()
     assert not mineru_config.exists()
     assert {
-        "VIBEOCR_MODEL_ROOT",
-        "VIBEOCR_RESOLVED_MODELS",
-        "PADDLE_PDX_MODEL_SOURCE",
-        "MINERU_MODEL_SOURCE",
-    }.isdisjoint(launch.environment)
+        key: launch.environment[key] for key in expected_source_environment
+    } == expected_source_environment
+    assert "VIBEOCR_MODEL_ROOT" not in launch.environment
+    assert "VIBEOCR_RESOLVED_MODELS" not in launch.environment

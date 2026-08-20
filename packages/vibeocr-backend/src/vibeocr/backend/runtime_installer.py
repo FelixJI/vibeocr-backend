@@ -911,6 +911,7 @@ class RuntimeInstaller:
         )
         if package_indexes:
             environment["PIP_INDEX_URL"] = package_indexes[0].endpoint
+        environment.update(self._selection.model_source_environment())
         return environment
 
     def ensure(self) -> RuntimeLaunch | None:
