@@ -109,10 +109,11 @@ class ResolvedRuntimeSelection:
                 return dict(_MODEL_SOURCE_ENVIRONMENT[source.source_id])
         return {}
 
-    def durable_intent_fields(self) -> dict[str, list[str]]:
-        return normalized_selection_fields(
+    def durable_intent_fields(self) -> dict[str, list[str] | None]:
+        return durable_selection_fields(
             install_component_ids=self.requested_component_ids,
-            download_source_ids=self.effective_download_source_ids,
+            requested_download_source_ids=self.requested_download_source_ids,
+            effective_download_source_ids=self.effective_download_source_ids,
         )
 
 
@@ -481,6 +482,25 @@ def normalized_selection_fields(
     return fields
 
 
+def durable_selection_fields(
+    *,
+    install_component_ids: Sequence[str] | None,
+    requested_download_source_ids: Sequence[str] | None,
+    effective_download_source_ids: Sequence[str],
+) -> dict[str, list[str] | None]:
+    """Persist source request presence separately from its effective overlay."""
+    fields: dict[str, list[str] | None] = normalized_selection_fields(
+        install_component_ids=install_component_ids,
+        download_source_ids=effective_download_source_ids,
+    )
+    fields["requested_download_source_ids"] = (
+        None
+        if requested_download_source_ids is None
+        else sorted(requested_download_source_ids)
+    )
+    return fields
+
+
 def normalize_install_component_ids(
     install_component_ids: Sequence[str] | None,
     *,
@@ -523,6 +543,7 @@ __all__ = [
     "component_variant_catalog_payload",
     "default_download_sources",
     "download_source_catalog_payload",
+    "durable_selection_fields",
     "normalize_download_source_ids",
     "normalize_install_component_ids",
     "normalized_selection_fields",

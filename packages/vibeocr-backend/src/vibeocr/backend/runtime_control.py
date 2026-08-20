@@ -330,12 +330,24 @@ class RuntimeControl:
                     else None
                 )
             )
-            retry_sources = (
-                download_source_ids
-                if download_source_ids is not None
-                else tuple(intent.get("download_source_ids", ()))
+            if download_source_ids is not None:
+                retry_sources: tuple[str, ...] | None = download_source_ids
+            elif "requested_download_source_ids" in intent:
+                requested_sources = intent["requested_download_source_ids"]
+                retry_sources = (
+                    None if requested_sources is None else tuple(requested_sources)
+                )
+            else:
+                # Legacy schema v2 intents only stored the effective source set.
+                retry_sources = (
+                    tuple(intent["download_source_ids"])
+                    if "download_source_ids" in intent
+                    else None
+                )
+            retry_installer = self._installer(
+                install_component_ids=retry_install,
+                download_source_ids=retry_sources,
             )
-            retry_installer = self._installer()
             if intent.get("source_identity") != runtime_source_identity(
                 retry_installer.manifest
             ):
@@ -357,12 +369,7 @@ class RuntimeControl:
                     "source_identity": dict(intent.get("source_identity", {})),
                     "source_operation_id": target_operation_id,
                 }
-                expected_retry_intent.update(
-                    normalized_selection_fields(
-                        install_component_ids=retry_install,
-                        download_source_ids=retry_sources or None,
-                    )
-                )
+                expected_retry_intent.update(retry_installer.durable_selection_fields())
                 if self._store.intent(new_operation_id) != expected_retry_intent:
                     raise RuntimeOperationConflict(new_operation_id)
                 state = existing.get("operation_state")

@@ -573,7 +573,7 @@ class RuntimeInstaller:
         )
         self._install_scope = self._selection.requested_component_ids
         self._requested_download_source_ids = (
-            self._selection.requested_download_source_ids or ()
+            self._selection.requested_download_source_ids
         )
         self._effective_download_source_ids = (
             self._selection.effective_download_source_ids
@@ -868,6 +868,9 @@ class RuntimeInstaller:
                 message_code="runtime.inspect_complete",
             )
         return RuntimeInspection(state=state, profile=profile)
+
+    def durable_selection_fields(self) -> dict[str, list[str] | None]:
+        return self._selection.durable_intent_fields()
 
     def inspect(self, *, emit: bool = True) -> RuntimeState:
         return self.inspect_snapshot(emit=emit).state

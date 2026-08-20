@@ -26,7 +26,7 @@ from vibeocr.backend.runtime_manifest import (
     load_runtime_manifest,
     runtime_component_binding,
 )
-from vibeocr.backend.runtime_selection import normalized_selection_fields
+from vibeocr.backend.runtime_selection import durable_selection_fields
 
 EventSink = Callable[[dict[str, Any]], None]
 OPERATIONS_DIRECTORY = "runtime-operations"
@@ -1055,7 +1055,7 @@ class RuntimeMaintenanceReporter:
         # （ensure base-only），两者在 intent 与回显上都不同。
         self._requested_component_ids: tuple[str, ...] | None = None
         self._effective_component_ids: tuple[str, ...] = ()
-        self._requested_download_source_ids: tuple[str, ...] = ()
+        self._requested_download_source_ids: tuple[str, ...] | None = None
         self._effective_download_source_ids: tuple[str, ...] = ()
         self._source: dict[str, Any] | None = None
         self._source_operation_id: str | None = None
@@ -1082,7 +1082,7 @@ class RuntimeMaintenanceReporter:
         effective_component_ids: tuple[str, ...] = (),
         install_component_ids: tuple[str, ...] | None = None,
         download_source_ids: tuple[str, ...] = (),
-        requested_download_source_ids: tuple[str, ...] = (),
+        requested_download_source_ids: tuple[str, ...] | None = None,
         source: dict[str, Any] | None = None,
         source_operation_id: str | None = None,
         required_capabilities: tuple[str, ...] = (),
@@ -1116,7 +1116,7 @@ class RuntimeMaintenanceReporter:
             initial_snapshot["effective_component_ids"] = list(
                 self._effective_component_ids
             )
-        if self._requested_download_source_ids:
+        if self._requested_download_source_ids is not None:
             initial_snapshot["requested_download_source_ids"] = list(
                 self._requested_download_source_ids
             )
@@ -1137,9 +1137,10 @@ class RuntimeMaintenanceReporter:
         # normalized selection 与 command identity 使用同一投影，避免 retry
         # 手工重建字段形状后发生漂移。
         intent.update(
-            normalized_selection_fields(
+            durable_selection_fields(
                 install_component_ids=install_component_ids,
-                download_source_ids=download_source_ids or None,
+                requested_download_source_ids=requested_download_source_ids,
+                effective_download_source_ids=download_source_ids,
             )
         )
         started = self._store.start(
@@ -1360,7 +1361,7 @@ class RuntimeMaintenanceReporter:
             snapshot["requested_component_ids"] = list(self._requested_component_ids)
         if self._effective_component_ids:
             snapshot["effective_component_ids"] = list(self._effective_component_ids)
-        if self._requested_download_source_ids:
+        if self._requested_download_source_ids is not None:
             snapshot["requested_download_source_ids"] = list(
                 self._requested_download_source_ids
             )

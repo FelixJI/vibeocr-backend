@@ -127,7 +127,12 @@ Host 三条 adapter 的共同 seam：
 
 retry 语义：
 
-- selection 字段省略：复用 source operation 的 normalized intent。
+- selection 字段省略：复用 source operation 的原始 requested selection，再按当前同一
+  release catalog 解析 effective selection；durable intent 以
+  `requested_download_source_ids: null | list` 区分原始省略与显式请求，并继续以
+  `download_source_ids` 保存 effective 集合。
+- 旧 operation intent 缺少 `requested_download_source_ids` 时按 legacy 语义回退到其
+  `download_source_ids`，不重写历史 journal。
 - 显式 component/source 字段：重新按当前 catalog 验证并产生新 operation intent。
 - cancel 不接受 selection 字段；inspect/repair 不接受 install/source selection。
 
