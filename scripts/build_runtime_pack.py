@@ -62,9 +62,13 @@ def _normalize(name: str) -> str:
 
 
 def _resolve_package_index(index_url: str | None) -> str:
-    resolved = index_url if index_url is not None else os.environ.get(
-        PACKAGE_INDEX_ENV,
-        DEFAULT_PACKAGE_INDEX,
+    resolved = (
+        index_url
+        if index_url is not None
+        else os.environ.get(
+            PACKAGE_INDEX_ENV,
+            DEFAULT_PACKAGE_INDEX,
+        )
     )
     if not resolved.strip():
         raise ValueError(f"{PACKAGE_INDEX_ENV} must not be empty")
