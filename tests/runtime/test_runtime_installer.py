@@ -2100,14 +2100,14 @@ def test_drift_projection_uses_covering_profile_declared_versions(
         (
             "huggingface",
             {
-                "PADDLE_PDX_MODEL_SOURCE": "HuggingFace",
+                "PADDLE_PDX_MODEL_SOURCE": "huggingface",
                 "MINERU_MODEL_SOURCE": "huggingface",
             },
         ),
         (
             "modelscope",
             {
-                "PADDLE_PDX_MODEL_SOURCE": "ModelScope",
+                "PADDLE_PDX_MODEL_SOURCE": "modelscope",
                 "MINERU_MODEL_SOURCE": "modelscope",
             },
         ),

@@ -58,11 +58,11 @@ _DEFAULT_DOWNLOAD_SOURCE_IDS = ("tuna-pypi",)
 
 _MODEL_SOURCE_ENVIRONMENT: dict[str, dict[str, str]] = {
     "huggingface": {
-        "PADDLE_PDX_MODEL_SOURCE": "HuggingFace",
+        "PADDLE_PDX_MODEL_SOURCE": "huggingface",
         "MINERU_MODEL_SOURCE": "huggingface",
     },
     "modelscope": {
-        "PADDLE_PDX_MODEL_SOURCE": "ModelScope",
+        "PADDLE_PDX_MODEL_SOURCE": "modelscope",
         "MINERU_MODEL_SOURCE": "modelscope",
     },
 }
