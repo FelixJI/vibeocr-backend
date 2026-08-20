@@ -2195,9 +2195,10 @@ def test_document_parsing_ensure_acquires_models_with_selected_registry(
         operation_id="document-model-ensure",
     ).ensure()
     assert replayed is not None
-    assert replayed.environment["VIBEOCR_RESOLVED_MODELS"] == launch.environment[
-        "VIBEOCR_RESOLVED_MODELS"
-    ]
+    assert (
+        replayed.environment["VIBEOCR_RESOLVED_MODELS"]
+        == launch.environment["VIBEOCR_RESOLVED_MODELS"]
+    )
 
     # base-only 闭包不触发模型 acquisition(无 document_parsing)。
     monkeypatch.setattr(installer_module, "acquire_models", fake_acquire)

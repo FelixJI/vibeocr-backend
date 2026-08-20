@@ -279,10 +279,9 @@ def verify_base_runtime(artifacts_dir: Path) -> dict[str, Any]:
         if not isinstance(second_launch, dict):
             raise BaseRuntimeSmokeError("idempotent base ensure returned no launch")
         second_environment = second_launch.get("environment")
-        if (
-            not isinstance(second_environment, dict)
-            or second_environment.get("VIBEOCR_RUNTIME_ROOT") != str(runtime_root)
-        ):
+        if not isinstance(second_environment, dict) or second_environment.get(
+            "VIBEOCR_RUNTIME_ROOT"
+        ) != str(runtime_root):
             raise BaseRuntimeSmokeError(
                 "idempotent base ensure returned a different runtime root"
             )
