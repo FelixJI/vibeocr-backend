@@ -1475,33 +1475,46 @@ def test_control_installer_store_composition_retries_durable_selection(
         control.execute(
             operation="ensure",
             operation_id="composition-failed",
-            install_component_ids=(),
-            download_source_ids=("pypi",),
+            install_component_ids=("document_parsing",),
+            download_source_ids=("huggingface",),
         )
 
-    receipt = control.command(
+    restarted = RuntimeControl.from_installer_factory(factory)
+    receipt = restarted.command(
         command_id="composition-retry-command",
         command="retry",
         target_operation_id="composition-failed",
         new_operation_id="composition-retried",
     )
     assert receipt["snapshot"]["operation_state"] == "succeeded"
+    assert receipt["snapshot"]["requested_download_source_ids"] == ["huggingface"]
+    assert receipt["snapshot"]["effective_download_source_ids"] == [
+        "tuna-pypi",
+        "huggingface",
+    ]
     retried = next(
         item
         for item in constructed
         if item.get("operation_id") == "composition-retried"
     )
-    assert retried["install_component_ids"] == ()
-    assert retried["download_source_ids"] == ("pypi",)
+    assert retried["install_component_ids"] == ("document_parsing",)
+    assert retried["download_source_ids"] == ("huggingface",)
 
-    intent = runtime_maintenance.RuntimeOperationStore(control.state_root).intent(
-        "composition-retried"
-    )
-    assert intent["install_component_ids"] == []
-    assert intent["download_source_ids"] == ["pypi"]
-    restarted = RuntimeControl.from_installer_factory(factory)
+    store = runtime_maintenance.RuntimeOperationStore(restarted.state_root)
+    failed_intent = store.intent("composition-failed")
+    assert failed_intent["requested_download_source_ids"] == ["huggingface"]
+    assert failed_intent["download_source_ids"] == ["huggingface", "tuna-pypi"]
+    intent = store.intent("composition-retried")
+    assert intent["install_component_ids"] == ["document_parsing"]
+    assert intent["requested_download_source_ids"] == ["huggingface"]
+    assert intent["download_source_ids"] == ["huggingface", "tuna-pypi"]
     observation = restarted.observe("composition-retried")
     assert observation["snapshot"]["operation_state"] == "succeeded"
+    assert observation["snapshot"]["requested_download_source_ids"] == ["huggingface"]
+    assert observation["snapshot"]["effective_download_source_ids"] == [
+        "tuna-pypi",
+        "huggingface",
+    ]
     assert observation["events"][-1]["snapshot"]["operation_state"] == "succeeded"
 
     default_receipt = restarted.execute(
@@ -1513,6 +1526,7 @@ def test_control_installer_store_composition_retries_durable_selection(
     default_intent = runtime_maintenance.RuntimeOperationStore(
         restarted.state_root
     ).intent("composition-default-source")
+    assert default_intent["requested_download_source_ids"] is None
     assert default_intent["download_source_ids"] == ["tuna-pypi"]
 
 
@@ -2094,39 +2108,74 @@ def test_drift_projection_uses_covering_profile_declared_versions(
     assert installer._drifted_component_ids() == ()
 
 
-def test_document_parsing_ensure_delegates_models_to_native_clients(
+@pytest.mark.parametrize(
+    ("model_source_id", "expected_source_environment"),
+    [
+        (
+            "huggingface",
+            {
+                "PADDLE_PDX_MODEL_SOURCE": "huggingface",
+                "MINERU_MODEL_SOURCE": "huggingface",
+            },
+        ),
+        (
+            "modelscope",
+            {
+                "PADDLE_PDX_MODEL_SOURCE": "modelscope",
+                "MINERU_MODEL_SOURCE": "modelscope",
+            },
+        ),
+    ],
+)
+def test_document_parsing_ensure_passes_selected_model_source_to_native_clients(
     tmp_path: Path,
+    model_source_id: str,
+    expected_source_environment: dict[str, str],
 ) -> None:
-    """高级依赖安装后，由上游客户端在 Portable cache 中按需下载模型。"""
+    """Runtime control 仅把选择投影为上游 downloader 的环境变量。"""
     manifest, component = _release(tmp_path / "release")
     product = tmp_path / "product"
-    installer = RuntimeInstaller(
-        product_root=product,
-        component_lock=component,
-        runtime_manifest=manifest,
-        accelerator="cpu",
-        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
-        install_runner=_fake_install,
-        install_component_ids=("document_parsing",),
-        download_source_ids=("tuna-pypi",),
+    control = RuntimeControl.from_installer_factory(
+        lambda **kwargs: RuntimeInstaller(
+            product_root=product,
+            component_lock=component,
+            runtime_manifest=manifest,
+            accelerator="cpu",
+            component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
+            install_runner=_fake_install,
+            **kwargs,
+        )
     )
 
-    launch = installer.ensure()
+    result = control.execute_with_result(
+        operation="ensure",
+        install_component_ids=("document_parsing",),
+        download_source_ids=(model_source_id,),
+    )
+    launch = result.launch
 
     assert launch is not None
+    snapshot = result.receipt["snapshot"]
+    assert snapshot["requested_download_source_ids"] == [model_source_id]
+    assert snapshot["effective_download_source_ids"] == [
+        "tuna-pypi",
+        model_source_id,
+    ]
     state_root = Path(launch.environment["VIBEOCR_RUNTIME_STATE_ROOT"])
     assert Path(launch.model_root) == state_root / "models"
     assert Path(launch.model_root).is_dir()
     assert Path(launch.environment["HF_HOME"]).is_relative_to(state_root)
     assert Path(launch.environment["MODELSCOPE_CACHE"]).is_relative_to(state_root)
     assert Path(launch.environment["PADDLE_PDX_CACHE_HOME"]).is_relative_to(state_root)
+    assert launch.environment["PIP_INDEX_URL"] == (
+        "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+    )
     mineru_config = Path(launch.environment["MINERU_TOOLS_CONFIG_JSON"])
     assert mineru_config == state_root / "config" / "mineru.json"
     assert mineru_config.parent.is_dir()
     assert not mineru_config.exists()
     assert {
-        "VIBEOCR_MODEL_ROOT",
-        "VIBEOCR_RESOLVED_MODELS",
-        "PADDLE_PDX_MODEL_SOURCE",
-        "MINERU_MODEL_SOURCE",
-    }.isdisjoint(launch.environment)
+        key: launch.environment[key] for key in expected_source_environment
+    } == expected_source_environment
+    assert "VIBEOCR_MODEL_ROOT" not in launch.environment
+    assert "VIBEOCR_RESOLVED_MODELS" not in launch.environment

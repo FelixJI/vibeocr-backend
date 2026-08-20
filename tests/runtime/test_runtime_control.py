@@ -110,7 +110,9 @@ def test_retry_reuses_source_intent_and_links_new_operation(
     )
     control = object.__new__(RuntimeControl)
     control._store = store
-    control._installer = lambda: type("Installer", (), {"manifest": object()})()  # type: ignore[method-assign]
+    control._installer = lambda **_kwargs: type(  # type: ignore[method-assign]
+        "Installer", (), {"manifest": object()}
+    )()
     monkeypatch.setattr(
         "vibeocr.backend.runtime_control.runtime_source_identity",
         lambda _manifest: source_identity,
@@ -138,9 +140,9 @@ def test_retry_reuses_source_intent_and_links_new_operation(
             "source_operation_id": "op-1",
             "profile_id": "win-x64-cpu",
             # retry 省略选择字段：source intent 未携带 install/source，
-            # 传 None / 空集由 installer 解析为 Backend 缺省。
+            # 传 None 由 installer 解析为 Backend 缺省。
             "install_component_ids": None,
-            "download_source_ids": (),
+            "download_source_ids": None,
         }
     ]
 
@@ -613,7 +615,17 @@ def test_pending_retry_with_running_operation_replays_retryable_busy_failure(
     )
     control = object.__new__(RuntimeControl)
     control._store = store
-    control._installer = lambda: type("Installer", (), {"manifest": object()})()  # type: ignore[method-assign]
+
+    class Installer:
+        manifest = object()
+
+        def durable_selection_fields(self) -> dict[str, list[str] | None]:
+            return {
+                "download_source_ids": ["tuna-pypi"],
+                "requested_download_source_ids": None,
+            }
+
+    control._installer = lambda **_kwargs: Installer()  # type: ignore[method-assign]
     monkeypatch.setattr(
         "vibeocr.backend.runtime_control.runtime_source_identity",
         lambda _manifest: source_identity,
@@ -622,7 +634,12 @@ def test_pending_retry_with_running_operation_replays_retryable_busy_failure(
 
     def execute(**_kwargs) -> dict:  # type: ignore[no-untyped-def]
         calls.append("called")
-        retry_intent = {**intent, "source_operation_id": "op-1"}
+        retry_intent = {
+            **intent,
+            "source_operation_id": "op-1",
+            "download_source_ids": ["tuna-pypi"],
+            "requested_download_source_ids": None,
+        }
         started = store.start("op-2", retry_intent, source_operation_id="op-1")
         assert started.snapshot is not None
         return {
@@ -681,7 +698,9 @@ def _retry_control_with_failed_source_operation(
     )
     control = object.__new__(RuntimeControl)
     control._store = store
-    control._installer = lambda: type("Installer", (), {"manifest": object()})()  # type: ignore[method-assign]
+    control._installer = lambda **_kwargs: type(  # type: ignore[method-assign]
+        "Installer", (), {"manifest": object()}
+    )()
     monkeypatch.setattr(
         "vibeocr.backend.runtime_control.runtime_source_identity",
         lambda _manifest: source_identity,
@@ -696,7 +715,7 @@ def _retry_control_with_failed_source_operation(
     return control, calls
 
 
-def test_retry_reuses_selection_intent_when_omitted(
+def test_retry_reuses_legacy_effective_source_when_requested_field_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     control, calls = _retry_control_with_failed_source_operation(
@@ -712,6 +731,7 @@ def test_retry_reuses_selection_intent_when_omitted(
             "download_source_ids": ["pypi"],
         },
     )
+    assert "requested_download_source_ids" not in control._store.intent("op-1")
     assert control.command(
         command_id="retry-1",
         command="retry",

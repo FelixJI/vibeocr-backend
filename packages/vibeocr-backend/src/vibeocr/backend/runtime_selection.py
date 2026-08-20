@@ -22,6 +22,7 @@ from vibeocr.backend.runtime_manifest import (
 from vibeocr.runtime_contracts import ErrorCode
 
 DOWNLOAD_SOURCE_KIND_PACKAGE_INDEX = "package_index"
+DOWNLOAD_SOURCE_KIND_MODEL_REGISTRY = "model_registry"
 
 # 可选组件目录只描述 full 档位：base 档位的闭包是必备项，不可选择。
 VARIANT_ACCELERATORS = ("cpu", "nvidia_cuda")
@@ -29,7 +30,8 @@ BASE_PROFILE = "win-x64-base"
 
 # Backend release 声明的候选源。Protocol 允许同 kind 多候选；单次选择
 # TUNA 是发布/运行时默认 package index，官方 PyPI 保留为显式候选，
-# 不做静默 fallback。模型下载源由 PaddleX/MinerU 原生下载器自行管理。
+# 不做静默 fallback。模型源选择只投影到 PaddleX/MinerU 官方环境值；
+# 上游原生 downloader 继续拥有模型下载与文件生命周期。
 _DOWNLOAD_SOURCES: tuple[dict[str, str], ...] = (
     {
         "kind": DOWNLOAD_SOURCE_KIND_PACKAGE_INDEX,
@@ -41,8 +43,29 @@ _DOWNLOAD_SOURCES: tuple[dict[str, str], ...] = (
         "id": "pypi",
         "endpoint": get_pip_mirror("international"),
     },
+    {
+        "kind": DOWNLOAD_SOURCE_KIND_MODEL_REGISTRY,
+        "id": "huggingface",
+        "endpoint": "https://huggingface.co",
+    },
+    {
+        "kind": DOWNLOAD_SOURCE_KIND_MODEL_REGISTRY,
+        "id": "modelscope",
+        "endpoint": "https://www.modelscope.cn",
+    },
 )
 _DEFAULT_DOWNLOAD_SOURCE_IDS = ("tuna-pypi",)
+
+_MODEL_SOURCE_ENVIRONMENT: dict[str, dict[str, str]] = {
+    "huggingface": {
+        "PADDLE_PDX_MODEL_SOURCE": "huggingface",
+        "MINERU_MODEL_SOURCE": "huggingface",
+    },
+    "modelscope": {
+        "PADDLE_PDX_MODEL_SOURCE": "modelscope",
+        "MINERU_MODEL_SOURCE": "modelscope",
+    },
+}
 
 
 class RuntimeSelectionError(ValueError):
@@ -79,10 +102,18 @@ class ResolvedRuntimeSelection:
     def effective_download_source_ids(self) -> tuple[str, ...]:
         return tuple(source.source_id for source in self.effective_download_sources)
 
-    def durable_intent_fields(self) -> dict[str, list[str]]:
-        return normalized_selection_fields(
+    def model_source_environment(self) -> dict[str, str]:
+        """Project an optional source preference into official native client env."""
+        for source in self.effective_download_sources:
+            if source.kind == DOWNLOAD_SOURCE_KIND_MODEL_REGISTRY:
+                return dict(_MODEL_SOURCE_ENVIRONMENT[source.source_id])
+        return {}
+
+    def durable_intent_fields(self) -> dict[str, list[str] | None]:
+        return durable_selection_fields(
             install_component_ids=self.requested_component_ids,
-            download_source_ids=self.effective_download_source_ids,
+            requested_download_source_ids=self.requested_download_source_ids,
+            effective_download_source_ids=self.effective_download_source_ids,
         )
 
 
@@ -170,7 +201,9 @@ class RuntimeSelectionPolicy:
             else self._default_download_source_ids
         )
         effective_source_ids = (
-            default_sources if requested_sources is None else requested_sources
+            default_sources
+            if requested_sources is None
+            else self._overlay_source_ids(default_sources, requested_sources)
         )
         selected = set(effective_source_ids)
         return ResolvedRuntimeSelection(
@@ -215,6 +248,23 @@ class RuntimeSelectionPolicy:
             source.source_id
             for source in self._sources
             if source.source_id in requested_set
+        )
+
+    def _overlay_source_ids(
+        self,
+        defaults: tuple[str, ...],
+        requested: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        by_id = {source.source_id: source for source in self._sources}
+        requested_kinds = {by_id[source_id].kind for source_id in requested}
+        selected = set(requested)
+        selected.update(
+            source_id
+            for source_id in defaults
+            if by_id[source_id].kind not in requested_kinds
+        )
+        return tuple(
+            source.source_id for source in self._sources if source.source_id in selected
         )
 
     @staticmethod
@@ -315,12 +365,24 @@ def download_source_catalog_payload(
     entries = list(_DOWNLOAD_SOURCES if sources is None else sources)
     seen_ids: set[str] = set()
     for source in entries:
-        if source["kind"] != DOWNLOAD_SOURCE_KIND_PACKAGE_INDEX:
+        source_kind = source["kind"]
+        if source_kind not in {
+            DOWNLOAD_SOURCE_KIND_PACKAGE_INDEX,
+            DOWNLOAD_SOURCE_KIND_MODEL_REGISTRY,
+        }:
             raise RuntimeSelectionError(
                 ErrorCode.VALIDATION_ERROR,
-                f"unsupported download source kind: {source['kind']}",
+                f"unsupported download source kind: {source_kind}",
             )
         source_id = source["id"]
+        if (
+            source_kind == DOWNLOAD_SOURCE_KIND_MODEL_REGISTRY
+            and source_id not in _MODEL_SOURCE_ENVIRONMENT
+        ):
+            raise RuntimeSelectionError(
+                ErrorCode.VALIDATION_ERROR,
+                f"unsupported model registry source id: {source_id}",
+            )
         # Protocol 只要求 source id 唯一；同 kind 可以声明多个候选，
         # “package_index 至多选一个”属于单次 selection 的约束。
         if source_id in seen_ids:
@@ -420,6 +482,25 @@ def normalized_selection_fields(
     return fields
 
 
+def durable_selection_fields(
+    *,
+    install_component_ids: Sequence[str] | None,
+    requested_download_source_ids: Sequence[str] | None,
+    effective_download_source_ids: Sequence[str],
+) -> dict[str, list[str] | None]:
+    """Persist source request presence separately from its effective overlay."""
+    fields: dict[str, list[str] | None] = normalized_selection_fields(
+        install_component_ids=install_component_ids,
+        download_source_ids=effective_download_source_ids,
+    )
+    fields["requested_download_source_ids"] = (
+        None
+        if requested_download_source_ids is None
+        else sorted(requested_download_source_ids)
+    )
+    return fields
+
+
 def normalize_install_component_ids(
     install_component_ids: Sequence[str] | None,
     *,
@@ -453,6 +534,7 @@ def normalize_install_component_ids(
 __all__ = [
     "BASE_PROFILE",
     "BoundDownloadSource",
+    "DOWNLOAD_SOURCE_KIND_MODEL_REGISTRY",
     "DOWNLOAD_SOURCE_KIND_PACKAGE_INDEX",
     "ResolvedRuntimeSelection",
     "RuntimeSelectionError",
@@ -461,6 +543,7 @@ __all__ = [
     "component_variant_catalog_payload",
     "default_download_sources",
     "download_source_catalog_payload",
+    "durable_selection_fields",
     "normalize_download_source_ids",
     "normalize_install_component_ids",
     "normalized_selection_fields",
