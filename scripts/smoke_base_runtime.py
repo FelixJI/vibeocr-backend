@@ -214,16 +214,16 @@ def _wait_for_ocr(url: str, token: str, job_id: str) -> None:
         }
         snapshot = update.get("snapshot")
         state = snapshot.get("state") if isinstance(snapshot, dict) else None
-        if state == "succeeded":
+        if state == "completed":
             outcomes = update.get("outcomes")
             if not isinstance(outcomes, list) or not outcomes:
-                raise BaseRuntimeSmokeError("RapidOCR succeeded without an outcome")
+                raise BaseRuntimeSmokeError("RapidOCR completed without an outcome")
             payload = outcomes[0].get("payload")
             raw_text = payload.get("raw_text") if isinstance(payload, dict) else None
             if not isinstance(raw_text, str) or not raw_text.strip():
                 raise BaseRuntimeSmokeError("RapidOCR returned no recognized text")
             return
-        if state in {"failed", "cancelled"}:
+        if state in {"completed_with_errors", "failed", "cancelled"}:
             raise BaseRuntimeSmokeError(f"RapidOCR terminal state: {state}")
         time.sleep(0.1)
     detail = json.dumps(last_status, ensure_ascii=False, sort_keys=True)

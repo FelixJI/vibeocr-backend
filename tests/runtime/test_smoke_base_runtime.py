@@ -63,3 +63,19 @@ def test_rapidocr_timeout_reports_last_job_state(monkeypatch) -> None:
     message = str(exc_info.value)
     assert '"state": "running"' in message
     assert '"event_type": "batch_plan"' in message
+
+
+def test_rapidocr_completed_job_accepts_successful_outcome(monkeypatch) -> None:
+    clock = iter((0.0, 0.0))
+    monkeypatch.setattr(smoke_base_runtime.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        smoke_base_runtime,
+        "_json_request",
+        lambda *_args, **_kwargs: {
+            "snapshot": {"state": "completed", "stage": "queued"},
+            "events": [{"sequence": 7, "stage": "done"}],
+            "outcomes": [{"payload": {"raw_text": "VibeOCR"}}],
+        },
+    )
+
+    smoke_base_runtime._wait_for_ocr("http://127.0.0.1:1", "token", "job")
