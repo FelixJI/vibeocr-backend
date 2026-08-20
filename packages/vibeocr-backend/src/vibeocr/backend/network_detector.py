@@ -1,10 +1,9 @@
-"""统一网络检测模块
+"""统一网络检测模块。
 
-并行探测模型源端点，结果持久化到 cache.json，7 天有效期。
+并行探测网络端点，结果持久化到 cache.json，供依赖下载选择使用。
 """
 
 import contextlib
-import os
 import ssl
 import threading
 import time
@@ -34,11 +33,6 @@ _PIP_MIRRORS = {
     "international": "https://pypi.org/simple",
 }
 
-# 源映射
-_PADDLEX_SOURCES = {"domestic": "bos", "international": "huggingface"}
-_PADDLEX_ENV_VALUES = {"bos": "BOS", "huggingface": "HuggingFace"}
-_MINERU_SOURCES = {"domestic": "modelscope", "international": "huggingface"}
-
 
 def get_pip_mirror(network_type: Literal["domestic", "international"]) -> str:
     """返回显式网络 profile 对应的 pip simple index。"""
@@ -51,8 +45,6 @@ class NetworkDetector:
     def __init__(self, project_root: Path, force_detect: bool = False) -> None:
         self._project_root = project_root
         self._network_type: Literal["domestic", "international"] = "domestic"
-        self._paddlex_source: str = "bos"
-        self._mineru_source: str = "modelscope"
 
         if force_detect:
             self._detect()
@@ -62,20 +54,6 @@ class NetworkDetector:
     @property
     def network_type(self) -> Literal["domestic", "international"]:
         return self._network_type
-
-    @property
-    def paddlex_source(self) -> str:
-        return self._paddlex_source
-
-    @property
-    def paddlex_source_env(self) -> str:
-        value = _PADDLEX_ENV_VALUES[self._paddlex_source]
-        os.environ["PADDLE_PDX_MODEL_SOURCE"] = value
-        return value
-
-    @property
-    def mineru_source(self) -> str:
-        return self._mineru_source
 
     @property
     def pip_mirror_url(self) -> str:
@@ -102,14 +80,13 @@ class NetworkDetector:
         if not last_detected:
             return False
         detected_time = datetime.fromisoformat(last_detected)
-        return datetime.now() - detected_time < timedelta(days=CACHE_TTL_DAYS)
+        return network.get("network_type") in {
+            "domestic",
+            "international",
+        } and datetime.now() - detected_time < timedelta(days=CACHE_TTL_DAYS)
 
     def _apply_cache(self, network: dict) -> None:
-        self._paddlex_source = network["paddlex_source"]
-        self._mineru_source = network["mineru_source"]
-        self._network_type = (
-            "domestic" if self._paddlex_source == "bos" else "international"
-        )
+        self._network_type = network["network_type"]
 
     def _detect(self) -> None:
         results: dict[str, float] = {}
@@ -152,16 +129,13 @@ class NetworkDetector:
         else:
             self._network_type = "domestic"
 
-        self._paddlex_source = _PADDLEX_SOURCES[self._network_type]
-        self._mineru_source = _MINERU_SOURCES[self._network_type]
         self._save_to_cache()
 
     def _save_to_cache(self) -> None:
         cache = load_cache(self._project_root) or {}
         cache["network"] = {
             "last_detected": datetime.now().isoformat(),
-            "paddlex_source": self._paddlex_source,
-            "mineru_source": self._mineru_source,
+            "network_type": self._network_type,
         }
         # 仅在缓存已具备 machine_id 时保留；不补写 version（旧 fallback 写 1
         # 会污染当前 CACHE_VERSION）。无 machine_id 的空缓存说明从未经过

@@ -84,7 +84,7 @@ def _known_onednn_pir_error() -> NotImplementedError:
         ),
     ],
 )
-def test_legacy_pipeline_factory_consumes_verified_local_binding(
+def test_legacy_pipeline_factory_delegates_model_discovery_to_paddle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     pipeline: OCRPipeline,
@@ -123,8 +123,7 @@ def test_legacy_pipeline_factory_consumes_verified_local_binding(
 
         service._create_pipeline(pipeline)
 
-        assert captured["device"] == "cpu"
-        assert captured[binding_key] == str(model_dir)
+        assert captured == {"device": "cpu", "enable_mkldnn": False}
     finally:
         SingletonMeta.reset_instance(OCRService)
 

@@ -20,11 +20,9 @@ class LayoutError(ValueError):
 class RuntimeStorePaths:
     product_root: Path
     store_root: Path
-    models_root: Path
     locks_root: Path
     state_root: Path
     runtime_root: Path
-    model_root: Path
     shared: bool
 
 
@@ -155,7 +153,7 @@ def resolve_runtime_store(
     layout_manifest: str | Path | None = None,
     product_id: str | None = None,
 ) -> RuntimeStorePaths:
-    """Resolve the single mutable runtime and persistent model store.
+    """Resolve the single mutable Runtime store.
 
     With no explicit ``layout_manifest`` the store is entirely inside the
     product directory.  Shared storage is enabled only when both the manifest
@@ -178,43 +176,17 @@ def resolve_runtime_store(
             raise LayoutError("product_id requires an explicit layout_manifest")
         store = product
 
-    models = store / "models"
     locks = store / "locks"
     state = store / "state"
     runtime = store / "runtime"
-    model = models
     return RuntimeStorePaths(
         product_root=product,
         store_root=store,
-        models_root=models,
         locks_root=locks,
         state_root=state,
         runtime_root=runtime,
-        model_root=model,
         shared=shared,
     )
-
-
-def resolve_model_path(
-    paths: RuntimeStorePaths,
-    *,
-    provider: str,
-    model: str,
-    version: str,
-    artifact_sha256: str,
-) -> Path:
-    """Return a content-addressed model directory."""
-    for field, value in {
-        "provider": provider,
-        "model": model,
-        "version": version,
-    }.items():
-        _safe_relative(value, field=field)
-        if len(PurePath(value).parts) != 1:
-            raise LayoutError(f"{field} must be one path component")
-    if not _SHA256_RE.fullmatch(artifact_sha256):
-        raise LayoutError("artifact_sha256 must be lowercase SHA-256")
-    return paths.models_root / provider / f"{model}@{version}" / artifact_sha256
 
 
 __all__ = [
@@ -222,6 +194,5 @@ __all__ = [
     "LayoutError",
     "RuntimeStorePaths",
     "resolve_app_paths",
-    "resolve_model_path",
     "resolve_runtime_store",
 ]

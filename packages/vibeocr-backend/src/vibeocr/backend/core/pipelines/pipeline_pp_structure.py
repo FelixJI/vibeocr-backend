@@ -105,9 +105,7 @@ def _create_pp_structure_pipeline(device: str, **kwargs: Any) -> Any:
     额外 kwargs 透传给 PPStructureV3（例如 enable_mkldnn）。
     """
     from paddleocr import PPStructureV3
-    from vibeocr.backend.model_registry import local_model_kwargs_for_pipeline
 
-    kwargs.update(local_model_kwargs_for_pipeline("PP-StructureV3"))
     return PPStructureV3(device=device, **kwargs)
 
 

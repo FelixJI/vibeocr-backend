@@ -20,13 +20,13 @@
 > 接受 wire `engine` 字段（wire schema 已允许），`_extract_engine_selection`
 > seam 保留至上游修复**。PaddleOCR 引擎的 `required_component` 修正为真实
 > 可选组件 `document_parsing`（原占位 `full-cpu` 不在 component-selection
-> 目录中）。模型 registry acquisition、`ResolvedModelSet` 与 Paddle/MinerU
-> 本地绑定 seam 已实现；`document_parsing` 缺 release-bound 清单时 fail closed。
-> 仍待产品 Owner 先决策 PaddleOCR-VL 1.5/1.6、PP-StructureV3 chart/seal
-> 闭包与 MinerU 三段回退，再提供各仓不可变 revision、文件集合、size/checksum
-> 后生成生产 `model-assets.json`；详见[正式生产模型资产闭包调查](model-assets-production-closure-research.md)。
-> full 离线 inference、B0.3 隔离机验证与 B7 正式
-> Release 交接也尚未完成。
+> 目录中）。高级 Paddle/PaddleX/MinerU/CUDA 依赖仍由 Runtime installer 按档位
+> 安装；模型则交给 PaddleX/MinerU 原生 downloader 管理。Backend 只在启动环境中
+> 提供 Portable `HF_HOME`、`MODELSCOPE_CACHE`、`PADDLE_PDX_CACHE_HOME` 与
+> `MINERU_TOOLS_CONFIG_JSON` 路径，不选择模型源，也不解析、校验或修复模型内部文件。
+> Protocol v2 必填的 `RuntimeLaunch.model_root` 继续返回 `state/models` 绝对路径，但它
+> 只是 Classic/Next 兼容所需的 legacy opaque response，不代表 Backend 拥有模型存储。
+> B0.3 隔离机验证与 B7 正式 Release 交接尚未完成。
 
 ## 1. 当前事实与目标
 
@@ -44,8 +44,8 @@
   PaddleOCR 与 MinerU 等重依赖不进入 base 进程搜索路径。
 
 本轮目标是在不把推理实现移出 Backend 的前提下，补齐三个选择面：OCR 请求选择具体
-引擎；用户按 feature/accelerator 选择可选重组件；用户选择 package index/model
-registry，且每次安装操作拥有稳定的 source intent。
+引擎；用户按 feature/accelerator 选择可选重组件；用户选择 package index，且每次
+安装操作拥有稳定的 source intent。高级模型的源与内部生命周期不属于该选择面。
 
 非目标：Protocol 不决定产品显示文案、镜像优先级和默认源；前端不解析依赖闭包；
 不新增第二套安装事件或重建状态机；不把 full CPU/CUDA 闭包做成 Backend Release
@@ -73,13 +73,13 @@ registry，且每次安装操作拥有稳定的 source intent。
 | `PipelineSelection.engine` | job adapter 解析后交给 OCR resolver | 仅纯文本 `OCR` pipeline 有效；未知/不可用/需准备均 fail closed，不回退 |
 | `runtime.component-selection.v1` / `component_variant_catalog` | 当前 Backend Release 的 manifest/component lock 生成 `feature_id + accelerator -> component_id` | `feature_id` 是能力族，不等同 OCR engine；MinerU 不能被命名为 OCR engine |
 | `install_component_ids` | ensure/retry 的可选组件意图 | 省略=Backend 默认；`[]`=明确只保留 base；未知 id 返回 `RUNTIME_COMPONENT_UNKNOWN` |
-| `runtime.download-sources.v1` / `download_source_catalog` | Backend 配置声明稳定 source id、开放 kind、endpoint | catalog 可有同 kind 多候选；单次选择每种 kind 至多一个；数组顺序无优先级；未知 id 返回 `DOWNLOAD_SOURCE_UNKNOWN` |
+| `runtime.download-sources.v1` / `download_source_catalog` | Backend 声明 package index 的稳定 id 与 endpoint | catalog 可有多个 package index 候选；单次至多选择一个；未知 id 返回 `DOWNLOAD_SOURCE_UNKNOWN` |
 | Settings `download_source_ids` | 持久化用户默认偏好 | 省略=Backend 声明的默认源，不在 Protocol 写死“official” |
 | maintenance `download_source_ids` | start/retry 显式覆盖并固化本次 operation source intent | 仅 ensure/retry 合法；省略时在开始瞬间快照当前 Settings/Backend default |
 | `requested_*` / `effective_*` | durable operation status 回显规范化前后的组件与源 | observe、SSE、receipt、runtime status 必须一致，重启后可恢复 |
 
-`DownloadSourceKind` 是开放 response string。Backend 可新增 kind，但旧前端只应展示已
-理解的 kind，并原样保留未知值；不得因为未知 kind 导致整个 health 响应反序列化失败。
+`DownloadSourceKind` 在 Protocol 中仍是开放 response string，但 Backend 当前只发布
+`package_index`；模型下载源由上游原生 downloader 自行管理。
 
 JSON Schema 的 `uniqueItems` 只能拒绝重复字符串/完全相同对象，不能证明 source id
 跨 kind 唯一或 `(feature_id, accelerator)` 唯一。因此 catalog builder 必须以业务键做
@@ -107,7 +107,7 @@ Host 三条 adapter 的共同 seam：
 - 从 manifest/lock 构建并验证 component/source catalog。
 - 规范化 profile、component 与 source intent。
 - 区分 `None`（省略）和空 component list（base only）。
-- 检查每种 source kind 至多一个，并将 endpoint 解析留在 Backend 内部。
+- 检查 package index 至多一个，并将 endpoint 解析留在 Backend 内部。
 - 输出不可变的 normalized intent，交给 durable operation store 持久化。
 
 推荐落点为 `runtime_selection.py`（纯领域/校验）和已有
@@ -175,13 +175,12 @@ full 组件不得在第一次 OCR 时懒下载；不得随每次前端更新重�
   默认，官方 PyPI 为显式候选；lock 不嵌入 index 指令，宿主 pip/uv 配置被隔离。
 - 下载、缓存、空间预检、取消、断点后的显式 retry、原子切换与失败回滚复用 durable
   maintenance，不做无依据的自动重试。
-- 已完成代码 seam：model registry 只用于模型资产；严格 manifest 与逐文件完整性校验
-  后返回 `ResolvedModelSet`，PaddleOCR/PPStructureV3/PaddleOCRVL 与 MinerU 显式消费
-  本地路径；缺清单的 `document_parsing` 不再成功空跑。
-- 待完成发布事实：产品 Owner 需先决策 PaddleOCR-VL 版本、PP-StructureV3 chart/seal
-  闭包及 MinerU 三段回退，再提供各仓不可变 revision、精确文件/size/checksum；据此生成
-  生产清单并执行 CPU/CUDA full 离线 inference。后续新增 feature 时同步增加精确
-  scope/lock，不回退为“任一非空选择即完整 profile”。
+- 已完成：PaddleOCR/PPStructureV3/PaddleOCRVL 与 MinerU 使用上游原生模型 downloader；
+  Backend 不注入本地模型 kwargs、不生成 MinerU `models-dir`，也不做模型 acquisition/
+  repair。Portable cache/config 根均落在 Runtime state；MinerU 配置文件内容由 MinerU
+  自行创建和维护。
+- 后续新增 feature 时同步增加精确 dependency scope/lock，不回退为“任一非空选择即
+  完整 profile”，也不在 Backend 中重建上游模型 manifest。
 
 ### B7：正式 Release 与三仓交接
 
@@ -200,8 +199,8 @@ full 组件不得在第一次 OCR 时懒下载；不得随每次前端更新重�
   `component_id` 唯一（`document_parsing` 合法出现在 cpu 与 nvidia_cuda 两个
   variant，协议仅 MUST 约束业务键，比原文的“component id 全局唯一”更准确）；
   base 必备组件不进入可选目录。
-- source id 全局唯一；catalog 允许同 kind 多候选，单次 selection 每 kind 至多一个；
-  未知开放 kind 可序列化但不成为默认可选项。
+- source id 全局唯一；catalog 只发布 package index 候选，单次 selection 至多一个；
+  模型 registry id 作为未知来源 fail closed。
 - Settings omission、source selection、同 kind 冲突和未知 id；operation start 时的快照竞态。
 - component `None`、`[]`、非空、unknown；ensure/retry 合法，inspect/repair/cancel 非法。
 - retry 省略复用旧 intent、显式重选产生新 intent；重启恢复后 requested/effective 不变。
@@ -211,6 +210,8 @@ full 组件不得在第一次 OCR 时懒下载；不得随每次前端更新重�
 - 禁网 clean-machine 安装 base，首次 RapidOCR 与基础 PDF 成功且没有网络调用。
 - full CPU/CUDA 未选择时零下载；选择后只下载 normalized closure；取消、下载中断、
   hash-lock 不匹配、空间不足时保持 base 可用。
+- 高级 pipeline 首次调用时由原生 downloader 在 Portable cache/config 根按需取得模型；
+  Backend 不生成第二套模型清单或修复状态。
 - Settings 在安装期间改变不影响该 operation，后续 operation 才采用新默认。
 - Classic/Next fixture 发出的相同 intent 得到相同 effective component/source 集合。
 - `.ci/project.json` 的 quality、E2E、release build、release smoke 全部通过；正式门禁以

@@ -10,9 +10,6 @@ from __future__ import annotations
 import gc
 import io
 import logging
-import os
-import sys
-import types
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -23,38 +20,6 @@ if TYPE_CHECKING:
     from vibeocr.backend.models.ocr_result import TextBlock
 
 _logger = logging.getLogger(__name__)
-
-
-def _isolate_unused_modelscope_import() -> bool:
-    """Keep Paddle's process free of Torch when ModelScope is not selected.
-
-    PaddleX 3.7 imports ``modelscope`` unconditionally while defining all
-    possible model hosters.  ModelScope imports Torch at module import time,
-    even when the configured OCR model source is HuggingFace/BOS/AIStudio.
-    On Windows, Paddle GPU and Torch then load competing cuDNN copies in the
-    same process and one of them fails with ``WinError 127``.
-
-    MinerU/Torch already runs in a supervisor-owned child process.  For the
-    Paddle process, install a deliberately unusable placeholder only when
-    ModelScope is not the configured hoster.  An explicit ModelScope choice is
-    left untouched so the downloader is never silently faked.
-    """
-    source = os.environ.get("PADDLE_PDX_MODEL_SOURCE", "huggingface").lower()
-    if source == "modelscope" or "modelscope" in sys.modules:
-        return False
-
-    placeholder = types.ModuleType("modelscope")
-
-    def unavailable(*args: Any, **kwargs: Any) -> None:
-        del args, kwargs
-        raise RuntimeError(
-            "ModelScope is disabled in the Paddle process; choose "
-            "PADDLE_PDX_MODEL_SOURCE=modelscope to enable it explicitly."
-        )
-
-    placeholder.snapshot_download = unavailable  # type: ignore[attr-defined]
-    sys.modules["modelscope"] = placeholder
-    return True
 
 
 @dataclass
@@ -80,13 +45,10 @@ def _create_ocr_pipeline(device: str, **kwargs: Any) -> Any:
     大显存卡 GPU 占用仅 20-40%；这里在 GPU 模式给一个较大的批量以喂满 GPU。
     调用方显式传入该参数时不覆盖。
     """
-    _isolate_unused_modelscope_import()
     from paddleocr import PaddleOCR
-    from vibeocr.backend.model_registry import local_model_kwargs_for_pipeline
 
     if device == "gpu" and "text_recognition_batch_size" not in kwargs:
         kwargs["text_recognition_batch_size"] = 8
-    kwargs.update(local_model_kwargs_for_pipeline("OCR"))
     return PaddleOCR(device=device, **kwargs)
 
 

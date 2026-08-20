@@ -79,24 +79,31 @@ def test_download_source_catalog_declares_default_and_unique_business_keys() -> 
     ids = [source["id"] for source in sources]
     assert len(set(ids)) == len(ids)
     assert [source["id"] for source in default_download_sources()] == ["tuna-pypi"]
-    assert {source["id"] for source in sources} == {
-        "tuna-pypi",
-        "pypi",
-        "huggingface",
-        "modelscope",
-    }
+    assert {source["id"] for source in sources} == {"tuna-pypi", "pypi"}
+    assert {source["kind"] for source in sources} == {"package_index"}
     for source in sources:
         assert set(source) == {"kind", "id", "endpoint"}
         assert source["endpoint"].startswith("https://")
 
 
-def test_download_source_catalog_rejects_duplicate_ids_but_allows_candidates() -> None:
+def test_download_source_catalog_rejects_duplicate_ids_and_model_sources() -> None:
     duplicate_id = [
         {"kind": "package_index", "id": "pypi", "endpoint": "https://a"},
-        {"kind": "model_registry", "id": "pypi", "endpoint": "https://b"},
+        {"kind": "package_index", "id": "pypi", "endpoint": "https://b"},
     ]
     with pytest.raises(RuntimeSelectionError) as excinfo:
         download_source_catalog_payload(duplicate_id)
+    assert excinfo.value.code is ErrorCode.VALIDATION_ERROR
+
+    model_source = [
+        {
+            "kind": "model_registry",
+            "id": "huggingface",
+            "endpoint": "https://huggingface.co",
+        }
+    ]
+    with pytest.raises(RuntimeSelectionError) as excinfo:
+        download_source_catalog_payload(model_source)
     assert excinfo.value.code is ErrorCode.VALIDATION_ERROR
 
     same_kind_candidates = [
@@ -183,11 +190,6 @@ def test_selection_policy_canonicalizes_sources_and_rejects_same_kind() -> None:
                 "id": "mirror",
                 "endpoint": "https://mirror.invalid/simple",
             },
-            {
-                "kind": "model_registry",
-                "id": "models",
-                "endpoint": "https://models.invalid",
-            },
         ),
         default_download_source_ids=("pypi",),
     )
@@ -195,10 +197,10 @@ def test_selection_policy_canonicalizes_sources_and_rejects_same_kind() -> None:
     resolved = policy.plan_start(
         accelerator="cpu",
         install_component_ids=None,
-        download_source_ids=("models", "pypi"),
+        download_source_ids=("pypi",),
     )
-    assert resolved.requested_download_source_ids == ("pypi", "models")
-    assert resolved.effective_download_source_ids == ("pypi", "models")
+    assert resolved.requested_download_source_ids == ("pypi",)
+    assert resolved.effective_download_source_ids == ("pypi",)
 
     with pytest.raises(RuntimeSelectionError) as excinfo:
         policy.plan_start(

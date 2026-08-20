@@ -259,8 +259,8 @@ class TestStartApi:
             with pytest.raises(RuntimeError, match="超时"):
                 s._start_api()
 
-    def test_modelscope_env_set(self, monkeypatch):
-        """mineru_source == modelscope 且无 MINERU_MODEL_SOURCE → 设置环境变量（line 209）。"""
+    def test_start_api_does_not_select_native_model_source(self, monkeypatch):
+        """MinerU 原生下载器拥有 source 选择，Backend 只透传启动环境。"""
         s = _make_service()
         mock_proc = MagicMock()
         mock_proc.pid = 12345
@@ -295,7 +295,7 @@ class TestStartApi:
             patch.object(MinerUService, "_check_api_running", return_value=True),
         ):
             s._start_api()
-        assert captured_env.get("MINERU_MODEL_SOURCE") == "modelscope"
+        assert "MINERU_MODEL_SOURCE" not in captured_env
 
 
 class TestEnsureApiRunning:
