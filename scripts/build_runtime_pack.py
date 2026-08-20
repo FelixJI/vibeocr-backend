@@ -53,11 +53,26 @@ _DECLARATION_RE = re.compile(r"(?m)^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)")
 _WHEEL_FILENAME_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)-(?P<version>\d[^-]*)-(?P<rest>.+)\.whl$"
 )
-DEFAULT_PACKAGE_INDEX = get_pip_mirror("domestic")
+DEFAULT_PACKAGE_INDEX = get_pip_mirror("international")
+PACKAGE_INDEX_ENV = "VIBEOCR_RUNTIME_PACK_INDEX_URL"
 
 
 def _normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _resolve_package_index(index_url: str | None) -> str:
+    resolved = (
+        index_url
+        if index_url is not None
+        else os.environ.get(
+            PACKAGE_INDEX_ENV,
+            DEFAULT_PACKAGE_INDEX,
+        )
+    )
+    if not resolved.strip():
+        raise ValueError(f"{PACKAGE_INDEX_ENV} must not be empty")
+    return resolved
 
 
 def _lock_hashes(path: Path) -> set[str]:
@@ -117,7 +132,7 @@ def build_runtime_pack(
     work_dir: Path,
     output: Path,
     max_part_bytes: int | None = None,
-    index_url: str = DEFAULT_PACKAGE_INDEX,
+    index_url: str | None = None,
 ) -> list[Path]:
     lock = lock.resolve(strict=True)
     validate_requirements_lock(lock, profile=profile)
@@ -125,6 +140,7 @@ def build_runtime_pack(
         raise ValueError("runtime pack output must be a .zip archive")
     if max_part_bytes is not None and max_part_bytes <= 0:
         raise ValueError("max_part_bytes must be positive")
+    resolved_index_url = _resolve_package_index(index_url)
 
     downloads = work_dir / "downloads"
     wheels = work_dir / "wheels"
@@ -141,7 +157,7 @@ def build_runtime_pack(
             "pip",
             "download",
             "--index-url",
-            index_url,
+            resolved_index_url,
             "--require-hashes",
             "-d",
             str(downloads),
@@ -258,7 +274,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--profile", required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--index-url", default=DEFAULT_PACKAGE_INDEX)
+    parser.add_argument(
+        "--index-url",
+        default=None,
+        help=(
+            f"Package index for closure download (default: official PyPI; "
+            f"local override: {PACKAGE_INDEX_ENV})"
+        ),
+    )
     parser.add_argument(
         "--max-part-bytes",
         type=int,

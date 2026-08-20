@@ -20,8 +20,13 @@
 > 接受 wire `engine` 字段（wire schema 已允许），`_extract_engine_selection`
 > seam 保留至上游修复**。PaddleOCR 引擎的 `required_component` 修正为真实
 > 可选组件 `document_parsing`（原占位 `full-cpu` 不在 component-selection
-> 目录中）。待办：B6 的 model registry/模型资产消费及后续新增 feature 的精确
-> lock，B0.3 隔离机验证，以及 B7 正式 Release 交接。
+> 目录中）。模型 registry acquisition、`ResolvedModelSet` 与 Paddle/MinerU
+> 本地绑定 seam 已实现；`document_parsing` 缺 release-bound 清单时 fail closed。
+> 仍待产品 Owner 先决策 PaddleOCR-VL 1.5/1.6、PP-StructureV3 chart/seal
+> 闭包与 MinerU 三段回退，再提供各仓不可变 revision、文件集合、size/checksum
+> 后生成生产 `model-assets.json`；详见[正式生产模型资产闭包调查](model-assets-production-closure-research.md)。
+> full 离线 inference、B0.3 隔离机验证与 B7 正式
+> Release 交接也尚未完成。
 
 ## 1. 当前事实与目标
 
@@ -30,7 +35,9 @@
 - 稳定 OCR wire id 为 `rapidocr`、`windows`、`paddleocr`；RapidOCR 是新配置的
   Backend 缺省引擎，不可用时不静默切换到另一引擎。
 - `base-offline` 包含 RapidOCR、模型、单份 ONNX Runtime、图片/PDF 基础闭包和
-  Runtime Host；Portable 在断网机器上可完成首次安装与基础 OCR/PDF。
+  Runtime Host；Backend release smoke 已接入依赖客户端 offline flag 与闭合代理、
+  Supervisor、RapidOCR、PDF 与幂等复用脚本。该脚本不等同于 OS 级出站防火墙，
+  真实无网发布包结果仍以 clean-machine CI 门禁为准。
 - `profile_id` 与 accelerator 描述 Runtime 档位，现有 durable maintenance、
   journal、observe/SSE、cancel/retry、组件 repair 继续作为唯一安装状态机。
 - Windows OCR adapter 随 base 提供，系统 OCR/语言包按 Windows 实际能力探测；
@@ -168,8 +175,13 @@ full 组件不得在第一次 OCR 时懒下载；不得随每次前端更新重�
   默认，官方 PyPI 为显式候选；lock 不嵌入 index 指令，宿主 pip/uv 配置被隔离。
 - 下载、缓存、空间预检、取消、断点后的显式 retry、原子切换与失败回滚复用 durable
   maintenance，不做无依据的自动重试。
-- 待完成：model registry 只用于模型资产并建立独立下载 Adapter；后续新增 feature 时
-  同步增加精确 scope/lock，不回退为“任一非空选择即完整 profile”。
+- 已完成代码 seam：model registry 只用于模型资产；严格 manifest 与逐文件完整性校验
+  后返回 `ResolvedModelSet`，PaddleOCR/PPStructureV3/PaddleOCRVL 与 MinerU 显式消费
+  本地路径；缺清单的 `document_parsing` 不再成功空跑。
+- 待完成发布事实：产品 Owner 需先决策 PaddleOCR-VL 版本、PP-StructureV3 chart/seal
+  闭包及 MinerU 三段回退，再提供各仓不可变 revision、精确文件/size/checksum；据此生成
+  生产清单并执行 CPU/CUDA full 离线 inference。后续新增 feature 时同步增加精确
+  scope/lock，不回退为“任一非空选择即完整 profile”。
 
 ### B7：正式 Release 与三仓交接
 

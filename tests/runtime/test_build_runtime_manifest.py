@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from vibeocr.backend.model_registry import ModelAcquisitionError
 from vibeocr.backend.runtime_manifest import (
     ManifestError,
     load_runtime_manifest,
@@ -217,6 +218,99 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
     for filename, digest in checksums.items():
         assert (
             hashlib.sha256((first.parent / filename).read_bytes()).hexdigest() == digest
+        )
+
+
+def test_build_binds_and_verifies_release_model_assets(tmp_path: Path) -> None:
+    inputs = _inputs(tmp_path / "input")
+    model_assets = tmp_path / "input" / "model-assets.json"
+    model_assets.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "release_identity": "0.7.0-" + "a" * 40,
+                "assets": [
+                    {
+                        "engine": "paddleocr",
+                        "name": "fixture-model",
+                        "repository": "fixture/model",
+                        "revision": "pinned",
+                        "consumer": "paddleocr",
+                        "binding_key": "text_recognition_model_dir",
+                        "files": [{"path": "model.bin", "size": 1, "sha256": "0" * 64}],
+                    }
+                ],
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest_path = build_runtime_manifest(
+        **inputs,
+        model_assets=model_assets,
+        backend_version="0.7.0",
+        python_version="3.13.12",
+        python_source_url=(
+            "https://github.com/astral-sh/python-build-standalone/releases/"
+            "download/20260325/"
+            "cpython-3.13.12+20260325-x86_64-pc-windows-msvc"
+            "-install_only.tar.gz"
+        ),
+        source_commit="a" * 40,
+        build_workflow="tests/runtime-manifest",
+        output_dir=tmp_path / "output",
+    )
+    loaded = load_runtime_manifest(manifest_path)
+    assert loaded.model_assets is not None
+    assert loaded.model_assets.manifest_path.name == "model-assets.json"
+
+    loaded.model_assets.manifest_path.write_text("{}", encoding="utf-8")
+    with pytest.raises(ManifestError, match="model assets manifest SHA-256 mismatch"):
+        load_runtime_manifest(manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("release_identity", "assets", "message"),
+    [
+        ("wrong-release", [{"unused": True}], "release identity mismatch"),
+        ("0.7.0-" + "a" * 40, [], "at least one asset"),
+    ],
+)
+def test_build_rejects_unusable_model_assets(
+    tmp_path: Path,
+    release_identity: str,
+    assets: list[dict[str, object]],
+    message: str,
+) -> None:
+    inputs = _inputs(tmp_path / "input")
+    model_assets = tmp_path / "input" / "model-assets.json"
+    model_assets.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "release_identity": release_identity,
+                "assets": assets,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises((ModelAcquisitionError, ValueError), match=message):
+        build_runtime_manifest(
+            **inputs,
+            model_assets=model_assets,
+            backend_version="0.7.0",
+            python_version="3.13.12",
+            python_source_url=(
+                "https://github.com/astral-sh/python-build-standalone/releases/"
+                "download/20260325/"
+                "cpython-3.13.12+20260325-x86_64-pc-windows-msvc"
+                "-install_only.tar.gz"
+            ),
+            source_commit="a" * 40,
+            build_workflow="tests/runtime-manifest",
+            output_dir=tmp_path / "output",
         )
 
 

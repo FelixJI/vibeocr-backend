@@ -130,6 +130,10 @@ $manifestArgs = @(
   '--build-workflow', 'github.com/FelixJI/vibeocr-backend/.github/workflows/release.yml',
   '--output-dir', $artifacts
 )
+$modelAssets = Join-Path $root 'release/model-assets.json'
+if (Test-Path -LiteralPath $modelAssets -PathType Leaf) {
+  $manifestArgs += @('--model-assets', $modelAssets)
+}
 python @manifestArgs
 if ($LASTEXITCODE -ne 0) { throw 'Runtime manifest build failed' }
 Remove-Item -LiteralPath (Join-Path $artifacts 'SHA256SUMS') -Force

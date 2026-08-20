@@ -117,7 +117,7 @@ def test_pack_build_two_phase_download_wheel_and_zip(
     download_command = calls[0]
     assert "--require-hashes" in download_command
     assert download_command[download_command.index("--index-url") + 1] == (
-        "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+        "https://pypi.org/simple"
     )
     assert str(lock) in download_command
     for child_environment in environments:
@@ -166,6 +166,54 @@ def test_pack_build_two_phase_download_wheel_and_zip(
         hashlib.sha256(output.read_bytes()).hexdigest()
         == hashlib.sha256(second.read_bytes()).hexdigest()
     )
+
+
+def test_pack_build_accepts_scoped_environment_index_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mirror = "https://local-mirror.example.invalid/simple"
+    monkeypatch.setenv("VIBEOCR_RUNTIME_PACK_INDEX_URL", mirror)
+    calls = _install_fake_pip(
+        monkeypatch,
+        {"rapidocr-3.9.2-py3-none-any.whl": _WHEEL_BYTES},
+    )
+
+    build_runtime_pack(
+        lock=_base_lock(tmp_path),
+        profile="win-x64-base",
+        work_dir=tmp_path / "work",
+        output=tmp_path / "pack.zip",
+    )
+
+    download = calls[0]
+    assert download[download.index("--index-url") + 1] == mirror
+
+
+def test_pack_build_explicit_index_overrides_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "VIBEOCR_RUNTIME_PACK_INDEX_URL",
+        "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/",
+    )
+    calls = _install_fake_pip(
+        monkeypatch,
+        {"rapidocr-3.9.2-py3-none-any.whl": _WHEEL_BYTES},
+    )
+    explicit = "https://packages.example.invalid/simple"
+
+    build_runtime_pack(
+        lock=_base_lock(tmp_path),
+        profile="win-x64-base",
+        work_dir=tmp_path / "work",
+        output=tmp_path / "pack.zip",
+        index_url=explicit,
+    )
+
+    download = calls[0]
+    assert download[download.index("--index-url") + 1] == explicit
 
 
 def test_pack_build_fails_when_wheel_coverage_is_incomplete(

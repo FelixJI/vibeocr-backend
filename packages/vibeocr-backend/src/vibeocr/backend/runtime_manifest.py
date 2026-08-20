@@ -156,6 +156,12 @@ class InstallerArtifact:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelAssetsArtifact:
+    manifest_path: Path
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeManifest:
     path: Path
     sha256: str
@@ -170,6 +176,7 @@ class RuntimeManifest:
     protocol_sha256: str
     python: PythonRuntime
     installer: InstallerArtifact
+    model_assets: ModelAssetsArtifact | None
     profiles: dict[str, RuntimeProfile]
     capabilities: tuple[str, ...]
     source_commit: str
@@ -473,6 +480,24 @@ def load_runtime_manifest(
             field="installer.executable_sha256",
         ),
     )
+    model_assets_data = data.get("model_assets")
+    model_assets: ModelAssetsArtifact | None = None
+    if model_assets_data is not None:
+        if not isinstance(model_assets_data, dict):
+            raise ManifestError("model_assets binding is invalid")
+        model_assets_name = _relative_filename(
+            model_assets_data.get("manifest"),
+            field="model_assets.manifest",
+        )
+        if model_assets_name != "model-assets.json":
+            raise ManifestError("model_assets.manifest must be model-assets.json")
+        model_assets = ModelAssetsArtifact(
+            manifest_path=manifest_path.parent / model_assets_name,
+            sha256=_sha256(
+                model_assets_data.get("sha256"),
+                field="model_assets.sha256",
+            ),
+        )
     profiles_data = data.get("profiles")
     if not isinstance(profiles_data, dict) or set(profiles_data) != set(PROFILE_NAMES):
         raise ManifestError(
@@ -723,6 +748,11 @@ def load_runtime_manifest(
         )
         if actual_executable_sha != installer_artifact.executable_sha256:
             raise ManifestError("Installer executable SHA-256 mismatch")
+        if (
+            model_assets is not None
+            and sha256_file(model_assets.manifest_path) != model_assets.sha256
+        ):
+            raise ManifestError("model assets manifest SHA-256 mismatch")
     return RuntimeManifest(
         path=manifest_path,
         sha256=hashlib.sha256(raw_bytes).hexdigest(),
@@ -737,6 +767,7 @@ def load_runtime_manifest(
         protocol_sha256=protocol_sha,
         python=python_runtime,
         installer=installer_artifact,
+        model_assets=model_assets,
         profiles=profiles,
         capabilities=tuple(capabilities),
         source_commit=source_commit,
@@ -751,6 +782,7 @@ __all__ = [
     "PROFILE_COMPONENTS",
     "InstallerArtifact",
     "ManifestError",
+    "ModelAssetsArtifact",
     "PythonRuntime",
     "RuntimeManifest",
     "RuntimeComponent",

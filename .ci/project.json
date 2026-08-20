@@ -62,6 +62,11 @@
         "python",
         "scripts/verify_runtime_installer_artifact.py",
         "{artifacts_dir}"
+      ],
+      [
+        "python",
+        "scripts/smoke_base_runtime.py",
+        "{artifacts_dir}"
       ]
     ]
   },

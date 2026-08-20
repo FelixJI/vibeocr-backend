@@ -211,7 +211,9 @@ def _create_paddlocr_vl_pipeline(device: str, **kwargs: Any) -> Any:
     额外 kwargs 透传给 PaddleOCRVL（例如 enable_mkldnn）。
     """
     from paddleocr import PaddleOCRVL
+    from vibeocr.backend.model_registry import local_model_kwargs_for_pipeline
 
+    kwargs.update(local_model_kwargs_for_pipeline("PaddleOCR-VL"))
     return PaddleOCRVL(device=device, **kwargs)
 
 
