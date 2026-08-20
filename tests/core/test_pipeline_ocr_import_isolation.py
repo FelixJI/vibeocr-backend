@@ -6,10 +6,7 @@ import types
 from pathlib import Path
 
 import pytest
-from vibeocr.backend.core.pipelines.pipeline_ocr import (
-    _create_ocr_pipeline,
-    _isolate_unused_modelscope_import,
-)
+from vibeocr.backend.core.pipelines.pipeline_ocr import _create_ocr_pipeline
 from vibeocr.backend.core.pipelines.pipeline_paddlocr_vl import (
     _create_paddlocr_vl_pipeline,
 )
@@ -18,7 +15,7 @@ from vibeocr.backend.core.pipelines.pipeline_pp_structure import (
 )
 
 
-def test_create_ocr_pipeline_consumes_verified_local_model_binding(
+def test_create_ocr_pipeline_delegates_model_discovery_to_paddle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -32,6 +29,8 @@ def test_create_ocr_pipeline_consumes_verified_local_model_binding(
         encoding="utf-8",
     )
     monkeypatch.setenv("VIBEOCR_RESOLVED_MODELS", str(binding))
+    monkeypatch.setenv("PADDLE_PDX_MODEL_SOURCE", "huggingface")
+    monkeypatch.delitem(sys.modules, "modelscope", raising=False)
     captured: dict[str, object] = {}
 
     def paddle_ocr(**kwargs: object) -> object:
@@ -46,8 +45,8 @@ def test_create_ocr_pipeline_consumes_verified_local_model_binding(
 
     _create_ocr_pipeline("cpu")
 
-    assert captured["device"] == "cpu"
-    assert captured["text_recognition_model_dir"] == str(model_dir)
+    assert captured == {"device": "cpu"}
+    assert "modelscope" not in sys.modules
 
 
 @pytest.mark.parametrize(
@@ -67,7 +66,7 @@ def test_create_ocr_pipeline_consumes_verified_local_model_binding(
         ),
     ],
 )
-def test_document_pipeline_factories_consume_verified_local_model_binding(
+def test_document_pipeline_factories_delegate_model_discovery_to_paddle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     factory: object,
@@ -98,38 +97,4 @@ def test_document_pipeline_factories_consume_verified_local_model_binding(
     assert callable(factory)
     factory("cpu")
 
-    assert captured == {"device": "cpu", binding_key: str(model_dir)}
-
-
-def test_non_modelscope_source_installs_non_torch_placeholder(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("PADDLE_PDX_MODEL_SOURCE", "huggingface")
-    monkeypatch.delitem(sys.modules, "modelscope", raising=False)
-
-    assert _isolate_unused_modelscope_import() is True
-
-    placeholder = sys.modules["modelscope"]
-    with pytest.raises(RuntimeError, match="disabled in the Paddle process"):
-        placeholder.snapshot_download("unused")  # type: ignore[attr-defined]
-
-
-def test_explicit_modelscope_source_is_never_stubbed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("PADDLE_PDX_MODEL_SOURCE", "modelscope")
-    monkeypatch.delitem(sys.modules, "modelscope", raising=False)
-
-    assert _isolate_unused_modelscope_import() is False
-    assert "modelscope" not in sys.modules
-
-
-def test_existing_modelscope_module_is_preserved(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sentinel = object()
-    monkeypatch.setenv("PADDLE_PDX_MODEL_SOURCE", "huggingface")
-    monkeypatch.setitem(sys.modules, "modelscope", sentinel)  # type: ignore[arg-type]
-
-    assert _isolate_unused_modelscope_import() is False
-    assert sys.modules["modelscope"] is sentinel
+    assert captured == {"device": "cpu"}

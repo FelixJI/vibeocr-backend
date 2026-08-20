@@ -23,16 +23,6 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from vibeocr.backend.model_registry import (
-    ModelAcquisitionError,
-    ModelAsset,
-    ResolvedModelSet,
-    acquire_models,
-    load_model_assets,
-    load_resolved_models,
-    model_assets_config_path,
-    model_source_environment,
-)
 from vibeocr.backend.runtime_layout import resolve_runtime_store
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_maintenance import (
@@ -565,7 +555,6 @@ class RuntimeInstaller:
         self.product_root = Path(product_root).resolve()
         self.component_lock_path = Path(component_lock).resolve()
         self.manifest = load_runtime_manifest(runtime_manifest)
-        self._resolved_models: ResolvedModelSet | None = None
         self.component_lock = _load_component_lock(self.component_lock_path)
         self.paths = resolve_runtime_store(
             self.product_root,
@@ -888,7 +877,6 @@ class RuntimeInstaller:
         environment = {
             "VIBEOCR_PRODUCT_ROOT": str(self.product_root),
             "VIBEOCR_RUNTIME_ROOT": str(self.paths.runtime_root),
-            "VIBEOCR_MODEL_ROOT": str(self.paths.models_root),
             "VIBEOCR_RUNTIME_MANIFEST": str(self.manifest.path),
             "VIBEOCR_COMPONENT_LOCK": str(self.component_lock_path),
             "VIBEOCR_RUNTIME_ACCELERATOR": self.accelerator,
@@ -906,6 +894,8 @@ class RuntimeInstaller:
             "UV_CACHE_DIR": str(state / "cache" / "uv"),
             "HF_HOME": str(state / "cache" / "huggingface"),
             "MODELSCOPE_CACHE": str(state / "cache" / "modelscope"),
+            "PADDLE_PDX_CACHE_HOME": str(state / "cache" / "paddlex"),
+            "MINERU_TOOLS_CONFIG_JSON": str(state / "config" / "mineru.json"),
             "TEMP": str(state / "temp"),
             "TMP": str(state / "temp"),
             "PIP_CONFIG_FILE": os.devnull,
@@ -921,116 +911,7 @@ class RuntimeInstaller:
         )
         if package_indexes:
             environment["PIP_INDEX_URL"] = package_indexes[0].endpoint
-        model_registry = next(
-            (
-                source
-                for source in self._selection.effective_download_sources
-                if source.kind == "model_registry"
-            ),
-            None,
-        )
-        environment.update(
-            model_source_environment(
-                source_id=model_registry.source_id if model_registry else None,
-                state_root=state,
-                models_root=self.paths.models_root,
-                resolved_models=self._resolved_models_for_launch(),
-            )
-        )
         return environment
-
-    def _model_release_identity(self) -> str:
-        return f"{self.manifest.backend_version}-{self.manifest.source_commit}"
-
-    def _model_assets(self) -> tuple[ModelAsset, ...]:
-        assets_path = (
-            self.manifest.model_assets.manifest_path
-            if self.manifest.model_assets is not None
-            else model_assets_config_path(self.paths.state_root)
-        )
-        assets = load_model_assets(
-            assets_path,
-            expected_release_identity=self._model_release_identity(),
-        )
-        if not assets:
-            raise ModelAcquisitionError(
-                "document_parsing requires a model assets manifest"
-            )
-        return assets
-
-    def _resolved_models_for_launch(self) -> ResolvedModelSet | None:
-        if "document_parsing" not in self._installed_scope_ids():
-            return None
-        if self._resolved_models is None:
-            self._resolved_models = load_resolved_models(
-                self.paths.state_root / "config" / "resolved-models.json",
-                assets=self._model_assets(),
-                expected_release_identity=self._model_release_identity(),
-                models_root=self.paths.models_root,
-            )
-        return self._resolved_models
-
-    def _acquire_models(self, *, verify_existing_integrity: bool = False) -> None:
-        """把声明的模型资产纳入同一 durable 操作，本地已就绪则直接复用。"""
-        release_identity = self._model_release_identity()
-        assets = self._model_assets()
-        model_registry = next(
-            (
-                source
-                for source in self._selection.effective_download_sources
-                if source.kind == "model_registry"
-            ),
-            None,
-        )
-        if model_registry is None:
-            raise ModelAcquisitionError(
-                "model assets are declared but no model_registry source is selected"
-            )
-        self._reporter.advance(
-            phase="install_profile",
-            current=4,
-            total=7,
-            message_code="runtime.install_models",
-            component_id="document_parsing",
-        )
-
-        last_publication = 0.0
-        publication_interval = 1.0
-
-        def report_bytes(progress) -> None:
-            nonlocal last_publication
-            now = time.monotonic()
-            completed = bool(progress.total and progress.current >= progress.total)
-            if not completed and now - last_publication < publication_interval:
-                return
-            last_publication = now
-            if progress.total:
-                self._reporter.advance_measured(
-                    phase="install_profile",
-                    unit="bytes",
-                    current=progress.current,
-                    total=progress.total,
-                    message_code="runtime.install_models",
-                    component_id="document_parsing",
-                )
-            else:
-                self._reporter.heartbeat(message_code="runtime.install_models")
-
-        def check_cancel() -> None:
-            # ModelProgress 每个 chunk 调用，取消检测不与 durable 发布频率耦合。
-            self._reporter.check_cancelled()
-
-        self._resolved_models = acquire_models(
-            assets=assets,
-            release_identity=release_identity,
-            source_id=model_registry.source_id,
-            endpoint=model_registry.endpoint,
-            models_root=self.paths.models_root,
-            progress_listener=report_bytes,
-            cancel_check=check_cancel,
-            verify_existing_integrity=verify_existing_integrity,
-        )
-        self._reporter.heartbeat(message_code="runtime.install_models")
 
     def ensure(self) -> RuntimeLaunch | None:
         # ready 额外要求已安装闭包等于期望闭包：从 base-only 扩到 full
@@ -1072,8 +953,6 @@ class RuntimeInstaller:
                     total=7,
                     message_code="runtime.verify_runtime",
                 )
-            if "document_parsing" in self._active_install_ids:
-                self._acquire_models()
             self._save_preference()
             launch = self._launch()
             self._reporter.succeed(
@@ -1203,8 +1082,6 @@ class RuntimeInstaller:
         try:
             if not needs_repair:
                 if globally_ready:
-                    if "document_parsing" in self._installed_scope_ids():
-                        self._acquire_models(verify_existing_integrity=True)
                     self._save_preference()
                 launch = self._launch() if globally_ready else None
                 self._reporter.succeed(
@@ -1226,8 +1103,6 @@ class RuntimeInstaller:
             )
             with lock:
                 self._install_locked(self._installed_scope_ids())
-            if "document_parsing" in self._installed_scope_ids():
-                self._acquire_models(verify_existing_integrity=True)
             self._save_preference()
             launch = self._launch()
             self._reporter.succeed(
@@ -1250,12 +1125,12 @@ class RuntimeInstaller:
         directory_keys = {
             "VIBEOCR_PRODUCT_ROOT",
             "VIBEOCR_RUNTIME_ROOT",
-            "VIBEOCR_MODEL_ROOT",
             "VIBEOCR_RUNTIME_STATE_ROOT",
             "PIP_CACHE_DIR",
             "UV_CACHE_DIR",
             "HF_HOME",
             "MODELSCOPE_CACHE",
+            "PADDLE_PDX_CACHE_HOME",
             "TEMP",
             "TMP",
         }
@@ -1264,11 +1139,17 @@ class RuntimeInstaller:
             path = Path(directory)
             if path.is_absolute() and directory.startswith(str(self.paths.store_root)):
                 path.mkdir(parents=True, exist_ok=True)
+        Path(environment["MINERU_TOOLS_CONFIG_JSON"]).parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        model_root = Path(environment["VIBEOCR_RUNTIME_STATE_ROOT"]) / "models"
+        model_root.mkdir(parents=True, exist_ok=True)
         return RuntimeLaunch(
             python_executable=str(_python_in(self.paths.runtime_root)),
             supervisor_module="vibeocr.backend.supervisor.main",
             working_directory=str(self.product_root),
-            model_root=str(self.paths.models_root),
+            model_root=str(model_root),
             environment=environment,
         )
 

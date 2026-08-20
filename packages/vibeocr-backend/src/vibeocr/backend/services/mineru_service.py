@@ -206,14 +206,6 @@ class MinerUService(metaclass=SingletonMeta):
         ]
 
         env = os.environ.copy()
-        from vibeocr.backend.env_manager import get_project_root
-        from vibeocr.backend.network_detector import NetworkDetector
-
-        detector = NetworkDetector(get_project_root())
-        if detector.mineru_source == "modelscope" and not env.get(
-            "MINERU_MODEL_SOURCE"
-        ):
-            env["MINERU_MODEL_SOURCE"] = "modelscope"
 
         self.__class__._api_process = subprocess.Popen(
             cmd,

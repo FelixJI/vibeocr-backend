@@ -12,11 +12,6 @@ from pathlib import Path
 
 import pytest
 from vibeocr.backend import runtime_maintenance
-from vibeocr.backend.model_registry import (
-    ModelAcquisitionError,
-    ResolvedModel,
-    ResolvedModelSet,
-)
 from vibeocr.backend.runtime_control import RuntimeControl
 from vibeocr.backend.runtime_installer import (
     RuntimeInstaller,
@@ -49,16 +44,6 @@ from vibeocr.backend.runtime_selection import BoundDownloadSource
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def _skip_model_acquisition(
-    installer: RuntimeInstaller,
-    **_kwargs: object,
-) -> None:
-    installer._resolved_models = ResolvedModelSet(  # noqa: SLF001
-        installer._model_release_identity(),  # noqa: SLF001
-        (),
-    )
 
 
 def _lock_text(profile: str) -> str:
@@ -466,11 +451,11 @@ def test_ensure_is_atomic_and_idempotent(tmp_path: Path) -> None:
     portable_path_keys = {
         "VIBEOCR_PRODUCT_ROOT",
         "VIBEOCR_RUNTIME_ROOT",
-        "VIBEOCR_MODEL_ROOT",
         "PIP_CACHE_DIR",
         "UV_CACHE_DIR",
         "HF_HOME",
         "MODELSCOPE_CACHE",
+        "PADDLE_PDX_CACHE_HOME",
         "TEMP",
         "TMP",
     }
@@ -480,6 +465,7 @@ def test_ensure_is_atomic_and_idempotent(tmp_path: Path) -> None:
     )
     assert first.environment["PIP_CONFIG_FILE"] == os.devnull
     assert first.environment["PYTHONNOUSERSITE"] == "1"
+    assert Path(first.environment["MINERU_TOOLS_CONFIG_JSON"]).parent.is_dir()
     assert first.environment["VIBEOCR_RUNTIME_ACCELERATOR"] == "cpu"
     assert first.environment["VIBEOCR_USE_GPU"] == "false"
 
@@ -837,7 +823,6 @@ def test_failed_operation_id_replays_failure_without_reexecuting(
 def test_component_repair_reports_requested_and_effective_scope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", _skip_model_acquisition)
     manifest, component = _release(tmp_path / "release")
     calls: list[Path] = []
 
@@ -881,7 +866,6 @@ def test_component_drift_uses_installed_distribution_and_selected_repair(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", _skip_model_acquisition)
     manifest, component_lock = _release(tmp_path / "release")
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     manifest_payload["profiles"]["win-x64-cpu"]["components"] = [
@@ -1675,7 +1659,6 @@ def test_install_probe_uses_actual_install_scope_profile(
     expected_profile: str,
     expected_ocr_import: str,
 ) -> None:
-    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", _skip_model_acquisition)
     manifest, component = _release(tmp_path / "release")
 
     def probe(
@@ -1779,7 +1762,6 @@ def test_ensure_with_optional_components_reports_full_profile_closure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", _skip_model_acquisition)
     manifest, component = _release(tmp_path / "release")
     seen_profiles: list[str] = []
 
@@ -1810,7 +1792,6 @@ def test_ensure_with_optional_components_reports_full_profile_closure(
 def test_ensure_reinstalls_when_scope_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", _skip_model_acquisition)
     manifest, component = _release(tmp_path / "release")
     calls: list[Path] = []
 
@@ -1955,8 +1936,6 @@ def test_full_scope_drift_still_probes_with_plan_binding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """full（含可选组件）安装的漂移探测仍使用 accelerator 的 plan 绑定。"""
-
-    monkeypatch.setattr(RuntimeInstaller, "_acquire_models", _skip_model_acquisition)
 
     manifest, component = _release(tmp_path / "release")
     probe_profiles: list[str] = []
@@ -2115,69 +2094,11 @@ def test_drift_projection_uses_covering_profile_declared_versions(
     assert installer._drifted_component_ids() == ()
 
 
-def test_document_parsing_ensure_acquires_models_with_selected_registry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_document_parsing_ensure_delegates_models_to_native_clients(
+    tmp_path: Path,
 ) -> None:
-    """模型 acquisition 纳入 durable ensure,并把源映射进推理环境。"""
-    from vibeocr.backend import model_registry as model_registry_module
-    from vibeocr.backend import runtime_installer as installer_module
-
+    """高级依赖安装后，由上游客户端在 Portable cache 中按需下载模型。"""
     manifest, component = _release(tmp_path / "release")
-
-    def fake_run(command, *, timeout, env, reporter, heartbeat_code):  # type: ignore[no-untyped-def]
-        return None
-
-    def fake_extract_python(archive_path, destination, *, progress=None):  # type: ignore[no-untyped-def]
-        (destination / "python.exe").write_bytes(b"python")
-
-    monkeypatch.setattr(installer_module, "_run_install_command", fake_run)
-    monkeypatch.setattr(
-        installer_module, "_extract_python_archive", fake_extract_python
-    )
-
-    acquired: list[dict[str, object]] = []
-
-    def fake_acquire(**kwargs: object) -> ResolvedModelSet:
-        acquired.append(kwargs)
-        (asset,) = kwargs["assets"]  # type: ignore[unreachable]
-        target = kwargs["models_root"] / asset.engine / asset.target_dirname  # type: ignore[operator]
-        target.mkdir(parents=True, exist_ok=True)
-        (target / asset.files[0]).write_bytes(b"model")  # type: ignore[index]
-        model_registry_module._write_ready_marker(  # noqa: SLF001
-            target,
-            asset,
-            "0.7.0-" + "0" * 40,
-        )
-        return ResolvedModelSet(
-            "0.7.0-" + "0" * 40,
-            (
-                ResolvedModel(
-                    key=f"{asset.engine}/{asset.name}",
-                    consumer=asset.consumer,
-                    binding_key=asset.binding_key,
-                    root=target,
-                ),
-            ),
-        )
-
-    monkeypatch.setattr(installer_module, "acquire_models", fake_acquire)
-
-    missing_manifest = RuntimeInstaller(
-        product_root=tmp_path / "product-missing-manifest",
-        component_lock=component,
-        runtime_manifest=manifest,
-        accelerator="cpu",
-        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
-        install_component_ids=("document_parsing",),
-        download_source_ids=("tuna-pypi", "huggingface"),
-        operation_id="document-model-ensure",
-    )
-    with pytest.raises(
-        ModelAcquisitionError,
-        match="document_parsing requires a model assets manifest",
-    ):
-        missing_manifest.ensure()
-
     product = tmp_path / "product"
     installer = RuntimeInstaller(
         product_root=product,
@@ -2185,84 +2106,27 @@ def test_document_parsing_ensure_acquires_models_with_selected_registry(
         runtime_manifest=manifest,
         accelerator="cpu",
         component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
+        install_runner=_fake_install,
         install_component_ids=("document_parsing",),
-        download_source_ids=("tuna-pypi", "huggingface"),
-        operation_id="document-model-ensure",
-    )
-    assets_file = product / "state" / "config" / "model-assets.json"
-    assets_file.parent.mkdir(parents=True, exist_ok=True)
-    assets_file.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "release_identity": "0.7.0-" + "0" * 40,
-                "assets": [
-                    {
-                        "engine": "paddleocr",
-                        "name": "PP-OCRv5-server",
-                        "repository": "PaddlePaddle/PP-OCRv5-server",
-                        "revision": "v1",
-                        "files": [
-                            {
-                                "path": "inference.pdmodel",
-                                "size": 5,
-                                "sha256": "0" * 64,
-                            }
-                        ],
-                        "consumer": "paddleocr",
-                        "binding_key": "text_recognition_model_dir",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+        download_source_ids=("tuna-pypi",),
     )
 
     launch = installer.ensure()
 
     assert launch is not None
-    assert len(acquired) == 1
-    assert acquired[0]["source_id"] == "huggingface"
-    assert acquired[0]["endpoint"] == "https://huggingface.co"
-    assert launch.environment["PADDLE_PDX_MODEL_SOURCE"] == "huggingface"
-    assert launch.environment["MINERU_MODEL_SOURCE"] == "huggingface"
-    assert Path(launch.environment["VIBEOCR_RESOLVED_MODELS"]).is_file()
+    state_root = Path(launch.environment["VIBEOCR_RUNTIME_STATE_ROOT"])
+    assert Path(launch.model_root) == state_root / "models"
+    assert Path(launch.model_root).is_dir()
+    assert Path(launch.environment["HF_HOME"]).is_relative_to(state_root)
+    assert Path(launch.environment["MODELSCOPE_CACHE"]).is_relative_to(state_root)
+    assert Path(launch.environment["PADDLE_PDX_CACHE_HOME"]).is_relative_to(state_root)
     mineru_config = Path(launch.environment["MINERU_TOOLS_CONFIG_JSON"])
-    assert mineru_config.is_file()
-    assert json.loads(mineru_config.read_text(encoding="utf-8"))["models-dir"]
-
-    def unexpected_acquire(**_kwargs: object) -> ResolvedModelSet:
-        raise AssertionError("replayed ensure must load the persisted binding")
-
-    monkeypatch.setattr(installer_module, "acquire_models", unexpected_acquire)
-    replayed = RuntimeInstaller(
-        product_root=product,
-        component_lock=component,
-        runtime_manifest=manifest,
-        accelerator="cpu",
-        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
-        install_component_ids=("document_parsing",),
-        download_source_ids=("tuna-pypi", "huggingface"),
-        operation_id="document-model-ensure",
-    ).ensure()
-    assert replayed is not None
-    assert (
-        replayed.environment["VIBEOCR_RESOLVED_MODELS"]
-        == launch.environment["VIBEOCR_RESOLVED_MODELS"]
-    )
-
-    # base-only 闭包不触发模型 acquisition(无 document_parsing)。
-    monkeypatch.setattr(installer_module, "acquire_models", fake_acquire)
-    acquired.clear()
-    base_installer = RuntimeInstaller(
-        product_root=tmp_path / "product-base",
-        component_lock=component,
-        runtime_manifest=manifest,
-        accelerator="cpu",
-        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
-        install_component_ids=(),
-        download_source_ids=("tuna-pypi", "huggingface"),
-    )
-    base_launch = base_installer.ensure()
-    assert base_launch is not None
-    assert acquired == []
+    assert mineru_config == state_root / "config" / "mineru.json"
+    assert mineru_config.parent.is_dir()
+    assert not mineru_config.exists()
+    assert {
+        "VIBEOCR_MODEL_ROOT",
+        "VIBEOCR_RESOLVED_MODELS",
+        "PADDLE_PDX_MODEL_SOURCE",
+        "MINERU_MODEL_SOURCE",
+    }.isdisjoint(launch.environment)

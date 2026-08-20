@@ -291,10 +291,7 @@ def _parse_uv_lock(lock_path: Path) -> dict[str, str]:
 
 
 def detect_network_source() -> Literal["domestic", "international"]:
-    """检测网络类型（委托 NetworkDetector）
-
-    注意：返回值用于选择 pip 镜像、PaddleX/MinerU 模型源。
-    """
+    """检测网络类型（委托 NetworkDetector），用于选择依赖下载源。"""
     from vibeocr.backend.network_detector import NetworkDetector as _ND
 
     detector = _ND(get_project_root())
