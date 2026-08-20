@@ -1285,6 +1285,13 @@ def _emit(value: object) -> None:
     print(json.dumps(value, ensure_ascii=False, sort_keys=True))
 
 
+def _configure_utf8_standard_streams() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
+
+
 def _request(value: object) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RuntimeInstallError("Runtime Host request must be a JSON object")
@@ -1654,6 +1661,7 @@ def _failure_envelope(
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_utf8_standard_streams()
     parser = argparse.ArgumentParser(prog="vibeocr-runtime-installer")
     parser.add_argument("--request-json")
     args = parser.parse_args(argv)

@@ -5,6 +5,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -993,6 +994,56 @@ def test_runtime_host_json_contract_selects_and_persists_accelerator(
         "sunset_at": None,
         "replacement": None,
     }
+
+
+def test_runtime_host_emits_unicode_paths_as_utf8(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = io.BytesIO()
+    stdout = io.TextIOWrapper(output, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", stdout)
+    moved_root = tmp_path / "移动后"
+    request = {
+        "protocol_version": 2,
+        "operation": "inspect",
+        "product_root": str(moved_root),
+        "component_lock": str(moved_root / "component-lock.json"),
+        "runtime_manifest": str(moved_root / "runtime-manifest.json"),
+    }
+
+    assert main(["--request-json", json.dumps(request, ensure_ascii=False)]) == 1
+
+    stdout.flush()
+    envelope = json.loads(output.getvalue().decode("utf-8"))
+    assert envelope["ok"] is False
+    assert moved_root.name in envelope["error"]["message"]
+
+
+def test_runtime_host_allows_standard_streams_without_reconfigure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    assert main(["--request-json", "not-json"]) == 1
+
+    assert json.loads(stdout.getvalue())["error"]["code"] == "invalid_request"
+
+
+def test_runtime_host_does_not_swallow_stdout_write_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingWriter:
+        def write(self, _value: str) -> None:
+            raise OSError("stdout unavailable")
+
+    monkeypatch.setattr(sys, "stdout", FailingWriter())
+    monkeypatch.setattr(sys, "stderr", None)
+
+    with pytest.raises(OSError, match="stdout unavailable"):
+        main(["--request-json", "not-json"])
 
 
 def test_runtime_host_emits_opt_in_ndjson_progress(
