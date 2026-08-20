@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.1
+
+### Bug Fixes
+
+- **runtime:** 闭合模型资产与离线发布门禁 (#58) (9a3ba62)
+
 ## 0.13.0
 
 ### Features
