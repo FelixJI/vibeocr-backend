@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.2
+
+### Bug Fixes
+
+- **runtime:** 恢复模型源浅层选择 (#64) (79dd972)
+- **runtime:** 交还上游模型管理 (#63) (ad82b25)
+
 ## 0.13.1
 
 ### Bug Fixes
