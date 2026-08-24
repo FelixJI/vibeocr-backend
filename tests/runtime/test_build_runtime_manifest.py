@@ -50,7 +50,7 @@ def _inputs(root: Path) -> dict[str, Path]:
         "cu126_lock": root / "requirements-win-x64-cu126.lock",
         "cu126_gpu_lock": root / "requirements-win-x64-cu126-gpu.lock",
         "python_archive": root / "cpython-3.13.12-win_amd64.tar.gz",
-        "installer_archive": root / "vibeocr-runtime-installer-0.7.0.zip",
+        "installer_archive": root / "vibeocr-runtime-installer-v0.7.0-win-x64.zip",
     }
     values["backend_wheel"].write_bytes(b"backend")
     values["protocol_wheel"].write_bytes(b"protocol")

@@ -21,7 +21,7 @@ def package_runtime_installer(
 ) -> Path:
     executable = executable.resolve(strict=True)
     output_dir.mkdir(parents=True, exist_ok=True)
-    target = output_dir / f"vibeocr-runtime-installer-{backend_version}.zip"
+    target = output_dir / f"vibeocr-runtime-installer-v{backend_version}-win-x64.zip"
     info = zipfile.ZipInfo(
         "runtime-installer/vibeocr-runtime-installer.exe",
         date_time=FIXED_ZIP_TIME,

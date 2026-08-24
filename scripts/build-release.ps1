@@ -95,7 +95,7 @@ $backendWheel = Get-ChildItem -LiteralPath $build -Filter "vibeocr_backend-$Vers
 $protocolWheel = Get-ChildItem -LiteralPath $protocol `
   -Filter "vibeocr_runtime_contracts-$protocolVersion-*.whl" |
   Select-Object -First 1
-$installerArchive = Get-ChildItem -LiteralPath $build -Filter "vibeocr-runtime-installer-$Version.zip" |
+$installerArchive = Get-ChildItem -LiteralPath $build -Filter "vibeocr-runtime-installer-v$Version-win-x64.zip" |
   Select-Object -First 1
 # 离线 wheel 闭包：只发布 base pack（RapidOCR 缺省闭包，随 Portable 携带
 # 禁网安装）。full-cpu / full-cu126 不发 pack 资产（维护者决策,2026-08-16）：

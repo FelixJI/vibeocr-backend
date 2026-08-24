@@ -18,7 +18,7 @@ def _sha(value: bytes) -> str:
 
 def test_frozen_runtime_installer_inspects_bound_release(tmp_path: Path) -> None:
     executable_bytes = b"frozen-installer"
-    archive_name = "vibeocr-runtime-installer-0.10.0.zip"
+    archive_name = "vibeocr-runtime-installer-v0.10.0-win-x64.zip"
     member_name = "runtime-installer/vibeocr-runtime-installer.exe"
     with zipfile.ZipFile(tmp_path / archive_name, mode="w") as archive:
         archive.writestr(member_name, executable_bytes)

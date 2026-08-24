@@ -106,7 +106,7 @@
       "requirements-win-x64-cu126-gpu.lock",
       "vibeocr_backend-*.whl",
       "vibeocr_runtime_contracts-2.*.whl",
-      "vibeocr-runtime-installer-*.zip",
+      "vibeocr-runtime-installer-v*-win-x64.zip",
       "vibeocr-runtime-pack-win-x64-base-*.zip"
     ],
     "mirrors": [
