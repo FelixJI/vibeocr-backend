@@ -52,5 +52,8 @@ def test_release_verifies_runtime_candidate_after_build() -> None:
     ]
     assert config["release"]["identity_asset"] == "build-identity.json"
     assert "runtime-manifest.json" in config["release"]["required_assets"]
-    assert "vibeocr-runtime-installer-*.zip" in config["release"]["required_assets"]
+    assert (
+        "vibeocr-runtime-installer-v*-win-x64.zip"
+        in config["release"]["required_assets"]
+    )
     assert "requirements-win-x64-cpu.lock" in build_script

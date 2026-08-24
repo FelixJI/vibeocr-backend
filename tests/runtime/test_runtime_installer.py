@@ -92,7 +92,7 @@ def _release(root: Path, *, with_base_pack: bool = False) -> tuple[Path, Path]:
     )
     python_archive = root / "cpython-3.13.12-win_amd64-install_only.tar.gz"
     python_archive.write_bytes(b"python-archive")
-    installer_archive = root / "vibeocr-runtime-installer-0.7.0.zip"
+    installer_archive = root / "vibeocr-runtime-installer-v0.7.0-win-x64.zip"
     with zipfile.ZipFile(installer_archive, mode="w") as archive:
         archive.writestr(
             "runtime-installer/vibeocr-runtime-installer.exe",
