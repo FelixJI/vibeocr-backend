@@ -144,12 +144,57 @@ def test_component_variant_catalog_lists_only_selectable_full_components() -> No
         per_accelerator.add(variant["component_id"])
     # base 必备组件不进入可选目录。
     listed = {variant["component_id"] for variant in variants}
-    assert listed == {"document_parsing", "gpu_runtime"}
-    assert selectable_component_ids("cpu") == ("document_parsing",)
-    assert set(selectable_component_ids("nvidia_cuda")) == {
-        "document_parsing",
+    assert listed == {
+        "paddleocr-cpu",
+        "mineru-cpu",
+        "paddleocr-cuda",
+        "mineru-cuda",
         "gpu_runtime",
     }
+    assert selectable_component_ids("cpu") == ("paddleocr-cpu", "mineru-cpu")
+    assert set(selectable_component_ids("nvidia_cuda")) == {
+        "paddleocr-cuda",
+        "mineru-cuda",
+        "gpu_runtime",
+    }
+
+
+def test_component_ids_have_one_meaning_and_legacy_selection_migrates() -> None:
+    from vibeocr.backend.runtime_manifest import (
+        migrate_legacy_component_ids,
+        runtime_component_binding,
+    )
+
+    assert runtime_component_binding("win-x64-base", "runtime_host").import_name == (
+        "fastapi"
+    )
+    for profile in ("win-x64-base", "win-x64-cpu", "win-x64-cu126"):
+        assert runtime_component_binding(profile, "rapidocr-base").import_name == (
+            "rapidocr"
+        )
+    assert (
+        runtime_component_binding("win-x64-cpu", "paddleocr-cpu").import_name
+        == "paddleocr"
+    )
+    assert runtime_component_binding("win-x64-cpu", "mineru-cpu").import_name == (
+        "mineru"
+    )
+    with pytest.raises(Exception, match="binding is missing"):
+        runtime_component_binding("win-x64-base", "ocr_engine")
+
+    assert migrate_legacy_component_ids("win-x64-base", ("ocr_engine",)) == (
+        "rapidocr-base",
+    )
+    assert migrate_legacy_component_ids("win-x64-cpu", ("ocr_engine",)) == (
+        "rapidocr-base",
+        "paddleocr-cpu",
+    )
+    assert migrate_legacy_component_ids(
+        "win-x64-cpu", ("ocr_engine", "document_parsing")
+    ) == ("rapidocr-base", "paddleocr-cpu", "mineru-cpu")
+    assert migrate_legacy_component_ids("win-x64-cu126", ("document_parsing",)) == (
+        "mineru-cuda",
+    )
 
 
 def test_selection_policy_resolves_exact_cuda_dependency_closure() -> None:
@@ -169,7 +214,7 @@ def test_selection_policy_resolves_exact_cuda_dependency_closure() -> None:
     assert gpu_only.requested_component_ids == ("gpu_runtime",)
     assert gpu_only.install_scope.scope_id == "gpu-runtime"
     assert gpu_only.effective_component_ids == (
-        "ocr_engine",
+        "rapidocr-base",
         "pdf_document_tools",
         "image_code_tools",
         "runtime_host",
@@ -177,8 +222,9 @@ def test_selection_policy_resolves_exact_cuda_dependency_closure() -> None:
     )
     assert document_parsing.install_scope.scope_id == "default"
     assert document_parsing.effective_component_ids == (
-        "ocr_engine",
-        "document_parsing",
+        "rapidocr-base",
+        "paddleocr-cuda",
+        "mineru-cuda",
         "pdf_document_tools",
         "image_code_tools",
         "runtime_host",
@@ -301,7 +347,11 @@ def test_normalize_install_component_ids_distinguishes_omission_and_empty() -> N
     assert normalize_install_component_ids((), accelerator="cpu") == ()
     assert normalize_install_component_ids((), accelerator="base") == ()
     assert normalize_install_component_ids(["document_parsing"], accelerator="cpu") == (
-        "document_parsing",
+        "mineru-cpu",
+    )
+    assert normalize_install_component_ids(["ocr_engine"], accelerator="base") == ()
+    assert normalize_install_component_ids(["ocr_engine"], accelerator="cpu") == (
+        "paddleocr-cpu",
     )
 
 

@@ -158,7 +158,13 @@ def test_build_supervisor_keeps_base_ocr_path_without_optional_backends(
         "reason_code": None,
         "required_component": None,
     }
-    module.preload(("OCR",))
+    import pytest
+    from vibeocr.backend.supervisor.inference.recognition_modes import (
+        RecognitionModeError,
+    )
+
+    with pytest.raises(RecognitionModeError):
+        module.preload(("OCR",))
     module.release_idle("OCR")
     assert handle.token  # bootstrap handle should now carry a token
 
@@ -392,6 +398,59 @@ def test_build_ocr_engine_registry_registers_all_stable_engines() -> None:
     # Paddle 必须以惰性句柄注册（导入成本推迟）。
     paddle_engine = registry.get(OcrEngine.PADDLEOCR)
     assert isinstance(paddle_engine, LazyEngineHandle)
+
+
+def test_recognition_mode_catalog_uses_provisioning_specific_components() -> None:
+    from vibeocr.backend.supervisor.inference.ocr_engines import (
+        EngineAvailability,
+        EngineDescriptor,
+        OcrEngineRegistry,
+        OcrEngineResolver,
+    )
+    from vibeocr.runtime_contracts.dtos import OcrEngine
+
+    class _Engine:
+        def __init__(
+            self, engine_id: OcrEngine, availability: EngineAvailability
+        ) -> None:
+            self.engine_id = engine_id
+            self.availability = availability
+
+        def descriptor(self) -> EngineDescriptor:
+            return EngineDescriptor(
+                engine_id=self.engine_id,
+                availability=self.availability,
+                included_in_base=self.engine_id is OcrEngine.RAPIDOCR,
+                reason_code=(
+                    None
+                    if self.availability is EngineAvailability.READY
+                    else "engine_not_installed"
+                ),
+                required_component="legacy-ambiguous-component",
+            )
+
+    rapid = _Engine(OcrEngine.RAPIDOCR, EngineAvailability.UNAVAILABLE)
+    windows = _Engine(OcrEngine.WINDOWS, EngineAvailability.UNAVAILABLE)
+    paddle = _Engine(OcrEngine.PADDLEOCR, EngineAvailability.PREPARATION_REQUIRED)
+    resolver = OcrEngineResolver(OcrEngineRegistry([rapid, windows, paddle]))
+    modes = composition._build_recognition_mode_registry(
+        engine_resolver=resolver,
+        use_paddle=False,
+        use_mineru=False,
+    )
+
+    entries = {item["id"]: item for item in modes.catalog_payload()["modes"]}
+    assert entries["rapid_text"]["availability"] == "preparation_required"
+    assert entries["rapid_text"]["required_component"] == "rapidocr-base"
+    assert entries["windows_text"]["availability"] == "unavailable"
+    assert entries["windows_text"]["required_component"] is None
+    assert entries["paddle_text"]["required_component"] == "paddleocr-cpu"
+
+    rapid.availability = EngineAvailability.READY
+    resolver.invalidate_probe_cache()
+    refreshed = {item["id"]: item for item in modes.catalog_payload()["modes"]}
+    assert refreshed["rapid_text"]["availability"] == "ready"
+    assert refreshed["rapid_text"]["required_component"] is None
 
 
 def test_build_paddle_executor_with_registry_wraps_router(

@@ -18,6 +18,7 @@ from vibeocr.backend.runtime_manifest import (
     RuntimeInstallScope,
     RuntimeManifest,
     RuntimeProfile,
+    migrate_legacy_component_ids,
 )
 from vibeocr.runtime_contracts import ErrorCode
 
@@ -282,7 +283,19 @@ class RuntimeSelectionPolicy:
                 ErrorCode.VALIDATION_ERROR,
                 "install_component_ids must not contain duplicates",
             )
+        legacy_request = any(
+            item in {"ocr_engine", "document_parsing"} for item in requested_tuple
+        )
+        requested_tuple = migrate_legacy_component_ids(profile.name, requested_tuple)
         base_ids = {component.component_id for component in base_profile.components}
+        if legacy_request:
+            # 旧 full ``ocr_engine`` 同时迁移出 rapidocr-base 与 Paddle；前者是
+            # 必备 base closure，不应重新暴露成可选组件请求。
+            requested_tuple = tuple(
+                component_id
+                for component_id in requested_tuple
+                if component_id not in base_ids
+            )
         selectable = tuple(
             component.component_id
             for component in profile.components
@@ -328,6 +341,16 @@ class RuntimeSelectionPolicy:
 
         for component_id in requested:
             include(component_id)
+        # 当前 release 的 Paddle/MinerU 共用一个 full lock；请求身份保持分离，
+        # 实际安装闭包则如实扩成原子 full scope，避免目录列出不可安装的选项。
+        advanced_group = {
+            component.component_id
+            for component in profile.components
+            if component.component_id.startswith(("paddleocr-", "mineru-"))
+        }
+        if selected.intersection(advanced_group):
+            for component_id in advanced_group:
+                include(component_id)
         return tuple(
             component.component_id
             for component in profile.components
@@ -420,7 +443,9 @@ def component_variant_catalog_payload() -> dict[str, Any]:
             business_keys.add(key)
             variants.append(
                 {
-                    "feature_id": component_id,
+                    "feature_id": component_id.removesuffix("-cpu").removesuffix(
+                        "-cuda"
+                    ),
                     "accelerator": accelerator,
                     "component_id": component_id,
                 }
@@ -515,9 +540,27 @@ def normalize_install_component_ids(
     """
     if install_component_ids is None:
         return None
+    requested = tuple(install_component_ids)
+    if len(set(requested)) != len(requested):
+        raise RuntimeSelectionError(
+            ErrorCode.VALIDATION_ERROR,
+            "install_component_ids must not contain duplicates",
+        )
+    legacy_request = any(
+        item in {"ocr_engine", "document_parsing"} for item in requested
+    )
+    plan = ACCELERATOR_TO_PLAN[accelerator]
+    requested = migrate_legacy_component_ids(plan, requested)
+    if legacy_request:
+        base_ids = {
+            component_id for component_id, _ in PROFILE_COMPONENTS[BASE_PROFILE]
+        }
+        requested = tuple(
+            component_id for component_id in requested if component_id not in base_ids
+        )
     selectable = selectable_component_ids(accelerator)
     catalog = selectable_component_ids_across_catalog()
-    for component_id in install_component_ids:
+    for component_id in requested:
         if component_id not in catalog:
             raise RuntimeSelectionError(
                 ErrorCode.RUNTIME_COMPONENT_UNKNOWN,
@@ -528,7 +571,7 @@ def normalize_install_component_ids(
                 ErrorCode.VALIDATION_ERROR,
                 f"install component {component_id} requires a different accelerator",
             )
-    return tuple(install_component_ids)
+    return requested
 
 
 __all__ = [

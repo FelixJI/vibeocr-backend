@@ -292,7 +292,6 @@ def _default_install_runner(
             current=4,
             total=7,
             message_code="runtime.install_profile",
-            component_id="ocr_engine",
         )
     install_command = [
         str(python),
@@ -526,7 +525,6 @@ def _extract_runtime_pack(
             current=4,
             total=7,
             message_code="runtime.extract_pack",
-            component_id="ocr_engine",
         )
     return destination
 
@@ -779,11 +777,8 @@ class RuntimeInstaller:
         installed = self._installed_scope_ids()
         if not installed:
             return ()
-        # 已安装闭包可能来自 base profile（base-only 的 ocr_engine 绑定是
-        # RapidOCR，而 cpu plan 的同名组件绑定 PaddleOCR）。漂移探测的
-        # 组件集、声明版本与 import 绑定都必须按已安装 scope 的覆盖
-        # profile 投影；否则成功的 base-only 安装会被 plan descriptor 的
-        # 版本比对判为漂移，ensure 的 launch 校验随之失败。
+        # 漂移探测按已安装 scope 的覆盖 profile 投影；base-only 缺少
+        # Paddle/MinerU advanced components 是合法状态，不是漂移。
         covering = self._covering_profile(installed)
         payload = runtime_profile_status(
             self.manifest,
@@ -1000,7 +995,6 @@ class RuntimeInstaller:
                     current=4,
                     total=7,
                     message_code="runtime.install_profile",
-                    component_id="ocr_engine",
                 )
             python = self._install_runner(partial, self.manifest, profile_name)
             if not self._runner_reports_phases:

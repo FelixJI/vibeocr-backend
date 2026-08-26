@@ -181,6 +181,7 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
         "runtime.events.ndjson.v1",
         "task.progress.v1",
         "ocr.engine-selection.v1",
+        "ocr.recognition-modes.v1",
         "runtime.download-sources.v1",
         "runtime.component-selection.v1",
     }
@@ -188,8 +189,9 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
         component.component_id
         for component in manifest.profiles["win-x64-cpu"].components
     ] == [
-        "ocr_engine",
-        "document_parsing",
+        "rapidocr-base",
+        "paddleocr-cpu",
+        "mineru-cpu",
         "pdf_document_tools",
         "image_code_tools",
         "runtime_host",
@@ -206,9 +208,10 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
         component.component_id: component
         for component in manifest.profiles["win-x64-cu126"].components
     }
-    assert cuda_components["document_parsing"].dependencies == ("gpu_runtime",)
+    assert cuda_components["paddleocr-cuda"].dependencies == ("gpu_runtime",)
+    assert cuda_components["mineru-cuda"].dependencies == ("gpu_runtime",)
     assert cuda_components["gpu_runtime"].dependencies == ()
-    assert "dependencies" not in cuda_components["document_parsing"].to_payload()
+    assert "dependencies" not in cuda_components["mineru-cuda"].to_payload()
 
     checksums = {}
     for line in (first.parent / "SHA256SUMS").read_text().splitlines():
@@ -254,7 +257,7 @@ def test_build_emits_cuda_gpu_runtime_install_scope(tmp_path: Path) -> None:
         {
             "scope_id": "gpu-runtime",
             "component_ids": [
-                "ocr_engine",
+                "rapidocr-base",
                 "pdf_document_tools",
                 "image_code_tools",
                 "runtime_host",
@@ -305,14 +308,14 @@ def test_build_binds_base_profile_and_runtime_pack(tmp_path: Path) -> None:
     manifest = load_runtime_manifest(manifest_path)
     base = manifest.profiles["win-x64-base"]
     assert [c.component_id for c in base.components] == [
-        "ocr_engine",
+        "rapidocr-base",
         "pdf_document_tools",
         "image_code_tools",
         "runtime_host",
     ]
-    # base 的 ocr_engine 版本来自 rapidocr，image_code_tools 来自 opencv-python。
+    # RapidOCR 是 Base Runtime 固有、可探针修复的必备 component。
     versions = {c.component_id: c.version for c in base.components}
-    assert versions["ocr_engine"] == "3.9.2"
+    assert versions["rapidocr-base"] == "3.9.2"
     assert versions["image_code_tools"] == "5.0.0.93"
     assert base.runtime_pack == (pack.name,)
     assert base.runtime_pack_sha256 == (hashlib.sha256(pack.read_bytes()).hexdigest(),)
@@ -383,7 +386,7 @@ def test_loader_parses_additional_install_scope(tmp_path: Path) -> None:
         {
             "scope_id": "gpu-runtime",
             "component_ids": [
-                "ocr_engine",
+                "rapidocr-base",
                 "pdf_document_tools",
                 "image_code_tools",
                 "runtime_host",
@@ -412,7 +415,7 @@ def _cuda_scope(raw: dict) -> dict:
     return {
         "scope_id": "gpu-runtime",
         "component_ids": [
-            "ocr_engine",
+            "rapidocr-base",
             "pdf_document_tools",
             "image_code_tools",
             "runtime_host",
@@ -443,7 +446,7 @@ def test_loader_rejects_install_scope_that_is_not_dependency_closure(
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     scope = _cuda_scope(raw)
     scope["component_ids"].remove("gpu_runtime")
-    scope["component_ids"].append("document_parsing")
+    scope["component_ids"].append("paddleocr-cuda")
     raw["profiles"]["win-x64-cu126"]["install_scopes"] = [scope]
     manifest_path.write_text(json.dumps(raw), encoding="utf-8")
 
@@ -456,8 +459,8 @@ def test_loader_rejects_circular_component_dependencies(tmp_path: Path) -> None:
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     components = raw["profiles"]["win-x64-cu126"]["components"]
     by_id = {component["component_id"]: component for component in components}
-    by_id["document_parsing"]["dependencies"] = ["gpu_runtime"]
-    by_id["gpu_runtime"]["dependencies"] = ["document_parsing"]
+    by_id["paddleocr-cuda"]["dependencies"] = ["gpu_runtime"]
+    by_id["gpu_runtime"]["dependencies"] = ["paddleocr-cuda"]
     manifest_path.write_text(json.dumps(raw), encoding="utf-8")
 
     with pytest.raises(ManifestError, match="must be acyclic"):
@@ -481,7 +484,7 @@ def test_loader_rejects_invalid_component_dependencies(
     next(
         component
         for component in components
-        if component["component_id"] == "document_parsing"
+        if component["component_id"] == "paddleocr-cuda"
     )["dependencies"] = dependencies
     manifest_path.write_text(json.dumps(raw), encoding="utf-8")
 

@@ -1,5 +1,6 @@
 """管道元数据测试。"""
 
+from vibeocr.backend.core.pipelines import get_paddle_residency_pipelines
 from vibeocr.runtime_contracts.contracts.pipelines import (
     _PIPELINE_METADATA,
     OCRPipeline,
@@ -43,18 +44,28 @@ def test_table_formula_not_heavy():
 
 
 def test_every_pipeline_has_cache_kind() -> None:
-    """每个管道元数据必须含 cache_kind 字段，值为 paddle 或 mineru。"""
+    """每个管道元数据必须声明 routed、paddle 或 mineru 所有权。"""
     for pipeline in OCRPipeline:
         kind = _PIPELINE_METADATA[pipeline].get("cache_kind")
-        assert kind in {"paddle", "mineru"}, (
+        assert kind in {"routed", "paddle", "mineru"}, (
             f"{pipeline.name} cache_kind 缺失或非法: {kind!r}"
         )
 
 
-def test_paddle_pipelines_are_five() -> None:
-    """paddle 系管道 = OCR + 表格 + 公式 + PP-StructureV3 + PaddleOCR-VL。"""
+def test_generic_paddle_pipelines_exclude_routed_ocr() -> None:
+    """generic pipeline 元数据不能把多引擎 OCR 误标为 Paddle。"""
     paddle = {p.value for p in get_paddle_pipelines()}
     assert paddle == {
+        "TABLE_RECOGNITION",
+        "FORMULA_RECOGNITION",
+        "PP-StructureV3",
+        "PaddleOCR-VL",
+    }
+
+
+def test_backend_paddle_residency_pipelines_include_paddle_text_ocr() -> None:
+    """Paddle 物理 adapter 从 Recognition Mode 恢复 OCR 模型所有权。"""
+    assert {pipeline.value for pipeline in get_paddle_residency_pipelines()} == {
         "OCR",
         "TABLE_RECOGNITION",
         "FORMULA_RECOGNITION",
@@ -69,12 +80,12 @@ def test_mineru_pipelines_are_one() -> None:
     assert mineru == {"MinerU"}
 
 
-def test_paddle_and_mineru_partition_all_pipelines() -> None:
-    """paddle ∪ mineru = 全部 6 管道，且不相交。"""
+def test_paddle_and_mineru_partition_managed_pipelines() -> None:
+    """Paddle/MinerU 元数据分割受管资源，保留 routed OCR。"""
     paddle = set(get_paddle_pipelines())
     mineru = set(get_mineru_pipelines())
     all_pipelines = set(get_all_pipelines())
-    assert paddle | mineru == all_pipelines
+    assert paddle | mineru == all_pipelines - {OCRPipeline.OCR}
     assert paddle & mineru == set()
 
 
@@ -95,12 +106,11 @@ def test_every_pipeline_has_short_name() -> None:
 
 
 def test_preloadable_pipelines_exclude_document_parsing() -> None:
-    """DOCUMENT_PARSING(MinerU)不可预加载，其余 5 个 paddle 系管道可预加载。"""
+    """generic preload 排除 MinerU 与 routed OCR；OCR 由 Paddle mode 定位。"""
     preloadable = set(get_preloadable_pipelines())
     assert OCRPipeline.DOCUMENT_PARSING not in preloadable
-    assert OCRPipeline.OCR in preloadable
-    # 预加载集合是 paddle 系的子集
-    assert preloadable <= set(get_paddle_pipelines())
+    assert OCRPipeline.OCR not in preloadable
+    assert preloadable == set(get_paddle_pipelines())
 
 
 def test_is_option_supported_reports_membership() -> None:

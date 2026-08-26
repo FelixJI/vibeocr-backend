@@ -232,7 +232,9 @@ def test_finite_ttl_stops_idle_mineru_process() -> None:
     adapter.close()
 
 
-def test_pinned_mineru_is_not_released() -> None:
+def test_legacy_pinned_setting_does_not_turn_mineru_process_into_model_residency() -> (
+    None
+):
     from vibeocr.runtime_contracts import PipelineSpec, ResidencyKind, SettingsSnapshot
 
     adapter = MinerUProcessAdapter(client_factory=lambda: _FakeMinerUClient())
@@ -244,7 +246,7 @@ def test_pinned_mineru_is_not_released() -> None:
     )
     adapter.ensure_started()
     adapter.release_idle()
-    assert adapter.residency_status().entries[0].kind is ResidencyKind.PINNED
+    assert adapter.residency_status().entries[0].kind is ResidencyKind.EVICTED
     adapter.close()
 
 

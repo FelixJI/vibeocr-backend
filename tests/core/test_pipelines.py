@@ -26,10 +26,10 @@ class TestOCRPipeline:
     def test_get_display_name(self):
         """验证显示名称获取"""
         assert get_pipeline_display_name(OCRPipeline.OCR) == "通用 OCR"
-        assert (
-            get_pipeline_display_name(OCRPipeline.PP_STRUCTURE_V3) == "PP-StructureV3"
+        assert get_pipeline_display_name(OCRPipeline.PP_STRUCTURE_V3) == (
+            "文档结构识别（PP-StructureV3）"
         )
-        assert "MineRU" in get_pipeline_display_name(OCRPipeline.DOCUMENT_PARSING)
+        assert "MinerU" in get_pipeline_display_name(OCRPipeline.DOCUMENT_PARSING)
         assert "PaddleOCR-VL" in get_pipeline_display_name(OCRPipeline.PADDLEOCR_VL)
 
     def test_get_description(self):

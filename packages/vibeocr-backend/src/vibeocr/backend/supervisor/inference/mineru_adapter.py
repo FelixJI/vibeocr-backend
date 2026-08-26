@@ -150,12 +150,12 @@ class MinerUProcessAdapter:
 
     def _policy_locked(self) -> tuple[bool, int]:
         default_ttl = int(getattr(self._settings, "default_ttl_seconds", 300))
+        # MinerU 是 child-process keep-alive，不是可 pin 的模型驻留资源。
         pinned = False
         ttl = default_ttl
         for spec in getattr(self._settings, "pipelines", ()):
             if spec.name != "MinerU":
                 continue
-            pinned = bool(spec.pinned)
             if spec.ttl_seconds is not None:
                 ttl = int(spec.ttl_seconds)
             break

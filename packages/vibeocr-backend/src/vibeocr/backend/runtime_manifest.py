@@ -21,23 +21,25 @@ ACCELERATOR_TO_PLAN = {
 }
 PROFILE_COMPONENTS = {
     # base-offline 必备闭包：随 Portable 携带、禁网可安装（计划 §4.1）。
-    # 缺省 OCR 引擎是 RapidOCR（ocr_engine 组件）；不含 MinerU/CUDA。
+    # rapidocr-base 是 Base Runtime 的必备探针身份，不进入高级组件选择目录。
     "win-x64-base": (
-        ("ocr_engine", "Default offline OCR engine"),
+        ("rapidocr-base", "RapidOCR base inference"),
         ("pdf_document_tools", "PDF and document tools"),
         ("image_code_tools", "Image, QR, and barcode tools"),
         ("runtime_host", "Runtime HTTP host"),
     ),
     "win-x64-cpu": (
-        ("ocr_engine", "OCR engine"),
-        ("document_parsing", "Document parsing"),
+        ("rapidocr-base", "RapidOCR base inference"),
+        ("paddleocr-cpu", "PaddleOCR CPU inference"),
+        ("mineru-cpu", "MinerU CPU document parsing"),
         ("pdf_document_tools", "PDF and document tools"),
         ("image_code_tools", "Image, QR, and barcode tools"),
         ("runtime_host", "Runtime HTTP host"),
     ),
     "win-x64-cu126": (
-        ("ocr_engine", "OCR engine"),
-        ("document_parsing", "Document parsing"),
+        ("rapidocr-base", "RapidOCR base inference"),
+        ("paddleocr-cuda", "PaddleOCR CUDA inference"),
+        ("mineru-cuda", "MinerU CUDA document parsing"),
         ("pdf_document_tools", "PDF and document tools"),
         ("image_code_tools", "Image, QR, and barcode tools"),
         ("runtime_host", "Runtime HTTP host"),
@@ -45,7 +47,8 @@ PROFILE_COMPONENTS = {
     ),
 }
 _DEFAULT_COMPONENT_DEPENDENCIES = {
-    ("win-x64-cu126", "document_parsing"): ("gpu_runtime",),
+    ("win-x64-cu126", "paddleocr-cuda"): ("gpu_runtime",),
+    ("win-x64-cu126", "mineru-cuda"): ("gpu_runtime",),
 }
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -81,9 +84,15 @@ class RuntimeComponentBinding:
 
 
 _RUNTIME_COMPONENT_BINDINGS = {
-    ("win-x64-base", "ocr_engine"): RuntimeComponentBinding("rapidocr", "rapidocr"),
-    ("win-x64-cpu", "ocr_engine"): RuntimeComponentBinding("paddleocr", "paddleocr"),
-    ("win-x64-cu126", "ocr_engine"): RuntimeComponentBinding("paddleocr", "paddleocr"),
+    ("win-x64-base", "rapidocr-base"): RuntimeComponentBinding("rapidocr", "rapidocr"),
+    ("win-x64-cpu", "rapidocr-base"): RuntimeComponentBinding("rapidocr", "rapidocr"),
+    ("win-x64-cu126", "rapidocr-base"): RuntimeComponentBinding("rapidocr", "rapidocr"),
+    ("win-x64-cpu", "paddleocr-cpu"): RuntimeComponentBinding("paddleocr", "paddleocr"),
+    ("win-x64-cpu", "mineru-cpu"): RuntimeComponentBinding("mineru", "mineru"),
+    ("win-x64-cu126", "paddleocr-cuda"): RuntimeComponentBinding(
+        "paddleocr", "paddleocr"
+    ),
+    ("win-x64-cu126", "mineru-cuda"): RuntimeComponentBinding("mineru", "mineru"),
     ("win-x64-base", "image_code_tools"): RuntimeComponentBinding(
         "opencv-python", "cv2"
     ),
@@ -95,11 +104,45 @@ _RUNTIME_COMPONENT_BINDINGS = {
     ),
 }
 _SHARED_RUNTIME_COMPONENT_BINDINGS = {
-    "document_parsing": RuntimeComponentBinding("mineru", "mineru"),
     "pdf_document_tools": RuntimeComponentBinding("pymupdf", "fitz"),
     "runtime_host": RuntimeComponentBinding("fastapi", "fastapi"),
     "gpu_runtime": RuntimeComponentBinding("torch", "torch"),
 }
+
+
+def migrate_legacy_component_ids(
+    profile_id: str, component_ids: tuple[str, ...]
+) -> tuple[str, ...]:
+    """把 2.7 的歧义 component id 迁移到一义的 accelerator variant。
+
+    ``ocr_engine`` 在 base 曾表示 RapidOCR、在 full 同时承担 base closure 与
+    PaddleOCR；因此 full 迁移必须同时保留两项。旧 ``document_parsing`` 仅表达
+    MinerU 产品能力；底层原子 full install scope 的额外闭包由 selection policy
+    决定，不能污染持久化的组件身份。
+    """
+    if profile_id == "win-x64-base":
+        replacements = {
+            "ocr_engine": ("rapidocr-base",),
+            "document_parsing": ("mineru-cpu",),
+        }
+    elif profile_id == "win-x64-cpu":
+        replacements = {
+            "ocr_engine": ("rapidocr-base", "paddleocr-cpu"),
+            "document_parsing": ("mineru-cpu",),
+        }
+    elif profile_id == "win-x64-cu126":
+        replacements = {
+            "ocr_engine": ("rapidocr-base", "paddleocr-cuda"),
+            "document_parsing": ("mineru-cuda",),
+        }
+    else:
+        raise ManifestError(f"unsupported profile: {profile_id}")
+    migrated: list[str] = []
+    for component_id in component_ids:
+        for replacement in replacements.get(component_id, (component_id,)):
+            if replacement not in migrated:
+                migrated.append(replacement)
+    return tuple(migrated)
 
 
 def runtime_component_binding(
@@ -759,6 +802,7 @@ __all__ = [
     "RuntimeProfile",
     "installer_executable_sha256",
     "load_runtime_manifest",
+    "migrate_legacy_component_ids",
     "runtime_component_binding",
     "sha256_file",
     "validate_requirements_lock",

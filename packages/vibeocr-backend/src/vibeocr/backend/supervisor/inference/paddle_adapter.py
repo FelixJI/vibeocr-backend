@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import io
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -43,11 +44,12 @@ from .ocr_engines import (
 
 logger = logging.getLogger(__name__)
 
-# PaddleOCR 属于用户显式准备的重型闭包，不随 base-offline 运行时携带。
-# 准备路径是可选组件 document_parsing（runtime.component-selection.v1
-# 目录中的 cpu/nvidia_cuda variant）：安装该组件的 profile 闭包携带
-# paddleocr 文字引擎所需的全部依赖。
-PADDLE_REQUIRED_COMPONENT = "document_parsing"
+# PaddleOCR 属于用户显式准备的重型闭包；variant id 按 accelerator 一义。
+PADDLE_REQUIRED_COMPONENT = (
+    "paddleocr-cuda"
+    if os.environ.get("VIBEOCR_RUNTIME_ACCELERATOR") == "nvidia_cuda"
+    else "paddleocr-cpu"
+)
 
 
 class _OCRServiceLike(Protocol):
@@ -227,12 +229,10 @@ class PaddlePipelineAdapter:
 
     def preload(self, pipelines: tuple[str, ...]) -> ResidencyStatus:
         """顺序加载本 adapter 拥有的 Paddle 管道并返回真实驻留快照。"""
-        from vibeocr.runtime_contracts.contracts.pipelines import (
-            OCRPipeline,
-            get_paddle_pipelines,
-        )
+        from vibeocr.backend.core.pipelines import get_paddle_residency_pipelines
+        from vibeocr.runtime_contracts.contracts.pipelines import OCRPipeline
 
-        paddle_pipelines = set(get_paddle_pipelines())
+        paddle_pipelines = set(get_paddle_residency_pipelines())
         selected = [
             pipeline
             for name in pipelines

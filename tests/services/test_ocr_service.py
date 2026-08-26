@@ -110,14 +110,16 @@ class TestOCRPipeline:
     def test_pipeline_display_names(self):
         """管道显示名称正确。"""
         assert OCRPipeline.OCR.display_name == "通用 OCR"
-        assert OCRPipeline.PP_STRUCTURE_V3.display_name == "PP-StructureV3"
-        assert OCRPipeline.DOCUMENT_PARSING.display_name == "文档M（MineRU）"
+        assert OCRPipeline.PP_STRUCTURE_V3.display_name == (
+            "文档结构识别（PP-StructureV3）"
+        )
+        assert OCRPipeline.DOCUMENT_PARSING.display_name == "深度文档解析（MinerU）"
 
     def test_pipeline_descriptions(self):
         """管道描述正确。"""
         assert "文字" in OCRPipeline.OCR.description
         assert "文档结构" in OCRPipeline.PP_STRUCTURE_V3.description
-        assert "MineRU" in OCRPipeline.DOCUMENT_PARSING.description
+        assert "MinerU" in OCRPipeline.DOCUMENT_PARSING.description
 
 
 class TestOCROptions:

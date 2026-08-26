@@ -1,6 +1,9 @@
 # Resolved for CPython 3.13 / Windows x64 by scripts/build_runtime_manifest.py.
 # Source-neutral lock command (uv 0.12.5; trusted TUNA index):
 # uv pip compile packages/vibeocr-backend/runtime-profiles/win-x64-cu126/requirements.in --no-config --no-sources --default-index https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/ --python-version 3.13 --python-platform windows --generate-hashes --output-file packages/vibeocr-backend/runtime-profiles/win-x64-cu126/requirements-win-x64-cu126.lock
+# Full Runtime 仍必须携带并验证 Base Runtime（RapidOCR + Windows adapter）。
+-r ../win-x64-base/requirements.in
+
 pillow>=12.3.0
 numpy>=2.3.5
 httpx>=0.28.1

@@ -627,6 +627,40 @@ async def test_put_settings_accepts_valid_snapshot(
     assert resp.status_code == 200
 
 
+async def test_put_settings_uses_recognition_mode_lifecycle_registry(
+    pdf_app, supervisor_token: str
+) -> None:
+    def payload(name: str, recognition_mode: str) -> dict[str, Any]:
+        return {
+            "schema_version": 2,
+            "residency": {
+                "default_ttl_seconds": 600,
+                "pipelines": [
+                    {
+                        "name": name,
+                        "recognition_mode": recognition_mode,
+                        "ttl_seconds": None,
+                        "pinned": False,
+                    }
+                ],
+            },
+            "extra": {},
+        }
+
+    async with _http(supervisor_token, pdf_app) as http:
+        mineru = await http.put(
+            "/v2/settings", json=payload("MinerU", "mineru_document")
+        )
+        mismatch = await http.put("/v2/settings", json=payload("MinerU", "paddle_text"))
+        unmanaged = await http.put("/v2/settings", json=payload("OCR", "rapid_text"))
+
+    assert mineru.status_code == 200, mineru.text
+    pipeline = mineru.json()["residency"]["pipelines"][0]
+    assert pipeline["recognition_mode"] == "mineru_document"
+    assert mismatch.json()["code"] == "RECOGNITION_MODE_PIPELINE_MISMATCH"
+    assert unmanaged.json()["code"] == "RECOGNITION_MODE_LIFECYCLE_UNSUPPORTED"
+
+
 # ---------------------------------------------------------------------------
 # Export route: validation + failure paths
 # ---------------------------------------------------------------------------
@@ -1098,10 +1132,23 @@ async def test_release_runtime_rejects_non_object_json(
     assert resp.status_code == 400
 
 
-async def test_preload_success_path(pdf_app, supervisor_token: str) -> None:
-    """A valid preload request returns 200 (lines 270-279)."""
+async def test_preload_success_path(
+    pdf_app, supervisor_token: str, pdf_module: SupervisorModule
+) -> None:
+    """An explicit Paddle model preload request returns 200."""
+    from vibeocr.backend.supervisor.inference.recognition_modes import (
+        ModeAvailability,
+        RecognitionModeRegistry,
+    )
+
+    pdf_module.recognition_mode_registry = RecognitionModeRegistry(
+        availability_probe=lambda _definition: ModeAvailability("ready")
+    )
     async with _http(supervisor_token, pdf_app) as http:
-        resp = await http.post("/v2/runtime/preload", json={"pipelines": ["OCR"]})
+        resp = await http.post(
+            "/v2/runtime/preload",
+            json={"pipelines": ["PP-StructureV3"]},
+        )
     assert resp.status_code == 200
 
 
@@ -1109,13 +1156,24 @@ async def test_preload_returns_internal_error_on_executor_failure(
     pdf_app, supervisor_token: str, pdf_module: SupervisorModule
 ) -> None:
     """When the executor's preload raises, the route returns INTERNAL_ERROR."""
+    from vibeocr.backend.supervisor.inference.recognition_modes import (
+        ModeAvailability,
+        RecognitionModeRegistry,
+    )
+
+    pdf_module.recognition_mode_registry = RecognitionModeRegistry(
+        availability_probe=lambda _definition: ModeAvailability("ready")
+    )
 
     def boom(_pipelines):  # type: ignore[no-untyped-def]
         raise RuntimeError("preload boom")
 
     pdf_module._executor.preload = boom  # type: ignore[attr-defined]
     async with _http(supervisor_token, pdf_app) as http:
-        resp = await http.post("/v2/runtime/preload", json={"pipelines": ["OCR"]})
+        resp = await http.post(
+            "/v2/runtime/preload",
+            json={"pipelines": ["PP-StructureV3"]},
+        )
     assert resp.status_code == 500
     assert resp.json()["code"] == "INTERNAL_ERROR"
 

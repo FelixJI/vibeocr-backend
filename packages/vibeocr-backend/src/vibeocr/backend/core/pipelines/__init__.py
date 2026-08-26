@@ -13,7 +13,9 @@ from vibeocr.backend.core.pipelines.pipeline_table import TABLE_RECOGNITION_SPEC
 from vibeocr.backend.core.pipelines.registry import PipelineRegistry
 from vibeocr.runtime_contracts.contracts.pipelines import (
     OCRPipeline,
+    RecognitionModeLifecycleKind,
     get_all_pipelines,
+    get_all_recognition_modes,
     get_heavy_pipelines,
     get_mineru_pipelines,
     get_paddle_pipelines,
@@ -22,6 +24,7 @@ from vibeocr.runtime_contracts.contracts.pipelines import (
     get_pipeline_short_name,
     get_pipeline_supported_options,
     get_preloadable_pipelines,
+    get_recognition_mode_definition,
     is_option_supported,
 )
 
@@ -39,12 +42,31 @@ def get_registry() -> PipelineRegistry:
     return _registry
 
 
+def get_paddle_residency_pipelines() -> list[OCRPipeline]:
+    """Return execution pipelines owned by Paddle model residency.
+
+    Protocol 2.8 correctly classifies the shared ``OCR`` pipeline as routed,
+    so the generic pipeline cache helpers no longer identify its physical
+    owner.  Inside the Paddle adapter/cache boundary, derive ownership from
+    the formal Recognition Mode lifecycle instead.
+    """
+    return list(
+        dict.fromkeys(
+            definition.pipeline
+            for mode_id in get_all_recognition_modes()
+            if (definition := get_recognition_mode_definition(mode_id)).lifecycle.kind
+            is RecognitionModeLifecycleKind.MODEL_RESIDENCY
+        )
+    )
+
+
 __all__ = [
     "OCRPipeline",
     "get_all_pipelines",
     "get_heavy_pipelines",
     "get_mineru_pipelines",
     "get_paddle_pipelines",
+    "get_paddle_residency_pipelines",
     "get_pipeline_description",
     "get_pipeline_display_name",
     "get_pipeline_short_name",

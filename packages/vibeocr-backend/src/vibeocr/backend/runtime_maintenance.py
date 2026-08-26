@@ -1007,9 +1007,8 @@ def runtime_profile_status(
     ``profile_id`` overrides the accelerator's plan profile for the projected
     component set, declared versions, and import bindings. The installer uses
     it to evaluate drift against the covering profile of the *installed*
-    closure: a base-only install binds ``ocr_engine`` to RapidOCR while the
-    cpu plan binds the same component id to PaddleOCR. Callers that omit it
-    keep the historical accelerator-plan projection.
+    closure. Callers that omit it keep the historical accelerator-plan
+    projection.
     """
 
     selected = (
