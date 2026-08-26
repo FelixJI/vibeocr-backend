@@ -34,6 +34,7 @@ COMMANDS_DIRECTORY = "runtime-commands"
 TERMINAL_REPLAY_RETENTION = timedelta(days=7)
 _COMPONENT_PROBE_CACHE_TTL_SECONDS = 10.0
 _WINDOWS_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.04, 0.08)
+_CANCELLATION_CLOSED_PHASES = frozenset({"commit_runtime"})
 _component_probe_cache_lock = threading.Lock()
 _component_probe_cache: dict[
     tuple[str, str, tuple[str, ...], int | None], tuple[float, dict[str, bool]]
@@ -586,7 +587,10 @@ class RuntimeOperationStore:
                 and snapshot.get("sequence") != expected_sequence
             ):
                 raise RuntimeOperationConflict("expected_sequence mismatch")
-            if metadata.get("terminal"):
+            if (
+                metadata.get("terminal")
+                or snapshot.get("phase") in _CANCELLATION_CLOSED_PHASES
+            ):
                 raise RuntimeOperationNotCancellable(operation_id)
             cancel_snapshot = {
                 **snapshot,

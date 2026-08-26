@@ -18,6 +18,7 @@ from vibeocr.backend.runtime_maintenance import (
     RuntimeCursorExpired,
     RuntimeInstallFailure,
     RuntimeOperationConflict,
+    RuntimeOperationNotCancellable,
     RuntimeOperationNotRetryable,
     RuntimeOperationStore,
     RuntimeSourceIdentityMismatch,
@@ -544,6 +545,33 @@ def test_cancel_request_is_idempotent_and_ordered_before_terminal(
     assert [event["message_code"] for event in update["events"]] == [
         "runtime.validate_binding",
         "runtime.cancel_requested",
+    ]
+
+
+def test_cancel_is_rejected_once_runtime_commit_has_started(tmp_path: Path) -> None:
+    store = RuntimeOperationStore(tmp_path)
+    store.start("op-1", {"operation": "ensure", "profile_id": "win-x64-cpu"})
+    commit_snapshot = {
+        **_snapshot("op-1", 2),
+        "operation": "ensure",
+        "phase": "commit_runtime",
+    }
+    store.append(
+        "op-1",
+        event_type="progress",
+        snapshot=commit_snapshot,
+        message_code="runtime.commit_runtime",
+    )
+
+    with pytest.raises(RuntimeOperationNotCancellable):
+        store.request_cancel("op-1", expected_sequence=2)
+
+    assert store.cancel_requested("op-1") is False
+    update = store.observe("op-1", after_sequence=0, limit=10)
+    assert update["through_sequence"] == 2
+    assert [event["message_code"] for event in update["events"]] == [
+        "runtime.validate_binding",
+        "runtime.commit_runtime",
     ]
 
 
