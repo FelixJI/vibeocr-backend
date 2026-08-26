@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from .inference.ocr_engines import OcrEngineRegistry, OcrEngineResolver
+    from .inference.recognition_modes import RecognitionModeRegistry
 
 
 class Executor(Protocol):
@@ -118,6 +119,7 @@ class SupervisorModule:
         pdf_adapter: Any = None,
         engine_registry: OcrEngineRegistry | None = None,
         engine_resolver: OcrEngineResolver | None = None,
+        recognition_mode_registry: RecognitionModeRegistry | None = None,
         settings_store: RuntimeSettings | None = None,
     ) -> None:
         self.options = options
@@ -150,6 +152,11 @@ class SupervisorModule:
 
             engine_resolver = OcrEngineResolver(registry=engine_registry)
         self.engine_resolver = engine_resolver
+        if recognition_mode_registry is None:
+            from .inference.recognition_modes import RecognitionModeRegistry
+
+            recognition_mode_registry = RecognitionModeRegistry()
+        self.recognition_mode_registry = recognition_mode_registry
         self._lock = threading.RLock()
         self._draining = False
         self._shutdown = False
@@ -458,11 +465,42 @@ class SupervisorModule:
         status = self._executor.residency_status()
         return self._remember_residency(status)
 
-    def release_idle(self, pipeline: str | None = None) -> ResidencyStatus:
+    def release_idle(
+        self,
+        pipeline: str | None = None,
+        *,
+        recognition_mode: str | None = None,
+    ) -> ResidencyStatus:
+        if recognition_mode is not None:
+            definition = self.recognition_mode_registry.definition(recognition_mode)
+            if pipeline is not None and pipeline != definition.pipeline_id:
+                from .inference.recognition_modes import RecognitionModeError
+
+                raise RecognitionModeError(
+                    "RECOGNITION_MODE_PIPELINE_MISMATCH",
+                    recognition_mode=recognition_mode,
+                    reason_code="recognition_mode_pipeline_mismatch",
+                    detail={
+                        "expected_pipeline": definition.pipeline_id,
+                        "actual_pipeline": pipeline,
+                    },
+                )
+            self.recognition_mode_registry.validate_lifecycle(
+                recognition_mode, "release"
+            )
+            pipeline = definition.pipeline_id
         status = self._executor.release_idle(pipeline)
         return self._remember_residency(status)
 
-    def preload(self, pipelines: tuple[str, ...]) -> ResidencyStatus:
+    def preload(
+        self,
+        pipelines: tuple[str, ...],
+        *,
+        recognition_modes: tuple[str, ...] | None = None,
+    ) -> ResidencyStatus:
+        pipelines = self.recognition_mode_registry.resolve_preload(
+            recognition_modes, pipelines
+        )
         with self._lock:
             self._preload_count += 1
             status = self._residency_snapshot
@@ -478,6 +516,12 @@ class SupervisorModule:
             with self._lock:
                 self._preload_count -= 1
 
+    def residency_payload(self) -> dict[str, Any]:
+        """返回带 Recognition Mode/物理资源身份的兼容 residency payload。"""
+        return self.recognition_mode_registry.annotate_residency_payload(
+            self.residency().to_payload()
+        )
+
     def settings(self) -> SettingsSnapshot:
         with self._lock:
             return self._settings
@@ -485,6 +529,13 @@ class SupervisorModule:
     def update_settings(self, snapshot: SettingsSnapshot) -> SettingsSnapshot:
         if snapshot.download_source_ids:
             normalize_download_source_ids(snapshot.download_source_ids)
+        for pipeline in snapshot.pipelines:
+            if pipeline.recognition_mode is not None:
+                self.recognition_mode_registry.validate_pipeline_spec(
+                    pipeline.recognition_mode,
+                    pipeline_id=pipeline.name,
+                    pinned=pipeline.pinned,
+                )
         with self._lock:
             previous = self._settings
             configure = getattr(self._executor, "configure_settings", None)

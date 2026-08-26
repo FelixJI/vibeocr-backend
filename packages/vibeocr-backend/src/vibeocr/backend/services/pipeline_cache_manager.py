@@ -249,10 +249,10 @@ class PipelineCacheManager:
         self._ensure_runtime_fields()
         from vibeocr.backend.core.pipelines import (
             get_heavy_pipelines,
-            get_paddle_pipelines,
+            get_paddle_residency_pipelines,
         )
 
-        paddle_names = {pipeline.value for pipeline in get_paddle_pipelines()}
+        paddle_names = {pipeline.value for pipeline in get_paddle_residency_pipelines()}
         heavy_paddle_names = paddle_names & {
             pipeline.value for pipeline in get_heavy_pipelines()
         }
@@ -285,11 +285,11 @@ class PipelineCacheManager:
         self._ensure_runtime_fields()
         from vibeocr.backend.core.pipelines import (
             get_heavy_pipelines,
-            get_paddle_pipelines,
+            get_paddle_residency_pipelines,
         )
 
         heavy = {pipeline.value for pipeline in get_heavy_pipelines()}
-        paddle = {pipeline.value for pipeline in get_paddle_pipelines()}
+        paddle = {pipeline.value for pipeline in get_paddle_residency_pipelines()}
         heavy_paddle = heavy & paddle
         if new_pipeline not in heavy_paddle:
             return []
@@ -521,9 +521,11 @@ class PipelineCacheManager:
 
     @staticmethod
     def _is_paddle(pipeline_name: str) -> bool:
-        from vibeocr.backend.core.pipelines import get_paddle_pipelines
+        from vibeocr.backend.core.pipelines import get_paddle_residency_pipelines
 
-        return pipeline_name in {pipeline.value for pipeline in get_paddle_pipelines()}
+        return pipeline_name in {
+            pipeline.value for pipeline in get_paddle_residency_pipelines()
+        }
 
     @staticmethod
     def _empty_cache() -> None:

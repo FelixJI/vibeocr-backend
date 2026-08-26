@@ -144,6 +144,9 @@ annotated-types==0.8.0 \
     --hash=sha256:13b2beaad985e05e2d6407ee4c4f35590b11f8d693a258a561055cac8f64cab7 \
     --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
     # via pydantic
+antlr4-python3-runtime==4.9.3 \
+    --hash=sha256:f224469b4168294902bb1efa80a8bf7855f24c99aef99cbefc1bcd3cce77881b
+    # via omegaconf
 anyio==4.14.2 \
     --hash=sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494 \
     --hash=sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f
@@ -344,6 +347,7 @@ colorlog==6.12.0 \
     --hash=sha256:30d392604e9110045a2c2aeefc27d7a017abbab63f3a8aee594eac0801df784e
     # via
     #   paddlex
+    #   rapidocr
     #   robust-downloader
 crc32c==2.8 \
     --hash=sha256:0184369aad562d801f91f454c81f56b9ecb966f6b96684c4d6cf82fc8741d2ad \
@@ -466,6 +470,7 @@ fastapi==0.141.0 \
     --hash=sha256:5567705c791fa33202dabd1860df1d1650a7b1bf373378198d7b0675c9574618 \
     --hash=sha256:cae32222bdc8b2805c4d3deb4e024b381ea2a6f2de7febfe3a9a73a9c29c2e5e
     # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
     #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
     #   mineru
 fasttext-predict==0.9.2.4 \
@@ -609,7 +614,9 @@ fonttools==4.63.0 \
     --hash=sha256:ee08ebfa58f6e1aeff5697ab9582105bb620008c1caafb681e4c557e7483027b \
     --hash=sha256:ef3048ef05dbb552b89817713d9cac912e00d0fde4a3105c00d29e52e10c89af \
     --hash=sha256:fd1e3094f42d806d3d7c79162fc59e5910fcbe3a7360c385b8da969bc4493745
-    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
+    # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
 frozenlist==1.8.0 \
     --hash=sha256:0325024fe97f94c41c08872db482cf8ac4800d80e79222c6b0b7b162d5b13686 \
     --hash=sha256:032efa2674356903cd0261c4317a561a6850f3ac864a63fc1583147fb05a79b0 \
@@ -789,6 +796,7 @@ httpx==0.28.1 \
     --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc \
     --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
     # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
     #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
     #   httpx-retries
     #   huggingface-hub
@@ -941,7 +949,9 @@ json-repair==0.61.7 \
 jsonschema==4.26.0 \
     --hash=sha256:0c26707e2efad8aa1bfc5b7ce170f3fccc2e4918ff85989ba9ffa9facb2be326 \
     --hash=sha256:d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce
-    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
+    # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
 jsonschema-specifications==2025.9.1 \
     --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe \
     --hash=sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d
@@ -1111,7 +1121,9 @@ mammoth==1.12.0 \
 markdown==3.10.2 \
     --hash=sha256:994d51325d25ad8aa7ce4ebaec003febcce822c3f8c911e3b17c52f7f589f950 \
     --hash=sha256:e91464b71ae3ee7afd3017d9f358ef0baf158fd9a298db92f1d4761133824c36
-    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
+    # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
 markupsafe==3.0.3 \
     --hash=sha256:0303439a41979d9e74d18ff5e2dd8c43ed6c6001fd40e5bf2e43f7bd9bbc523f \
     --hash=sha256:068f375c472b3e7acbe2d5318dea141359e6900156b5b2ba06a30b169086b91a \
@@ -1457,6 +1469,7 @@ numpy==2.3.5 \
     --hash=sha256:ffe22d2b05504f786c867c8395de703937f934272eb67586817b46188b4ded6d \
     --hash=sha256:fffe29a1ef00883599d1dc2c51aa2e5d80afe49523c261a74933df395c15c520
     # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
     #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
     #   mineru
     #   onnxruntime
@@ -1467,6 +1480,7 @@ numpy==2.3.5 \
     #   paddlex
     #   pandas
     #   pdftext
+    #   rapidocr
     #   scikit-learn
     #   scipy
     #   shapely
@@ -1474,6 +1488,10 @@ nvidia-ml-py==13.610.43 \
     --hash=sha256:65437eb73d68d0c62c931ca4d45038472faff03bd0b8729abba4b899f70d60f2 \
     --hash=sha256:f13c72698edef492f985cc225f14faafe68ae065a2e407f45bdf6f4b9b43fde8
     # via pynvml
+omegaconf==2.3.1 \
+    --hash=sha256:3d701d14e9a8828f1edd28bb70b725908b34277cdd72cf7d6a83f94dadc6b6a0 \
+    --hash=sha256:e5e7de64aeebeddaf8e6d3f7a783b32ac2a01c0fbd9c878012caecb891a1f42a
+    # via rapidocr
 onnxruntime==1.28.0 \
     --hash=sha256:07fb3cbe990d6bf0ab3c22bfbbfb0e314151266046ea6edb4a07f556b4258c5f \
     --hash=sha256:0a83bdb70d143cede762b677789bf2a7acca54b3fb82565601d5c30695aa933c \
@@ -1499,7 +1517,9 @@ onnxruntime==1.28.0 \
     --hash=sha256:f5c5daabd28aad610f83fdcf32acec8fb57e6adc6c6a39fe2a3c755db957b410 \
     --hash=sha256:f649dd6f6452d12a8059888aa489fe519e062e18793dac72b9efa0f9fdb64135 \
     --hash=sha256:f7f022a1103cae591c75fc4565589a515f2ddd14a6ac8e8a05812dfeda142e28
-    # via magika
+    # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+    #   magika
 openai==2.50.0 \
     --hash=sha256:5128f7caf4a6b01aefd6e7e93efe170a2c3427b8de286b9af5cdff3aa47e02c8 \
     --hash=sha256:90bdddcc5a2fa529b350fac9c5780d87e5c361dcc6090ab57b0d470b0d7af7fa
@@ -1527,11 +1547,15 @@ opencv-python==5.0.0.93 \
     --hash=sha256:e2b4272e736836f66c2d176e43ab8101f3a00d45654916399f52e150c58981ac \
     --hash=sha256:f8b6d0a212253dd26ad338c812f1f23ca118fdf05a9c8c6b9444f161aa8c5881 \
     --hash=sha256:f90ba04b8f73bc5c3814037699739f0156f597338a98f05956c684e7c3ca10d2
-    # via mineru
+    # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+    #   mineru
+    #   rapidocr
 openpyxl==3.1.5 \
     --hash=sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2 \
     --hash=sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050
     # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
     #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
     #   mineru
     #   paddlex
@@ -1543,6 +1567,7 @@ packaging==26.2 \
     --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e \
     --hash=sha256:ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661
     # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
     #   huggingface-hub
     #   modelscope
     #   onnxruntime
@@ -1709,6 +1734,7 @@ pillow==12.3.0 \
     --hash=sha256:fe3cca2e4e8a592be0f269a1ca4835c25199d9f3ce815c8491048f785b0a0198 \
     --hash=sha256:ffd0c5368496f41b0944be820fcb7a838aa6e623d250b01acf2643939c3f99d7
     # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
     #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
     #   mineru
     #   mineru-vl-utils
@@ -1716,6 +1742,7 @@ pillow==12.3.0 \
     #   paddlex
     #   pypptx-with-oxml
     #   qrcode
+    #   rapidocr
     #   reportlab
 premailer==3.10.0 \
     --hash=sha256:021b8196364d7df96d04f9ade51b794d0b77bcc19e998321c515633a2273be1a \
@@ -1928,7 +1955,9 @@ pyclipper==1.4.0 \
     --hash=sha256:f2a50c22c3a78cb4e48347ecf06930f61ce98cf9252f2e292aa025471e9d75b1 \
     --hash=sha256:f3672dbafbb458f1b96e1ee3e610d174acb5ace5bd2ed5d1252603bb797f2fc6 \
     --hash=sha256:fd24849d2b94ec749ceac7c34c9f01010d23b6e9d9216cf2238b8481160e703d
-    # via paddlex
+    # via
+    #   paddlex
+    #   rapidocr
 pycryptodome==3.23.0 \
     --hash=sha256:0011f7f00cdb74879142011f95133274741778abba114ceca229adbf8e62c3e4 \
     --hash=sha256:11eeeb6917903876f134b56ba11abe95c0b0fd5e3330def218083c7d98bbcb3c \
@@ -1976,6 +2005,7 @@ pydantic==2.13.4 \
     --hash=sha256:45a282cde31d808236fd7ea9d919b128653c8b38b393d1c4ab335c62924d9aba \
     --hash=sha256:c40756b57adaa8b1efeeced5c196f3f3b7c435f90e84ea7f443901bec8099ef6
     # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
     #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
     #   fastapi
     #   mineru-vl-utils
@@ -2124,11 +2154,15 @@ pymupdf==1.28.0 \
     --hash=sha256:caea2b3b67347fd79e5d15ed7929b0e886aac594ea228073b6d39de0078189da \
     --hash=sha256:e01e90fd86abfeb37ceb921eddb951f988a11d45ff6ce6b7664f2039849068ec \
     --hash=sha256:e53f3567403a92da15caa9e7ae0164327fff48817e9f40175367fb9de524258d
-    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
+    # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
 pynvml==13.0.1 \
     --hash=sha256:1245991d9db786b4d2f277ce66869bd58f38ac654e38c9397d18f243c8f6e48f \
     --hash=sha256:e2b20e0a501eeec951e2455b7ab444759cf048e0e13a57b08049fa2775266aa8
-    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
+    # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
 pypdf==6.14.2 \
     --hash=sha256:3f07891af76dc002657e04993ab9b4de81de29f9013b9761d0b7968bff12e946 \
     --hash=sha256:7873f502fe4385e79539b21d872392dc0c4e3714327c15881cbc7fbfd1f95b25
@@ -2167,7 +2201,9 @@ pypptx-with-oxml==1.0.3 \
 python-barcode==0.16.1 \
     --hash=sha256:5776567478c9a0dae473374bb86631ba0b5ea99aaf302763b364e367ac51f367 \
     --hash=sha256:665ed09516b0088b5593061c5ac8662caa0b08d56bdad328388b1cab39939ac5
-    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
+    # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
 python-bidi==0.6.11 \
     --hash=sha256:034090c597af250d699299d7e7f1e83eb016f9e47b3b707bd89ab2bdec77bce0 \
     --hash=sha256:0608bddcc1c53dfa5293499de13ca9935b31aa46d1c722c404a88c703d1a4e47 \
@@ -2303,6 +2339,7 @@ python-docx==1.2.0 \
     --hash=sha256:3fd478f3250fbbbfd3b94fe1e985955737c145627498896a8a6bf81f4baf66c7 \
     --hash=sha256:7bc9d7b7d8a69c9c02ca09216118c86552704edc23bac179283f2e38f86220ce
     # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
     #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
     #   mineru
 python-dotenv==1.2.2 \
@@ -2312,7 +2349,9 @@ python-dotenv==1.2.2 \
 python-multipart==0.0.32 \
     --hash=sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e \
     --hash=sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23
-    # via mineru
+    # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+    #   mineru
 pyyaml==6.0.2 \
     --hash=sha256:01179a4a8559ab5de078078f37e5c1a30d76bb88519906844fd7bdea1b7729ff \
     --hash=sha256:0833f8694549e586547b576dcfaba4a6b55b9e96098b36cdc7ebefe667dfed48 \
@@ -2369,17 +2408,26 @@ pyyaml==6.0.2 \
     --hash=sha256:ff3824dc5261f50c9b0dfb3be22b4567a6f938ccce4587b38952d85fd9e9afe4
     # via
     #   huggingface-hub
+    #   omegaconf
     #   paddleocr
     #   paddlex
+    #   rapidocr
 pyzbar==0.1.9 \
     --hash=sha256:13e3ee5a2f3a545204a285f41814d5c0db571967e8d4af8699a03afc55182a9c \
     --hash=sha256:4559628b8192feb25766d954b36a3753baaf5c97c03135aec7e4a026036b475d \
     --hash=sha256:8f4c5264c9c7c6b9f20d01efc52a4eba1ded47d9ba857a94130afe33703eb518
-    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
+    # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
 qrcode==8.2 \
     --hash=sha256:16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f \
     --hash=sha256:35c3f2a4172b33136ab9f6b3ef1c00260dd2f66f858f24d88418a015f446506c
-    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
+    # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
+rapidocr==3.9.2 \
+    --hash=sha256:04d6b8d151f823d930bd91910555f57bea897c0c44fa6794267b94cf9c1ef9a0
+    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
 referencing==0.37.0 \
     --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231 \
     --hash=sha256:44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8
@@ -2520,6 +2568,7 @@ requests==2.34.2 \
     #   paddleocr
     #   paddlex
     #   premailer
+    #   rapidocr
     #   robust-downloader
     #   tiktoken
 robust-downloader==0.0.2 \
@@ -2872,13 +2921,16 @@ shapely==2.1.2 \
     --hash=sha256:fe2533caae6a91a543dec62e8360fe86ffcdc42a7c55f9dfd0128a977a896b94 \
     --hash=sha256:fe7b77dc63d707c09726b7908f575fc04ff1d1ad0f3fb92aec212396bc6cfe5e \
     --hash=sha256:fe9627c39c59e553c90f5bc3128252cb85dc3b3be8189710666d2f8bc3a5503e
-    # via paddlex
+    # via
+    #   paddlex
+    #   rapidocr
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
     # via
     #   bce-python-sdk
     #   python-dateutil
+    #   rapidocr
 sniffio==1.3.1 \
     --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
     --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
@@ -2983,6 +3035,7 @@ tqdm==4.70.0 \
     #   modelscope
     #   modelscope-hub
     #   openai
+    #   rapidocr
     #   robust-downloader
 typing-extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
@@ -3000,6 +3053,7 @@ typing-extensions==4.16.0 \
     #   pypptx-with-oxml
     #   python-docx
     #   typing-inspection
+    #   winrt-runtime
 typing-inspection==0.4.2 \
     --hash=sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7 \
     --hash=sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464
@@ -3117,6 +3171,7 @@ uvicorn==0.52.0 \
     --hash=sha256:3d887809810b89ed33501bcf0a9aba469b06ecd608158efce04bd6b48d8c9b08 \
     --hash=sha256:ca8876ad6c1983f394157c168b39d52f6dd56dabf5602fa0982751cffc2293ae
     # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
     #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in
     #   mineru
 wcwidth==0.8.2 \
@@ -3129,6 +3184,116 @@ win32-setctime==1.2.0 \
     --hash=sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390 \
     --hash=sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0
     # via loguru
+winrt-runtime==3.2.1 \
+    --hash=sha256:06510db215d4f0dc45c00fbb1251c6544e91742a0ad928011db33b30677e1576 \
+    --hash=sha256:07c0cb4a53a4448c2cb7597b62ae8c94343c289eeebd8f83f946eb2c817bde01 \
+    --hash=sha256:14562c29a087ccad38e379e585fef333e5c94166c807bdde67b508a6261aa195 \
+    --hash=sha256:1856325ca3354b45e0789cf279be9a882134085d34214946db76110d98391efa \
+    --hash=sha256:25a2d1e2b45423742319f7e10fa8ca2e7063f01284b6e85e99d805c4b50bbfb3 \
+    --hash=sha256:28f3dab083412625ff4d2b46e81246932e6bebddf67bea7f05e01712f54e6159 \
+    --hash=sha256:35d6241a2ebd5598e4788e69768b8890ee1eee401a819865767a1fbdd3e9a650 \
+    --hash=sha256:363f584b1e9fcb601e3e178636d8877e6f0537ac3c96ce4a96f06066f8ff0eae \
+    --hash=sha256:3c1fdcaeedeb2920dc3b9039db64089a6093cad2be56a3e64acc938849245a6d \
+    --hash=sha256:44e2733bc709b76c554aee6c7fe079443b8306b2e661e82eecfebe8b9d71e4d1 \
+    --hash=sha256:762b3d972a2f7037f7db3acbaf379dd6d8f6cda505f71f66c6b425d1a1eae2f1 \
+    --hash=sha256:9b6298375468ac2f6815d0c008a059fc16508c8f587e824c7936ed9216480dad \
+    --hash=sha256:9e9b64f1ba631cc4b9fe60b8ff16fef3f32c7ce2fcc84735a63129ff8b15c022 \
+    --hash=sha256:c0a9046ae416808420a358c51705af8ae100acd40bc578be57ddfdd51cbb0f9c \
+    --hash=sha256:c8dca19e12b234ae6c3dadf1a4d0761b51e708457492c13beb666556958801ea \
+    --hash=sha256:cf237858de1d62e4c9b132c66b52028a7a3e8534e8ab90b0e29a68f24f7be39d \
+    --hash=sha256:dc81d5fb736bf1ddecf743928622253dce4d0aac9a57faad776d7a3834e13257 \
+    --hash=sha256:e36e587ab5fd681ee472cd9a5995743f75107a1a84d749c64f7e490bc86bc814 \
+    --hash=sha256:e94f3cb40ea2d723c44c82c16d715c03c6b3bd977d135b49535fdd5415fd9130
+    # via
+    #   -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+    #   winrt-windows-globalization
+    #   winrt-windows-graphics-imaging
+    #   winrt-windows-media-ocr
+    #   winrt-windows-storage-streams
+winrt-windows-globalization==3.2.1 \
+    --hash=sha256:0978ab32a0e485d877d31251229c74cdf21918a39f2b0cb537db0db04c7de8f6 \
+    --hash=sha256:487772ddae211ad5dbe0364edc5443e1a091b713ed4cf67d753fb20e212065b4 \
+    --hash=sha256:5ffd6c934b72cbad281c8f5bd8d6f01d5c6a86f39cc7a944a460cd3b5c5da632 \
+    --hash=sha256:60761540a6acb1273ea024e98616996522f485075ae48e5954d797896c5e2fc2 \
+    --hash=sha256:6b6232e404c0521ff7d181651899da84e2b6cf67a5c249d2c2cbca695d60e2d6 \
+    --hash=sha256:77886c2b1c7a8781100dea1201b4667a6cbe2dc9fb2f84c436e9d55c99225e4e \
+    --hash=sha256:9cb07af0c26f2fdb144fd2806a6c0de30b6c78f3afdf5a574375dd77de4574ff \
+    --hash=sha256:a1f0962a8eb6ae09a4f6209020f38cf3df97efed58cd0b935bb72182e0755951 \
+    --hash=sha256:a43e4ed880961c0639d09f2d5bd51fb97f27ef95f6732285a64342121d601a39 \
+    --hash=sha256:ae8cbc0fd548afc2733c6550842d121139f2e85db9763c7e5afd740f0e921437 \
+    --hash=sha256:bb5470af8d9ad1deb27563361482ad39242dbeed5cbce4fd800d01ccdbac82ac \
+    --hash=sha256:bf81ba15b33b34d94f68c0c97a3916c57c5a624b55abf409811320dee2a4dab4 \
+    --hash=sha256:c0bdba6dcedfa1ca894fe8de2c58cb23274d524dc048e1585d383c2732a666a5 \
+    --hash=sha256:c0dac787143e6855a2429209e03b17ea493e344c95e96c1caa9b181b846401da \
+    --hash=sha256:d873bee4d092ddc37a434d45989049fc203c0231e700961ea45d96d4fa8ba8f0 \
+    --hash=sha256:dbd1bd81bc926efbccc6bc7bc04bf7668d045802f9e07cef821d69b717793f6f \
+    --hash=sha256:dd6ced887ec39ca502a96640e1563f89515c505d32bad51939d8b6c78855477a \
+    --hash=sha256:e03c3339a9632bf855c7f24479d6014627dc15882a12a712f2706c2380e094cf \
+    --hash=sha256:fa4dbf6b18586e435bdd5d40b8536fe1dfd95810a264a135d121b34e33d39aa5
+    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+winrt-windows-graphics-imaging==3.2.1 \
+    --hash=sha256:066038a96df12c23d6da6a591472436ada50103f575d8a1f802778a044f668c8 \
+    --hash=sha256:0d9230d6414fafe5b441f7eb179c40eb35b7b0453bf96a4db8727aa72e755e4a \
+    --hash=sha256:10efc70f1e7a5e270fbe3ea12eeeed526a7ddf223576032fc8f2ea8a0091a88e \
+    --hash=sha256:1e0bdb08625b0ce144a2e76dd5ed86605906e41196df92d660c8f87a993a1513 \
+    --hash=sha256:25956a9fc7cc6f2aabdb43b07e6f058ff4abaa8a9116b68a9bf26a9a27a802fe \
+    --hash=sha256:3b7f81a839e4c6a68cddc1ec89b02aa7ed5a8cb8e6f8e669a13a5771439a7568 \
+    --hash=sha256:412eb738f55d4ba9f1df99116f3ceede2d678d3ad578d0e231e901c46a8d2240 \
+    --hash=sha256:5850bbfa0ad87dd138fbd2c3088d0641b34393c0d60d4679296596574199d210 \
+    --hash=sha256:6c538087b8955a8ba9cd067588a3a000390e05783875da33059bab9c5cd38a0a \
+    --hash=sha256:7026df3274e20f72678b5d1a1425358004d9fe4316b775e413123841936345a5 \
+    --hash=sha256:78e0cbf9d82ffb661d3fe6c5b8c06613d50883f648a422305bd15c489ec2183a \
+    --hash=sha256:7e4a41592dc0f7e0275fe46f86d916cc15aa85afde4f08110b6aa19cfbc9265e \
+    --hash=sha256:9694d7753b88f8ea4ee85564208e534e5d15474e88709aba99d16d783b633de2 \
+    --hash=sha256:9bcff883e1bb9819a651ad1151779b30fd3c7ed838e1f59e894984b9df54e54b \
+    --hash=sha256:a8eb06ba156e65a42ef47bf18d2fc7cd3f558cc72af3b2743fb5f8ef92778117 \
+    --hash=sha256:bcfbae441b0e8db388f23a7861496e206cf4fe59ab75991ddcf340dac3d2a344 \
+    --hash=sha256:c6f9bf94f41335b184bf165569012bef6f4819fb7da057b153e5f8f7d1536c85 \
+    --hash=sha256:c9ed3f4805c205e15696993a4ee099ae36ccb4c4cbaa05415e8db1bf71d5ccc6 \
+    --hash=sha256:fa349bb85d69b75ee05a223e4383eecb74c82df50db9b450d4d3b174f98577a6
+    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+winrt-windows-media-ocr==3.2.1 \
+    --hash=sha256:0b3046adb48478dd3c65a1e63f104668d40f0b026d33a0d6ea337f4705a6796f \
+    --hash=sha256:20a1bc66461eaa6004261cad83226ca3df2e43e0fedff6fff08646844b772fd0 \
+    --hash=sha256:31a620f6704cf8a27bc38a5e4f7a7888c935aecc5443c6dfbfddca331259e2af \
+    --hash=sha256:45b65325701de8eb11dd2f883a69a1a1a7a518c4563605fe994e7379ee8559e7 \
+    --hash=sha256:4f5a851a0e520b1592d629f30dc140111bcbb5e3a47b1cb1bf4d67b1cfc01256 \
+    --hash=sha256:521e63c42073ee911f373aa24a67eea0f2903b3bb91febdbc34875b254f2b66e \
+    --hash=sha256:5785d56c5264d3db2fbfdd88ce3af92bec7e57eb3b65800801c14389ce7803e5 \
+    --hash=sha256:5ea135c42c8451ba3e202de149acd0db63d6925deca51c79fb244b1f33d6a2c9 \
+    --hash=sha256:611ae13dc62c0ff4787e54275e0e09d73f6081aed427bf40d031892cec0429c7 \
+    --hash=sha256:74e3e3c060656ea80cd961adaffe2461fc0233fc9e4658feb3469cdf77ba7c02 \
+    --hash=sha256:7d241eb5616772031f691111a8e0c70729bf8372ea552fdcb1a35544b7e9e832 \
+    --hash=sha256:80a8aeaced0ffd7dfc411529ed9acfaabd437f145b16db9d6539ef5ad26622bc \
+    --hash=sha256:8252e790211a0ddace4513988dc4c36edaf727060cf5f6d4f1a1e11bc0020854 \
+    --hash=sha256:9984824864b49eb65765f60ea9d910928888efe3cdf5f71f037d6fe9133134f6 \
+    --hash=sha256:c3f2e5120cc41eef5f8f0a1c3039f98fa4236c0b0fcf5078f42274a1d2d5d61c \
+    --hash=sha256:c67fa675947e40f13c58ef4a1c49f8c779d3e6f1fdc91733a506a5e41ebf0007 \
+    --hash=sha256:dd2a8f427f18c122cbeb9f556999650bd8bf55402f648005efc29a2972878f5b \
+    --hash=sha256:e1d44b85875643b4718d1094dbe75cee72b3cecedafe37c3f27b738f53bef96c \
+    --hash=sha256:e731cf200a4731f53c0e40fba72e0312e895f80ab4e3574dc45ef3b1e35509ef
+    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
+winrt-windows-storage-streams==3.2.1 \
+    --hash=sha256:040cb94e6fb26b0d00a00e8b88b06fadf29dfe18cf24ed6cb3e69709c3613307 \
+    --hash=sha256:1c630cfdece58fcf82e4ed86c826326123529836d6d4d855ae8e9ceeff67b627 \
+    --hash=sha256:202c5875606398b8bfaa2a290831458bb55f2196a39c1d4e5fa88a03d65ef915 \
+    --hash=sha256:293e09825559d0929bbe5de01e1e115f7a6283d8996ab55652e5af365f032987 \
+    --hash=sha256:3c5bf41d725369b9986e6d64bad7079372b95c329897d684f955d7028c7f27a0 \
+    --hash=sha256:401bb44371720dc43bd1e78662615a2124372e7d5d9d65dfa8f77877bbcb8163 \
+    --hash=sha256:476f522722751eb0b571bc7802d85a82a3cae8b1cce66061e6e758f525e7b80f \
+    --hash=sha256:48a78e5dc7d3488eb77e449c278bc6d6ac28abcdda7df298462c4112d7635d00 \
+    --hash=sha256:5cd0dbad86fcc860366f6515fce97177b7eaa7069da261057be4813819ba37ee \
+    --hash=sha256:77c1f0e004b84347b5bd705e8f0fc63be8cd29a6093be13f1d0869d0d97b7d78 \
+    --hash=sha256:7dace2f9e364422255d0e2f335f741bfe7abb1f4d4f6003622b2450b87c91e69 \
+    --hash=sha256:89bb2d667ebed6861af36ed2710757456e12921ee56347946540320dacf6c003 \
+    --hash=sha256:b02fa251a7eef6081eca1a5f64ecf349cfd1ac0ac0c5a5a30be52897d060bed5 \
+    --hash=sha256:ca3c5ec0aab60895006bf61053a1aca6418bc7f9a27a34791ba3443b789d230d \
+    --hash=sha256:d7ff22434a4829d616a04b068a191ac79e008f6c27541bb178c1f6f1fe7a1657 \
+    --hash=sha256:da71231d4a554f9f15f1249b4990c6431176f6dfb0e3385c7caa7896f4ca24d6 \
+    --hash=sha256:e4508ee135af53e4fc142876abbf4bc7c2a95edfc7d19f52b291a8499cacd6dc \
+    --hash=sha256:efdf250140340a75647e8e8ad002782d91308e9fdd1e19470a5b9cc969ae4780 \
+    --hash=sha256:fa90244191108f85f6f7afb43a11d365aca4e0722fe8adc62fb4d2c678d0993d
+    # via -r packages/vibeocr-backend/runtime-profiles/win-x64-cpu/../win-x64-base/requirements.in
 xlsxwriter==3.2.9 \
     --hash=sha256:254b1c37a368c444eac6e2f867405cc9e461b0ed97a3233b2ac1e574efb4140c \
     --hash=sha256:9a5db42bc5dff014806c58a20b9eae7322a134abb6fce3c92c181bfb275ec5b3

@@ -113,7 +113,7 @@ def _release(root: Path, *, with_base_pack: bool = False) -> tuple[Path, Path]:
         {
             "scope_id": "gpu-runtime",
             "component_ids": [
-                "ocr_engine",
+                "rapidocr-base",
                 "pdf_document_tools",
                 "image_code_tools",
                 "runtime_host",
@@ -538,7 +538,8 @@ def test_failed_repair_preserves_previous_runtime_until_verified_commit(
         accelerator="cpu",
         install_runner=fail,
         component_probe=lambda _root, component_ids, _profile_id: {
-            component_id: component_id != "ocr_engine" for component_id in component_ids
+            component_id: component_id != "rapidocr-base"
+            for component_id in component_ids
         },
         operation_id="failed-repair",
     )
@@ -576,7 +577,8 @@ def test_component_import_probe_reports_integrity_failed_drift(
         install_runner=_fake_install,
         install_component_ids=(),
         component_probe=lambda _root, component_ids, _profile_id: {
-            component_id: component_id != "ocr_engine" for component_id in component_ids
+            component_id: component_id != "rapidocr-base"
+            for component_id in component_ids
         },
     )
 
@@ -615,9 +617,9 @@ def test_base_component_probe_uses_rapidocr_binding(
 
     assert probe_runtime_components(
         runtime_root,
-        ("ocr_engine",),
+        ("rapidocr-base",),
         profile_id="win-x64-base",
-    ) == {"ocr_engine": True}
+    ) == {"rapidocr-base": True}
 
 
 def test_runtime_control_inspect_probes_components_once(tmp_path: Path) -> None:
@@ -691,7 +693,8 @@ def test_repair_of_in_sync_component_succeeds_without_claiming_global_ready(
         install_runner=install,
         install_component_ids=(),
         component_probe=lambda _root, component_ids, _profile_id: {
-            component_id: component_id != "ocr_engine" for component_id in component_ids
+            component_id: component_id != "rapidocr-base"
+            for component_id in component_ids
         },
         component_ids=("runtime_host",),
         operation_id="repair-ready-component",
@@ -847,14 +850,14 @@ def test_component_repair_reports_requested_and_effective_scope(
         accelerator="cpu",
         install_runner=install,
         operation_id="repair-1",
-        component_ids=("ocr_engine",),
+        component_ids=("rapidocr-base",),
     )
     repair.repair()
 
     assert len(calls) == 2
     snapshot = repair.maintenance_snapshot()
     assert snapshot is not None
-    assert snapshot["requested_component_ids"] == ["ocr_engine"]
+    assert snapshot["requested_component_ids"] == ["rapidocr-base"]
     assert set(snapshot["effective_component_ids"]) == {
         component.component_id
         for component in repair.manifest.profiles[repair.plan].components
@@ -870,14 +873,18 @@ def test_component_drift_uses_installed_distribution_and_selected_repair(
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     manifest_payload["profiles"]["win-x64-cpu"]["components"] = [
         {
-            "component_id": "ocr_engine",
-            "display_name": "OCR engine",
+            "component_id": "rapidocr-base",
+            "display_name": "RapidOCR base inference",
+        },
+        {
+            "component_id": "paddleocr-cpu",
+            "display_name": "PaddleOCR CPU inference",
             "version": "3.7.0",
         },
         *[
             {"component_id": component_id, "display_name": display_name}
             for component_id, display_name in (
-                ("document_parsing", "Document parsing"),
+                ("mineru-cpu", "MinerU CPU document parsing"),
                 ("pdf_document_tools", "PDF and document tools"),
                 ("image_code_tools", "Image and code tools"),
                 ("runtime_host", "Runtime HTTP host"),
@@ -920,12 +927,20 @@ def test_component_drift_uses_installed_distribution_and_selected_repair(
         "Metadata-Version: 2.1\nName: paddleocr\nVersion: 3.6.0\n",
         encoding="utf-8",
     )
-    drifted = initial.profile_payload()["components"][0]
+    drifted = next(
+        item
+        for item in initial.profile_payload()["components"]
+        if item["component_id"] == "paddleocr-cpu"
+    )
     assert drifted["actual_state"] == "drifted"
     assert drifted["actual_version"] == "3.6.0"
     assert drifted["drift_reason"] == "version_mismatch"
     metadata.unlink()
-    missing = initial.profile_payload()["components"][0]
+    missing = next(
+        item
+        for item in initial.profile_payload()["components"]
+        if item["component_id"] == "paddleocr-cpu"
+    )
     assert missing["actual_state"] == "missing"
 
     repair = RuntimeInstaller(
@@ -935,12 +950,17 @@ def test_component_drift_uses_installed_distribution_and_selected_repair(
         accelerator="cpu",
         install_runner=install,
         operation_id="repair-component",
-        component_ids=("ocr_engine",),
+        component_ids=("paddleocr-cpu",),
     )
     repair.repair()
 
     assert len(calls) == 2
-    assert repair.profile_payload()["components"][0]["actual_state"] == "ready"
+    repaired = next(
+        item
+        for item in repair.profile_payload()["components"]
+        if item["component_id"] == "paddleocr-cpu"
+    )
+    assert repaired["actual_state"] == "ready"
 
 
 def test_runtime_host_json_contract_selects_and_persists_accelerator(
@@ -1117,8 +1137,8 @@ def test_install_progress_and_http_status_share_the_persisted_snapshot(
     assert status["maintenance"]["sequence"] == events[-1]["snapshot"]["sequence"]
     assert status["maintenance"]["message_code"] == "runtime.ensure_complete"
     assert status["profile"]["components"][0] == {
-        "component_id": "ocr_engine",
-        "display_name": "OCR engine",
+        "component_id": "rapidocr-base",
+        "display_name": "RapidOCR base inference",
         "state": "ready",
         "desired_state": "ready",
         "desired_version": None,
@@ -1132,7 +1152,8 @@ def test_install_progress_and_http_status_share_the_persisted_snapshot(
     monkeypatch.setattr(
         "vibeocr.backend.runtime_maintenance.probe_runtime_components",
         lambda _root, component_ids, **_kwargs: {
-            component_id: component_id != "ocr_engine" for component_id in component_ids
+            component_id: component_id != "rapidocr-base"
+            for component_id in component_ids
         },
     )
     runtime_maintenance._component_probe_cache.clear()
@@ -1436,7 +1457,7 @@ def test_cuda_gpu_only_selection_uses_exact_install_scope(
         (runtime.paths.runtime_root / ".installed.json").read_text(encoding="utf-8")
     )
     assert marker["component_ids"] == [
-        "ocr_engine",
+        "rapidocr-base",
         "pdf_document_tools",
         "image_code_tools",
         "runtime_host",
@@ -1497,7 +1518,7 @@ def test_control_installer_store_composition_retries_durable_selection(
         for item in constructed
         if item.get("operation_id") == "composition-retried"
     )
-    assert retried["install_component_ids"] == ("document_parsing",)
+    assert retried["install_component_ids"] == ("mineru-cpu",)
     assert retried["download_source_ids"] == ("huggingface",)
 
     store = runtime_maintenance.RuntimeOperationStore(restarted.state_root)
@@ -1505,7 +1526,7 @@ def test_control_installer_store_composition_retries_durable_selection(
     assert failed_intent["requested_download_source_ids"] == ["huggingface"]
     assert failed_intent["download_source_ids"] == ["huggingface", "tuna-pypi"]
     intent = store.intent("composition-retried")
-    assert intent["install_component_ids"] == ["document_parsing"]
+    assert intent["install_component_ids"] == ["mineru-cpu"]
     assert intent["requested_download_source_ids"] == ["huggingface"]
     assert intent["download_source_ids"] == ["huggingface", "tuna-pypi"]
     observation = restarted.observe("composition-retried")
@@ -1663,7 +1684,7 @@ def test_ensure_with_explicit_base_only_scope_installs_base_lock(
     ("install_component_ids", "expected_profile", "expected_ocr_import"),
     [
         ((), "win-x64-base", "rapidocr"),
-        (("document_parsing",), "win-x64-cpu", "paddleocr"),
+        (("document_parsing",), "win-x64-cpu", "rapidocr"),
     ],
 )
 def test_install_probe_uses_actual_install_scope_profile(
@@ -1686,7 +1707,7 @@ def test_install_probe_uses_actual_install_scope_profile(
             component_id: (
                 runtime_component_binding(profile_id, component_id).import_name
                 == expected_ocr_import
-                if component_id == "ocr_engine"
+                if component_id == "rapidocr-base"
                 else profile_id == expected_profile
             )
             for component_id in component_ids
@@ -1797,7 +1818,7 @@ def test_ensure_with_optional_components_reports_full_profile_closure(
     # effective 诚实回显闭包而非请求子集。
     assert seen_profiles == ["win-x64-cpu"]
     snapshot = installer.maintenance_snapshot()
-    assert snapshot["requested_component_ids"] == ["document_parsing"]
+    assert snapshot["requested_component_ids"] == ["mineru-cpu"]
     assert snapshot["effective_component_ids"] == list(
         installer._profile_component_ids()
     )
@@ -1986,22 +2007,15 @@ def test_drift_projection_uses_covering_profile_declared_versions(
         "_cached_runtime_component_probe",
         lambda _root, component_ids, **_kwargs: dict.fromkeys(component_ids, True),
     )
-    """base-only 安装的版本比对必须用 base 声明（rapidocr），不是 cpu plan。
-
-    回归（v0.12.2 现场）：真实 manifest 的组件带声明版本；漂移投影仍按
-    accelerator 的 plan descriptor 取 distribution（cpu 的 ocr_engine 绑定
-    paddleocr），刚装好的 rapidocr 闭包被判 missing/version_mismatch，ensure
-    以 "did not verify" 失败。``runtime_profile_status(profile_id=...)`` 与
-    ``_drifted_component_ids`` 必须按已安装 scope 的覆盖 profile 投影。
-    """
+    """base-only 安装的版本比对必须使用稳定的 rapidocr-base 身份。"""
 
     manifest_path, component = _release(tmp_path / "release")
     document = json.loads(manifest_path.read_text(encoding="utf-8"))
     # 声明组件必须与 loader 派生的稳定 id 顺序一致，仅注入版本差异
     document["profiles"]["win-x64-base"]["components"] = [
         {
-            "component_id": "ocr_engine",
-            "display_name": "Default offline OCR engine",
+            "component_id": "rapidocr-base",
+            "display_name": "RapidOCR base inference",
             "version": "3.9.2",
         },
         {
@@ -2016,11 +2030,19 @@ def test_drift_projection_uses_covering_profile_declared_versions(
     ]
     document["profiles"]["win-x64-cpu"]["components"] = [
         {
-            "component_id": "ocr_engine",
-            "display_name": "OCR engine",
+            "component_id": "rapidocr-base",
+            "display_name": "RapidOCR base inference",
+            "version": "3.9.2",
+        },
+        {
+            "component_id": "paddleocr-cpu",
+            "display_name": "PaddleOCR CPU inference",
             "version": "3.7.0",
         },
-        {"component_id": "document_parsing", "display_name": "Document parsing"},
+        {
+            "component_id": "mineru-cpu",
+            "display_name": "MinerU CPU document parsing",
+        },
         {
             "component_id": "pdf_document_tools",
             "display_name": "PDF and document tools",
@@ -2060,7 +2082,7 @@ def test_drift_projection_uses_covering_profile_declared_versions(
                 "manifest_sha256": loaded.sha256,
                 "accelerator": "cpu",
                 "component_ids": [
-                    "ocr_engine",
+                    "rapidocr-base",
                     "pdf_document_tools",
                     "image_code_tools",
                     "runtime_host",
@@ -2090,11 +2112,10 @@ def test_drift_projection_uses_covering_profile_declared_versions(
         entry["component_id"]: entry["actual_state"] for entry in cpu_view["components"]
     }
 
-    assert base_states["ocr_engine"] == "ready"
+    assert base_states["rapidocr-base"] == "ready"
     assert base_states["pdf_document_tools"] == "ready"
-    # 默认 cpu 投影下同一安装是 missing（paddleocr 分布不存在）——证明
-    # profile_id 覆盖确实改变了版本比对来源，而不是恒等于 plan。
-    assert cpu_states["ocr_engine"] == "missing"
+    assert cpu_states["rapidocr-base"] == "ready"
+    assert cpu_states["paddleocr-cpu"] == "missing"
 
     installer = RuntimeInstaller(
         product_root=tmp_path / "product",

@@ -158,7 +158,7 @@ def _engine_selection_app():
             _Engine(
                 OcrEngine.PADDLEOCR,
                 EngineAvailability.PREPARATION_REQUIRED,
-                required_component="document_parsing",
+                required_component="paddleocr-cpu",
             ),
         ]
     )
@@ -351,8 +351,9 @@ async def _selection_http_checks() -> None:
                 snapshot["requested_component_ids"] = list(scope)
             if kwargs["operation"] == "ensure" and scope:
                 snapshot["effective_component_ids"] = [
-                    "ocr_engine",
-                    "document_parsing",
+                    "rapidocr-base",
+                    "paddleocr-cpu",
+                    "mineru-cpu",
                     "pdf_document_tools",
                     "image_code_tools",
                     "runtime_host",
@@ -385,7 +386,7 @@ async def _selection_http_checks() -> None:
         base_url="http://127.0.0.1",
         headers={"Authorization": f"Bearer {token}"},
     ) as client:
-        # 2. health：两个新 capability 携带结构合法的 catalog。
+        # 2. health：selection 与 recognition mode capability 携带结构化 catalog。
         health = (await client.get("/v2/health")).json()
         descriptors = {d["name"]: d for d in health["capability_descriptors"]}
         sources = descriptors["runtime.download-sources.v1"]["download_source_catalog"][
@@ -402,7 +403,11 @@ async def _selection_http_checks() -> None:
         if not variants or len(variant_keys) != len(variants):
             raise RuntimeError("component variant business keys are not unique")
         selectable = {v["component_id"] for v in variants}
-        if {"ocr_engine", "pdf_document_tools"}.intersection(selectable):
+        if {
+            "ocr_engine",
+            "rapidocr-base",
+            "pdf_document_tools",
+        }.intersection(selectable):
             raise RuntimeError("base components must not be selectable variants")
         # 引擎 catalog 的 required_component 必须是可准备的组件。
         engine_catalog = descriptors["ocr.engine-selection.v1"]["ocr_engine_catalog"]
@@ -412,6 +417,59 @@ async def _selection_http_checks() -> None:
                 raise RuntimeError(
                     f"engine {entry['id']} requires unknown component {required}"
                 )
+        mode_catalog = descriptors["ocr.recognition-modes.v1"][
+            "recognition_mode_catalog"
+        ]["modes"]
+        mode_execution = {
+            entry["id"]: (
+                entry["pipeline_id"],
+                entry["engine"],
+                entry["provisioning"],
+                entry["lifecycle"]["kind"],
+            )
+            for entry in mode_catalog
+        }
+        if mode_execution != {
+            "rapid_text": ("OCR", "rapidocr", "base_runtime", "unmanaged"),
+            "windows_text": ("OCR", "windows", "operating_system", "unmanaged"),
+            "paddle_text": (
+                "OCR",
+                "paddleocr",
+                "advanced_component",
+                "model_residency",
+            ),
+            "paddle_structure": (
+                "PP-StructureV3",
+                None,
+                "advanced_component",
+                "model_residency",
+            ),
+            "paddle_document_vl": (
+                "PaddleOCR-VL",
+                None,
+                "advanced_component",
+                "model_residency",
+            ),
+            "mineru_document": (
+                "MinerU",
+                None,
+                "advanced_component",
+                "process_keep_alive",
+            ),
+            "paddle_table": (
+                "TABLE_RECOGNITION",
+                None,
+                "advanced_component",
+                "model_residency",
+            ),
+            "paddle_formula": (
+                "FORMULA_RECOGNITION",
+                None,
+                "advanced_component",
+                "model_residency",
+            ),
+        }:
+            raise RuntimeError("recognition mode execution catalog differs")
 
         # 3. settings：download_source_ids 持久化往返，未知 id fail closed。
         put = await client.put(

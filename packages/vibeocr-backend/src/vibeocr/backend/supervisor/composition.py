@@ -8,6 +8,7 @@ session-scoped temp directory under the OS temp or a portable location).
 
 from __future__ import annotations
 
+import os
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from vibeocr.runtime_contracts import CancelMode, ResidencyStatus
 
     from .inference.ocr_engines import OcrEngineRegistry, OcrEngineResolver
+    from .inference.recognition_modes import RecognitionModeRegistry
     from .jobs.registry import JobRecord
 
 
@@ -245,6 +247,62 @@ def _build_mineru_executor(*, scheduler: Any = None) -> Executor:
     return MinerUExecutor(adapter_factory=adapter_factory, scheduler=scheduler)
 
 
+def _build_recognition_mode_registry(
+    *,
+    engine_resolver: OcrEngineResolver,
+    use_paddle: bool,
+    use_mineru: bool,
+) -> RecognitionModeRegistry:
+    """把实时 engine/component 探针投影成单一 Recognition Mode 目录。"""
+    from .inference.recognition_modes import (
+        ModeAvailability,
+        RecognitionModeAvailability,
+        RecognitionModeId,
+        RecognitionModeRegistry,
+    )
+
+    accelerator = os.environ.get("VIBEOCR_RUNTIME_ACCELERATOR", "cpu")
+    suffix = "cuda" if accelerator == "nvidia_cuda" else "cpu"
+
+    def availability(definition) -> ModeAvailability:  # type: ignore[no-untyped-def]
+        if definition.engine is not None:
+            descriptors = {
+                descriptor.engine_id.value: descriptor
+                for descriptor in engine_resolver.probe_descriptors()
+            }
+            descriptor = descriptors[definition.engine]
+            if definition.mode_id is RecognitionModeId.RAPID_TEXT:
+                if descriptor.availability.value == "ready":
+                    return ModeAvailability(RecognitionModeAvailability.READY)
+                return ModeAvailability(
+                    RecognitionModeAvailability.PREPARATION_REQUIRED,
+                    reason_code=descriptor.reason_code,
+                    required_component="rapidocr-base",
+                )
+            required_component = (
+                f"paddleocr-{suffix}"
+                if definition.mode_id is RecognitionModeId.PADDLE_TEXT
+                else None
+            )
+            return ModeAvailability(
+                descriptor.availability.value,
+                reason_code=descriptor.reason_code,
+                required_component=required_component,
+            )
+        is_mineru = definition.mode_id is RecognitionModeId.MINERU_DOCUMENT
+        ready = use_mineru if is_mineru else use_paddle
+        component = f"mineru-{suffix}" if is_mineru else f"paddleocr-{suffix}"
+        return ModeAvailability(
+            RecognitionModeAvailability.READY
+            if ready
+            else RecognitionModeAvailability.PREPARATION_REQUIRED,
+            reason_code=None if ready else "runtime_component_missing",
+            required_component=None if ready else component,
+        )
+
+    return RecognitionModeRegistry(availability_probe=availability)
+
+
 def _mineru_available() -> bool:
     """Return True if a real MinerU backend is importable in this environment."""
     try:
@@ -344,6 +402,7 @@ def build_supervisor(
     if executor is not None:
         exec_impl = executor
         engine_resolver = None
+        recognition_mode_registry = None
     else:
         want_paddle = use_real_paddle is True or (
             use_real_paddle is None and _paddle_available()
@@ -354,6 +413,11 @@ def build_supervisor(
         from .inference.ocr_engines import OcrEngineResolver
 
         engine_resolver = OcrEngineResolver(registry=engine_registry)
+        recognition_mode_registry = _build_recognition_mode_registry(
+            engine_resolver=engine_resolver,
+            use_paddle=want_paddle,
+            use_mineru=want_mineru,
+        )
         exec_impl = _build_composite_executor(
             use_paddle=want_paddle,
             use_mineru=want_mineru,
@@ -368,6 +432,7 @@ def build_supervisor(
         pdf_adapter=pdf_adapter,
         engine_registry=engine_registry,
         engine_resolver=engine_resolver,
+        recognition_mode_registry=recognition_mode_registry,
         settings_store=settings_store,
     )
     # Clean stale staging left by a previous crashed instance (plan Phase 2).

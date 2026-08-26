@@ -130,7 +130,10 @@ def _client(app: Any, token: str) -> httpx.AsyncClient:
     )
 
 
-def _manifest(engine: str | None = None, pipeline: str = "OCR") -> str:
+def _manifest(
+    engine: str | None = None,
+    pipeline: str = "OCR",
+) -> str:
     pipeline_obj: dict[str, Any] = {
         "pipeline_id": pipeline,
         "options_version": 1,
@@ -165,7 +168,7 @@ def engines() -> list[_FakeOcrEngine]:
         _FakeOcrEngine(
             OcrEngine.PADDLEOCR,
             availability=EngineAvailability.PREPARATION_REQUIRED,
-            required_component="document_parsing",
+            required_component="paddleocr-cpu",
         ),
     ]
 
@@ -230,7 +233,7 @@ class TestSubmitEngineSelection:
         token = generate_session_token()
         async with _client(create_app(module, token), token) as http:
             resp = await _submit(http, _manifest(engine="windows"))
-        assert resp.status_code == 426
+        assert resp.status_code == 426, resp.text
         body = resp.json()
         assert body["code"] == "OCR_ENGINE_UNAVAILABLE"
         assert body["detail"]["selectable_engines"] == ["rapidocr"]
@@ -247,7 +250,23 @@ class TestSubmitEngineSelection:
         assert resp.status_code == 428
         body = resp.json()
         assert body["code"] == "OCR_ENGINE_PREPARATION_REQUIRED"
-        assert body["detail"]["required_component"] == "document_parsing"
+        assert body["detail"]["required_component"] == "paddleocr-cpu"
+
+    async def test_job_recognition_mode_extension_is_strictly_rejected(
+        self, tmp_path: Any, engines: list[_FakeOcrEngine]
+    ) -> None:
+        module, executor = _module(tmp_path, engines)
+        token = generate_session_token()
+        payload = json.loads(_manifest(engine="rapidocr"))
+        payload["pipeline"]["recognition_mode"] = "rapid_text"
+        async with _client(create_app(module, token), token) as http:
+            rejected = await _submit(http, json.dumps(payload))
+            accepted = await _submit(http, _manifest(engine="rapidocr"))
+
+        assert rejected.status_code == 400
+        assert rejected.json()["code"] == "VALIDATION_ERROR"
+        assert accepted.status_code == 200
+        assert executor.pipelines[0].engine is OcrEngine.RAPIDOCR
 
     async def test_default_engine_unavailable_fails_closed_426(
         self, tmp_path: Any
@@ -266,6 +285,19 @@ class TestSubmitEngineSelection:
         assert resp.status_code == 426
         assert resp.json()["code"] == "OCR_ENGINE_UNAVAILABLE"
         assert resp.json()["detail"]["engine"] == "rapidocr"
+        assert executor.pipelines == []
+
+    async def test_specialized_pipeline_uses_mode_registry_availability(
+        self, tmp_path: Any, engines: list[_FakeOcrEngine]
+    ) -> None:
+        module, executor = _module(tmp_path, engines)
+        token = generate_session_token()
+        async with _client(create_app(module, token), token) as http:
+            resp = await _submit(http, _manifest(pipeline="TABLE_RECOGNITION"))
+
+        assert resp.status_code == 426, resp.text
+        assert resp.json()["code"] == "RECOGNITION_MODE_UNAVAILABLE"
+        assert resp.json()["detail"]["recognition_mode"] == "paddle_table"
         assert executor.pipelines == []
 
     async def test_no_registry_value_checks_still_apply(self, tmp_path: Any) -> None:
@@ -298,7 +330,7 @@ class TestReadyEngineCatalog:
         assert entries["rapidocr"]["included_in_base"] is True
         assert entries["windows"]["availability"] == "unavailable"
         assert entries["paddleocr"]["availability"] == "preparation_required"
-        assert entries["paddleocr"]["required_component"] == "document_parsing"
+        assert entries["paddleocr"]["required_component"] == "paddleocr-cpu"
 
     async def test_catalog_without_registry_is_honestly_unavailable(
         self, tmp_path: Any
@@ -385,36 +417,10 @@ class TestReadyEngineCatalog:
         assert paddle_availability(refreshed) == "ready"
 
 
-@pytest.mark.parametrize(
-    ("availability", "expected_status", "expected_code"),
-    [
-        (
-            EngineAvailability.UNAVAILABLE,
-            426,
-            "OCR_ENGINE_UNAVAILABLE",
-        ),
-        (
-            EngineAvailability.PREPARATION_REQUIRED,
-            428,
-            "OCR_ENGINE_PREPARATION_REQUIRED",
-        ),
-    ],
-)
-async def test_preload_preserves_ocr_engine_error_mapping(
+async def test_legacy_ocr_preload_is_rejected_instead_of_warming_default_engine(
     tmp_path: Any,
-    availability: EngineAvailability,
-    expected_status: int,
-    expected_code: str,
 ) -> None:
-    rapid = _FakeOcrEngine(
-        OcrEngine.RAPIDOCR,
-        availability=availability,
-        required_component=(
-            "document_parsing"
-            if availability is EngineAvailability.PREPARATION_REQUIRED
-            else None
-        ),
-    )
+    rapid = _FakeOcrEngine(OcrEngine.RAPIDOCR)
     module, handle = build_supervisor(
         instance_id=new_instance_id(),
         stager_root=tmp_path / "staging",
@@ -424,5 +430,55 @@ async def test_preload_preserves_ocr_engine_error_mapping(
     )
     async with _client(create_app(module, handle.token), handle.token) as http:
         response = await http.post("/v2/runtime/preload", json={"pipelines": ["OCR"]})
-    assert response.status_code == expected_status, response.text
-    assert response.json()["code"] == expected_code
+    assert response.status_code == 400, response.text
+    assert response.json()["code"] == "RECOGNITION_MODE_PIPELINE_MISMATCH"
+
+
+async def test_preload_and_release_enforce_recognition_mode_lifecycle(
+    tmp_path: Any,
+) -> None:
+    module, executor = _module(tmp_path, None)
+    token = generate_session_token()
+    app = create_app(module, token)
+    async with _client(app, token) as http:
+        paddle = await http.post(
+            "/v2/runtime/preload",
+            json={"pipelines": ["OCR"], "recognition_modes": ["paddle_text"]},
+        )
+        mineru = await http.post(
+            "/v2/runtime/preload",
+            json={"pipelines": ["MinerU"], "recognition_modes": ["mineru_document"]},
+        )
+        rapid_release = await http.post(
+            "/v2/runtime/release",
+            json={"pipeline": "OCR", "recognition_mode": "rapid_text"},
+        )
+
+    assert paddle.status_code == 426, paddle.text
+    assert paddle.json()["code"] == "RECOGNITION_MODE_UNAVAILABLE"
+    assert mineru.status_code == 400
+    assert mineru.json()["code"] == "RECOGNITION_MODE_LIFECYCLE_UNSUPPORTED"
+    assert rapid_release.status_code == 400
+    assert rapid_release.json()["code"] == ("RECOGNITION_MODE_LIFECYCLE_UNSUPPORTED")
+    del executor
+
+
+async def test_residency_response_keeps_protocol_resource_identity(
+    tmp_path: Any,
+) -> None:
+    from vibeocr.runtime_contracts import ResidencyEntry, ResidencyKind, ResidencyStatus
+
+    module, executor = _module(tmp_path, None)
+    executor.residency_status = lambda: ResidencyStatus(  # type: ignore[method-assign]
+        entries=(ResidencyEntry(pipeline="MinerU", kind=ResidencyKind.SOFT_TTL),)
+    )
+    token = generate_session_token()
+
+    async with _client(create_app(module, token), token) as http:
+        response = await http.get("/v2/runtime/residency")
+
+    assert response.status_code == 200, response.text
+    entry = response.json()["entries"][0]
+    assert entry["recognition_mode"] == "mineru_document"
+    assert entry["resource_kind"] == "process"
+    assert entry["resource_id"] == "mineru-api"

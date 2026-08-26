@@ -1,4 +1,4 @@
-"""component/source selection 的 HTTP 面契约（Protocol 2.7.0）。"""
+"""component/source selection 的 HTTP 面契约（Protocol 2.8.0）。"""
 
 from __future__ import annotations
 

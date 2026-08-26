@@ -69,6 +69,7 @@ from vibeocr.runtime_contracts.dtos import OcrEngine
 from vibeocr.runtime_contracts.errors import error_registry
 from vibeocr.runtime_contracts.generated.capabilities import (
     OCR_ENGINE_SELECTION_V1,
+    OCR_RECOGNITION_MODES_V1,
     RUNTIME_COMPONENT_SELECTION_V1,
     RUNTIME_DOWNLOAD_SOURCES_V1,
 )
@@ -82,6 +83,7 @@ from .inference.ocr_engines import (
     ensure_engine_valid_for_pipeline,
     parse_wire_engine,
 )
+from .inference.recognition_modes import RecognitionModeError
 from .jobs.registry import JobNotFoundError
 from .jobs.staging import InputExpiredError, StagingQuotaError
 from .module import ShutdownRequested, SupervisorModule
@@ -168,8 +170,13 @@ def _engine_catalog_for(module: SupervisorModule) -> dict[str, Any]:
     return resolver.catalog_payload()
 
 
+def _recognition_mode_catalog_for(module: SupervisorModule) -> dict[str, Any]:
+    return module.recognition_mode_registry.catalog_payload()
+
+
 def _capability_descriptors(
-    engine_catalog: dict[str, Any] | None = None,
+    engine_catalog: dict[str, Any],
+    recognition_mode_catalog: dict[str, Any],
 ) -> list[dict[str, Any]]:
     registry = _capability_registry_json()
     definitions = registry["definitions"]
@@ -189,6 +196,8 @@ def _capability_descriptors(
             descriptor["ocr_engine_catalog"] = engine_catalog or (
                 _fallback_engine_catalog()
             )
+        elif name == OCR_RECOGNITION_MODES_V1:
+            descriptor["recognition_mode_catalog"] = recognition_mode_catalog
         elif name == RUNTIME_DOWNLOAD_SOURCES_V1:
             # 源目录来自 Backend 声明（release-wide、确定性）。
             descriptor["download_source_catalog"] = download_source_catalog_payload()
@@ -210,6 +219,16 @@ def _engine_error_response(exc: OcrEngineError, instance_id: str) -> JSONRespons
         detail["selectable_engines"] = list(exc.selectable_engines)
     detail.update(exc.detail)
     return _error_response(exc.code, instance_id, detail=detail)
+
+
+def _recognition_mode_error_response(
+    exc: RecognitionModeError, instance_id: str
+) -> JSONResponse:
+    return _error_response(
+        ErrorCode(exc.code_name),
+        instance_id,
+        detail=exc.detail,
+    )
 
 
 def _extract_engine_selection(
@@ -347,7 +366,8 @@ def create_app(
             "draining": module.draining,
             "capabilities": list(ALL_CAPABILITIES),
             "capability_descriptors": _capability_descriptors(
-                _engine_catalog_for(module)
+                _engine_catalog_for(module),
+                _recognition_mode_catalog_for(module),
             ),
         }
 
@@ -379,6 +399,19 @@ def create_app(
                     ensure_engine_valid_for_pipeline(engine, pipeline.pipeline_id)
                 if engine_resolver is not None:
                     engine_resolver.validate(engine)
+                effective_engine = (
+                    engine
+                    if engine is not None
+                    else (
+                        engine_resolver.registry.default_engine
+                        if engine_resolver is not None
+                        else OcrEngine.RAPIDOCR
+                    )
+                )
+                module.recognition_mode_registry.resolve_execution_fields(
+                    pipeline_id=pipeline.pipeline_id,
+                    engine=effective_engine.value,
+                )
                 if engine is not None:
                     manifest = replace(
                         manifest, pipeline=replace(pipeline, engine=engine)
@@ -390,6 +423,11 @@ def create_app(
                     ErrorCode.OCR_ENGINE_NOT_VALID_FOR_PIPELINE,
                     reason_code="engine_only_valid_for_ocr_pipeline",
                     engine=engine.value,
+                )
+            elif pipeline is not None:
+                module.recognition_mode_registry.resolve_execution_fields(
+                    pipeline_id=pipeline.pipeline_id,
+                    engine=None,
                 )
             attachments: dict[str, tuple[str | None, bytes]] = {}
             for item in manifest.items:
@@ -407,6 +445,8 @@ def create_app(
                     await upload.read(),
                 )
             ref = module.submit_request(manifest, attachments)
+        except RecognitionModeError as exc:
+            return _recognition_mode_error_response(exc, instance_id)
         except OcrEngineError as exc:
             return _engine_error_response(exc, instance_id)
         except StagingQuotaError as exc:
@@ -695,7 +735,7 @@ def create_app(
 
     @app.get("/v2/runtime/residency", response_model=wire.ResidencyStatus)
     async def residency() -> dict[str, Any]:
-        return module.residency().to_payload()
+        return module.residency_payload()
 
     @app.post("/v2/runtime/release", response_model=wire.ResidencyStatus)
     async def release_runtime(request: Request) -> JsonResult:
@@ -707,7 +747,17 @@ def create_app(
         except (ValueError, TypeError):
             return _error_response(ErrorCode.VALIDATION_ERROR, instance_id)
         pipeline = body.get("pipeline")
-        return module.release_idle(pipeline).to_payload()
+        recognition_mode = body.get("recognition_mode")
+        try:
+            status = module.release_idle(
+                pipeline,
+                recognition_mode=recognition_mode,
+            )
+        except RecognitionModeError as exc:
+            return _recognition_mode_error_response(exc, instance_id)
+        return module.recognition_mode_registry.annotate_residency_payload(
+            status.to_payload()
+        )
 
     @app.post("/v2/runtime/preload", response_model=wire.ResidencyStatus)
     async def preload_runtime(request: Request) -> JsonResult:
@@ -719,6 +769,7 @@ def create_app(
         except (ValueError, TypeError):
             return _error_response(ErrorCode.VALIDATION_ERROR, instance_id)
         raw_pipelines = body["pipelines"]
+        raw_recognition_modes = body.get("recognition_modes")
         if (
             not isinstance(raw_pipelines, list)
             or not raw_pipelines
@@ -740,8 +791,19 @@ def create_app(
                 detail={"reason": f"unknown pipelines: {', '.join(unknown)}"},
             )
         pipelines = tuple(dict.fromkeys(raw_pipelines))
+        recognition_modes = (
+            tuple(dict.fromkeys(raw_recognition_modes))
+            if raw_recognition_modes is not None
+            else None
+        )
         try:
-            status = await asyncio.to_thread(module.preload, pipelines)
+            status = await asyncio.to_thread(
+                module.preload,
+                pipelines,
+                recognition_modes=recognition_modes,
+            )
+        except RecognitionModeError as exc:
+            return _recognition_mode_error_response(exc, instance_id)
         except OcrEngineError as exc:
             return _engine_error_response(exc, instance_id)
         except Exception as exc:
@@ -750,7 +812,9 @@ def create_app(
                 instance_id,
                 detail={"reason": str(exc)},
             )
-        return status.to_payload()
+        return module.recognition_mode_registry.annotate_residency_payload(
+            status.to_payload()
+        )
 
     @app.get("/v2/settings", response_model=wire.SettingsSnapshot)
     async def get_settings() -> dict[str, Any]:
@@ -795,6 +859,8 @@ def create_app(
             return module.update_settings(snapshot).to_payload()
         except RuntimeSelectionError as exc:
             return _error_response(exc.code, instance_id, detail={"reason": exc.reason})
+        except RecognitionModeError as exc:
+            return _recognition_mode_error_response(exc, instance_id)
         except (TypeError, ValueError) as exc:
             return _error_response(
                 ErrorCode.VALIDATION_ERROR,
