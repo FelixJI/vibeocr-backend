@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.4
+
+### Features
+
+- **runtime:** 明确认识模式与资源生命周期 (#69) (6d46160)
+
+### Bug Fixes
+
+- **runtime:** 禁止提交阶段接受取消 (#68) (c4f3099)
+
 ## 0.13.3
 
 ### Bug Fixes
