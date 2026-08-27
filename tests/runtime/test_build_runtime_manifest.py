@@ -49,7 +49,7 @@ def _inputs(root: Path) -> dict[str, Path]:
         "cpu_lock": root / "requirements-win-x64-cpu.lock",
         "cu126_lock": root / "requirements-win-x64-cu126.lock",
         "cu126_gpu_lock": root / "requirements-win-x64-cu126-gpu.lock",
-        "python_archive": root / "cpython-3.13.12-win_amd64.tar.gz",
+        "python_archive": root / "cpython-3.13.15-win_amd64.tar.gz",
         "installer_archive": root / "vibeocr-runtime-installer-v0.7.0-win-x64.zip",
     }
     values["backend_wheel"].write_bytes(b"backend")
@@ -89,11 +89,11 @@ def _build(root: Path, output: Path) -> Path:
     return build_runtime_manifest(
         **_inputs(root),
         backend_version="0.7.0",
-        python_version="3.13.12",
+        python_version="3.13.15",
         python_source_url=(
             "https://github.com/astral-sh/python-build-standalone/releases/"
-            "download/20260325/"
-            "cpython-3.13.12+20260325-x86_64-pc-windows-msvc"
+            "download/20260807/"
+            "cpython-3.13.15+20260807-x86_64-pc-windows-msvc"
             "-install_only.tar.gz"
         ),
         source_commit="a" * 40,
@@ -229,11 +229,11 @@ def test_build_rejects_backend_wheel_version_mismatch(tmp_path: Path) -> None:
         build_runtime_manifest(
             **inputs,
             backend_version="0.8.0",
-            python_version="3.13.12",
+            python_version="3.13.15",
             python_source_url=(
                 "https://github.com/astral-sh/python-build-standalone/releases/"
-                "download/20260325/"
-                "cpython-3.13.12+20260325-x86_64-pc-windows-msvc"
+                "download/20260807/"
+                "cpython-3.13.15+20260807-x86_64-pc-windows-msvc"
                 "-install_only.tar.gz"
             ),
             source_commit="a" * 40,
@@ -293,11 +293,11 @@ def test_build_binds_base_profile_and_runtime_pack(tmp_path: Path) -> None:
     manifest_path = build_runtime_manifest(
         **inputs,
         backend_version="0.7.0",
-        python_version="3.13.12",
+        python_version="3.13.15",
         python_source_url=(
             "https://github.com/astral-sh/python-build-standalone/releases/"
-            "download/20260325/"
-            "cpython-3.13.12+20260325-x86_64-pc-windows-msvc"
+            "download/20260807/"
+            "cpython-3.13.15+20260807-x86_64-pc-windows-msvc"
             "-install_only.tar.gz"
         ),
         source_commit="a" * 40,

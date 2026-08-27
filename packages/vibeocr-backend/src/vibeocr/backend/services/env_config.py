@@ -17,8 +17,8 @@ PYTHON_VERSION_SHORT = "3.13"
 # ---------------------------------------------------------------------------
 # 上游：https://github.com/astral-sh/python-build-standalone
 # 升级时仅改这两个常量：BUILD_TAG（astral release tag）与 PATCH（对应 cpython 补丁号）
-PYTHON_BUILD_STANDALONE_TAG = "20260325"  # astral release tag
-PYTHON_BUILD_STANDALONE_PATCH = "12"  # cpython 3.13 补丁号 → 3.13.12
+PYTHON_BUILD_STANDALONE_TAG = "20260807"  # astral release tag
+PYTHON_BUILD_STANDALONE_PATCH = "15"  # cpython 3.13 补丁号 → 3.13.15
 # Windows install_only 资产（上游仅发布 .tar.gz，无 .zip）
 PYTHON_BUILD_STANDALONE_ASSET = (
     f"cpython-{PYTHON_VERSION_SHORT}.{PYTHON_BUILD_STANDALONE_PATCH}"

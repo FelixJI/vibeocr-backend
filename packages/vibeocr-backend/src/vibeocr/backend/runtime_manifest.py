@@ -473,13 +473,13 @@ def load_runtime_manifest(
         raise ManifestError("python.platform must be win_amd64")
     python_source_url = python_data.get("source_url")
     expected_python_suffix = (
-        f"cpython-{python_version}+20260325-x86_64-pc-windows-msvc-install_only.tar.gz"
+        f"cpython-{python_version}+20260807-x86_64-pc-windows-msvc-install_only.tar.gz"
     )
     if (
         not isinstance(python_source_url, str)
         or not python_source_url.startswith(
             "https://github.com/astral-sh/python-build-standalone/releases/"
-            "download/20260325/"
+            "download/20260807/"
         )
         or not python_source_url.endswith(expected_python_suffix)
     ):
