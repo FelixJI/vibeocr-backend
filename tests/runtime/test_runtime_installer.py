@@ -90,7 +90,7 @@ def _release(root: Path, *, with_base_pack: bool = False) -> tuple[Path, Path]:
         + "\n",
         encoding="utf-8",
     )
-    python_archive = root / "cpython-3.13.12-win_amd64-install_only.tar.gz"
+    python_archive = root / "cpython-3.13.15-win_amd64-install_only.tar.gz"
     python_archive.write_bytes(b"python-archive")
     installer_archive = root / "vibeocr-runtime-installer-v0.7.0-win-x64.zip"
     with zipfile.ZipFile(installer_archive, mode="w") as archive:
@@ -145,13 +145,13 @@ def _release(root: Path, *, with_base_pack: bool = False) -> tuple[Path, Path]:
         "protocol_wheel": protocol_wheel.name,
         "protocol_sha256": _sha(protocol_wheel.read_bytes()),
         "python": {
-            "version": "3.13.12",
+            "version": "3.13.15",
             "abi": "cp313",
             "platform": "win_amd64",
             "source_url": (
                 "https://github.com/astral-sh/python-build-standalone/releases/"
-                "download/20260325/"
-                "cpython-3.13.12+20260325-x86_64-pc-windows-msvc"
+                "download/20260807/"
+                "cpython-3.13.15+20260807-x86_64-pc-windows-msvc"
                 "-install_only.tar.gz"
             ),
             "archive": python_archive.name,
@@ -357,7 +357,7 @@ def test_manifest_rejects_tampered_protocol_manifest(tmp_path: Path) -> None:
 def test_manifest_rejects_tampered_python_archive(tmp_path: Path) -> None:
     manifest_path, _ = _release(tmp_path / "release")
     (
-        manifest_path.parent / "cpython-3.13.12-win_amd64-install_only.tar.gz"
+        manifest_path.parent / "cpython-3.13.15-win_amd64-install_only.tar.gz"
     ).write_bytes(b"tampered")
     with pytest.raises(ManifestError, match="Python archive SHA-256 mismatch"):
         load_runtime_manifest(manifest_path)
