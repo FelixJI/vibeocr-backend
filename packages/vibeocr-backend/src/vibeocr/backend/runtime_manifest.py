@@ -370,8 +370,17 @@ def validate_requirements_lock(path: Path, *, profile: str) -> None:
     lowered = "\n".join(lines).lower()
     if profile == "win-x64-base":
         # base 闭包必须自带缺省引擎（RapidOCR + 显式 ORT + Windows adapter），
-        # 且不得混入 full 闭包的重型组件或第二套 OpenCV。
-        for required in ("rapidocr", "onnxruntime", "winrt-runtime", "opencv-python"):
+        # 且不得混入 full 闭包的重型组件或第二套 OpenCV。winrt 投影的跨命名
+        # 空间依赖只声明在 [all] extra 里，但 await 完成回调与集合投影在
+        # 运行时导入 foundation 两个包；缺包时 Windows OCR 永久挂起。
+        for required in (
+            "rapidocr",
+            "onnxruntime",
+            "winrt-runtime",
+            "winrt-windows-foundation",
+            "winrt-windows-foundation-collections",
+            "opencv-python",
+        ):
             if required not in lowered:
                 raise ManifestError(f"base lock is missing {required}")
         for forbidden in (

@@ -22,6 +22,9 @@ def _lock(profile: str) -> str:
                 f"rapidocr==3.9.2 \\\n    --hash=sha256:{'1' * 64}",
                 f"onnxruntime==1.28.0 \\\n    --hash=sha256:{'1' * 64}",
                 f"winrt-runtime==3.2.1 \\\n    --hash=sha256:{'1' * 64}",
+                f"winrt-windows-foundation==3.2.1 \\\n    --hash=sha256:{'1' * 64}",
+                "winrt-windows-foundation-collections==3.2.1"
+                f" \\\n    --hash=sha256:{'1' * 64}",
                 f"opencv-python==5.0.0.93 \\\n    --hash=sha256:{'1' * 64}",
             ]
         )

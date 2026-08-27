@@ -34,7 +34,14 @@ onnxruntime>=1.22
 # Windows Media OCR adapter（pywinrt projection）；系统 OCR/语言包由
 # Windows 动态提供。winsdk 是 sdist-only 的 scikit-build 包，不适合离线
 # wheel 闭包；改用带 win_amd64 wheel 的 winrt-runtime + 组件包。
+# winrt 投影包只在 ``[all]`` extra 里声明跨命名空间依赖，锁定期不可见；
+# 但 winrt-runtime 的 await 机制（``op.completed = ...``）运行时导入
+# ``winrt.windows.foundation``，OcrResult.lines 等集合投影导入
+# ``winrt.windows.foundation.collections``。缺任一包时 await 在 C 层吞掉
+# ModuleNotFoundError 并永久挂起（识别无效且无法取消），必须显式锁定。
 winrt-runtime>=3.2,<4
+winrt-Windows.Foundation>=3.2,<4
+winrt-Windows.Foundation.Collections>=3.2,<4
 winrt-Windows.Media.Ocr>=3.2,<4
 winrt-Windows.Globalization>=3.2,<4
 winrt-Windows.Graphics.Imaging>=3.2,<4
