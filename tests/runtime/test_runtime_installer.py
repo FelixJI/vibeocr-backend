@@ -53,6 +53,9 @@ def _lock_text(profile: str) -> str:
             "rapidocr==3.9.2 \\\n    --hash=sha256:" + "6" * 64 + "\n"
             "onnxruntime==1.28.0 \\\n    --hash=sha256:" + "6" * 64 + "\n"
             "winrt-runtime==3.2.1 \\\n    --hash=sha256:" + "6" * 64 + "\n"
+            "winrt-windows-foundation==3.2.1 \\\n    --hash=sha256:" + "6" * 64 + "\n"
+            "winrt-windows-foundation-collections==3.2.1 \\\n"
+            "    --hash=sha256:" + "6" * 64 + "\n"
             "opencv-python==5.0.0.93 \\\n    --hash=sha256:" + "6" * 64 + "\n"
         )
     if profile == "win-x64-cpu":

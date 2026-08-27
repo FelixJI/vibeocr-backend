@@ -27,6 +27,9 @@ def _base_lock(tmp_path: Path) -> Path:
         f"rapidocr==3.9.2 \\\n    --hash=sha256:{_LOCK_HASH}\n"
         f"onnxruntime==1.28.0 \\\n    --hash=sha256:{_LOCK_HASH}\n"
         f"winrt-runtime==3.2.1 \\\n    --hash=sha256:{_LOCK_HASH}\n"
+        f"winrt-windows-foundation==3.2.1 \\\n    --hash=sha256:{_LOCK_HASH}\n"
+        f"winrt-windows-foundation-collections==3.2.1 \\\n"
+        f"    --hash=sha256:{_LOCK_HASH}\n"
         f"opencv-python==5.0.0.93 \\\n    --hash=sha256:{_LOCK_HASH}\n",
         encoding="utf-8",
     )
