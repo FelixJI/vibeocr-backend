@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.6
+
+### Bug Fixes
+
+- **runtime:** 补齐 winrt Foundation 闭包修复 Windows OCR 挂起 (#73) (c929d55)
+
 ## 0.13.5
 
 ### Dependencies
