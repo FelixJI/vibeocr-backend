@@ -753,14 +753,18 @@ class RuntimeInstaller:
         }
         return BASE_PROFILE if set(component_ids) <= base_ids else self.plan
 
-    def profile_payload(self) -> dict[str, Any]:
+    def profile_payload(
+        self, *, probe_results: dict[str, bool] | None = None
+    ) -> dict[str, Any]:
         component_ids = self._profile_component_ids()
         return runtime_profile_status(
             self.manifest,
             accelerator=self.accelerator,
             runtime_root=self.paths.runtime_root,
-            probe_results=self._component_probe(
-                self.paths.runtime_root, component_ids, self.plan
+            probe_results=(
+                self._component_probe(self.paths.runtime_root, component_ids, self.plan)
+                if probe_results is None
+                else probe_results
             ),
         )
 
@@ -773,7 +777,9 @@ class RuntimeInstaller:
             for component in self.manifest.profiles[self.plan].components
         )
 
-    def _drifted_component_ids(self) -> tuple[str, ...]:
+    def _drifted_component_ids(
+        self, *, probe_results: dict[str, bool] | None = None
+    ) -> tuple[str, ...]:
         installed = self._installed_scope_ids()
         if not installed:
             return ()
@@ -784,10 +790,14 @@ class RuntimeInstaller:
             self.manifest,
             accelerator=self.accelerator,
             runtime_root=self.paths.runtime_root,
-            probe_results=self._component_probe(
-                self.paths.runtime_root,
-                installed,
-                covering,
+            probe_results=(
+                self._component_probe(
+                    self.paths.runtime_root,
+                    installed,
+                    covering,
+                )
+                if probe_results is None
+                else probe_results
             ),
             profile_id=covering,
         )
@@ -842,10 +852,21 @@ class RuntimeInstaller:
 
     def inspect_snapshot(self, *, emit: bool = True) -> RuntimeInspection:
         started = self._start_operation("inspect") if emit else False
-        profile = self.profile_payload()
+        # 单次组件探测同时供 plan 展示投影与漂移判定复用；inspect 位于产品
+        # 启动关键路径，探测是真实子进程，不得加倍。
+        probe_results = self._component_probe(
+            self.paths.runtime_root, self._profile_component_ids(), self.plan
+        )
+        profile = self.profile_payload(probe_results=probe_results)
         # inspect 诚实反映“已安装闭包是否 ready”，不把缺 full 可选组件
-        # 当作失败（base-only 是合法的安装状态）。
-        ready = self._integrity_ok() and not self._scope_drifted_from(profile)
+        # 当作失败（base-only 是合法的安装状态）。漂移必须按已安装闭包的
+        # 覆盖 profile 投影（``_drifted_component_ids``）：plan 投影会把
+        # base/cpu 绑定不同的组件（如 image_code_tools 的 opencv-python 与
+        # opencv-contrib-python）误判为 missing，导致 base-only 安装每次
+        # inspect 都被判未就绪。
+        ready = self._integrity_ok() and not self._drifted_component_ids(
+            probe_results=probe_results
+        )
         state = RuntimeState(
             status="ready" if ready else "missing",
             runtime_root=str(self.paths.runtime_root),

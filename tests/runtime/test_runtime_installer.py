@@ -70,7 +70,12 @@ def _lock_text(profile: str) -> str:
     )
 
 
-def _release(root: Path, *, with_base_pack: bool = False) -> tuple[Path, Path]:
+def _release(
+    root: Path,
+    *,
+    with_base_pack: bool = False,
+    divergent_image_code_tools: bool = False,
+) -> tuple[Path, Path]:
     root.mkdir()
     wheel = root / "vibeocr_backend-0.7.0-py3-none-any.whl"
     wheel.write_bytes(b"backend-wheel")
@@ -127,6 +132,50 @@ def _release(root: Path, *, with_base_pack: bool = False) -> tuple[Path, Path]:
             "runtime_pack": None,
         }
     ]
+    if divergent_image_code_tools:
+        # 生产形态：image_code_tools 在 base 绑定 opencv-python、在 cpu 绑定
+        # opencv-contrib-python，声明版本随 profile 不同。base-only 安装只
+        # 满足 base 绑定，cpu 投影必然缺 contrib——inspect 不得据此判未就绪。
+        profiles["win-x64-base"]["components"] = [
+            {
+                "component_id": "rapidocr-base",
+                "display_name": "RapidOCR base inference",
+            },
+            {
+                "component_id": "pdf_document_tools",
+                "display_name": "PDF and document tools",
+            },
+            {
+                "component_id": "image_code_tools",
+                "display_name": "Image, QR, and barcode tools",
+                "version": "5.0.0.93",
+            },
+            {"component_id": "runtime_host", "display_name": "Runtime HTTP host"},
+        ]
+        profiles["win-x64-cpu"]["components"] = [
+            {
+                "component_id": "rapidocr-base",
+                "display_name": "RapidOCR base inference",
+            },
+            {
+                "component_id": "paddleocr-cpu",
+                "display_name": "PaddleOCR CPU inference",
+            },
+            {
+                "component_id": "mineru-cpu",
+                "display_name": "MinerU CPU document parsing",
+            },
+            {
+                "component_id": "pdf_document_tools",
+                "display_name": "PDF and document tools",
+            },
+            {
+                "component_id": "image_code_tools",
+                "display_name": "Image, QR, and barcode tools",
+                "version": "4.10.0.84",
+            },
+            {"component_id": "runtime_host", "display_name": "Runtime HTTP host"},
+        ]
     if with_base_pack:
         pack = root / "vibeocr-runtime-pack-win-x64-base-0.7.0.zip"
         with zipfile.ZipFile(pack, mode="w") as archive:
@@ -204,6 +253,19 @@ def _fake_install(partial: Path, _manifest, _profile: str) -> Path:
     python = partial / "Scripts" / "python.exe"
     python.parent.mkdir(parents=True)
     python.write_bytes(b"python")
+    return python
+
+
+def _base_binding_install(partial: Path, _manifest, _profile: str) -> Path:
+    # 模拟 base-only 安装结果：除 python.exe 外，落一个 opencv-python
+    # 5.0.0.93 的 dist-info，满足 win-x64-base 的 image_code_tools 绑定。
+    python = _fake_install(partial, _manifest, _profile)
+    dist_info = partial / "Lib" / "site-packages" / "opencv_python-5.0.0.93.dist-info"
+    dist_info.mkdir(parents=True)
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: opencv-python\nVersion: 5.0.0.93\n",
+        encoding="utf-8",
+    )
     return python
 
 
@@ -667,6 +729,47 @@ def test_runtime_control_inspect_probes_components_once(tmp_path: Path) -> None:
         component["actual_state"] == "ready"
         for component in result.profile["components"]
     )
+
+
+def test_inspect_ready_after_base_only_install_with_profile_divergent_bindings(
+    tmp_path: Path,
+) -> None:
+    # 回归：image_code_tools 在 base/cpu 绑定不同发行版时，base-only 安装
+    # 的 inspect 必须按已安装闭包的覆盖 profile 判漂移并报告 ready；
+    # 按 plan 投影判漂移会把该组件误判 missing，导致产品每次启动都
+    # 重新弹出 Runtime 安装界面。
+    manifest, component = _release(
+        tmp_path / "release", divergent_image_code_tools=True
+    )
+
+    def probe(
+        _runtime_root: Path, component_ids: tuple[str, ...], _profile_id: str
+    ) -> dict[str, bool]:
+        return {component_id: True for component_id in component_ids}
+
+    initial = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_base_binding_install,
+        install_component_ids=(),
+        component_probe=probe,
+    )
+    initial.ensure()
+
+    inspected = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_base_binding_install,
+        component_probe=probe,
+    )
+    state = inspected.inspect(emit=False)
+
+    assert state.status == "ready"
+    assert state.integrity == "verified"
 
 
 def test_repair_of_in_sync_component_succeeds_without_claiming_global_ready(
