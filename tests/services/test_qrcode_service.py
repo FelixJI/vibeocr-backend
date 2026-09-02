@@ -232,3 +232,46 @@ class TestQrcodeServiceInternalBranches:
 
         font = QrcodeService._load_font(16)
         assert font is not None
+
+
+class TestGenerateAppliesExtras:
+    """generate 必须应用 options 里的 invert / logo / label。
+
+    回归：历史上端点只调 generate，logo/label/invert 选项被静默忽略，
+    Classic 前端的对应开关完全无效。
+    """
+
+    def test_generate_applies_invert(self, service):
+        options = service.default_options()
+        options["format"] = "qr"
+        options["invert"] = True
+        img = service.generate("invert me", options)
+        # 反色后四角（quiet zone）应为背景色白→黑或含黑色通道。
+        assert isinstance(img, Image.Image)
+        plain = service.generate("invert me", {**options, "invert": False})
+        assert list(img.getdata()) != list(plain.getdata())
+
+    def test_generate_applies_label(self, service):
+        options = service.default_options()
+        options["format"] = "qr"
+        options["size"] = 300
+        options["label_text"] = "Scan me"
+        options["label_position"] = "bottom"
+        options["label_font_size"] = 14
+        img = service.generate("label me", options)
+        plain = service.generate("label me", {**options, "label_text": ""})
+        assert img.height > plain.height
+
+    def test_generate_applies_logo(self, service, tmp_path):
+        logo = Image.new("RGB", (30, 30), color="green")
+        logo_path = str(tmp_path / "logo.png")
+        logo.save(logo_path)
+
+        options = service.default_options()
+        options["format"] = "qr"
+        options["logo_path"] = logo_path
+        options["logo_ratio"] = 0.25
+        img = service.generate("logo me", options)
+        plain = service.generate("logo me", {**options, "logo_path": None})
+        assert isinstance(img, Image.Image)
+        assert list(img.getdata()) != list(plain.getdata())

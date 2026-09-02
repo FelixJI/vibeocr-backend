@@ -1419,6 +1419,8 @@ def create_app(
         import base64
         import io
 
+        from barcode.errors import BarcodeNotFoundError
+
         try:
             from vibeocr.backend.services.qrcode_service import QrcodeService
 
@@ -1433,6 +1435,14 @@ def create_app(
                 payload = buf.getvalue()
                 media_type = "image/png"
             image_b64 = base64.b64encode(payload).decode("ascii")
+        except (BarcodeNotFoundError, ValueError) as exc:
+            # 未知条形码格式 / 非法颜色等是请求侧问题：返回 400 而不是 500，
+            # 让前端能区分"用户输错了"与"服务内部故障"。
+            return _error_response(
+                ErrorCode.VALIDATION_ERROR,
+                instance_id,
+                detail={"reason": str(exc)},
+            )
         except Exception as exc:
             return _error_response(
                 ErrorCode.INTERNAL_ERROR, instance_id, detail={"error": str(exc)}
