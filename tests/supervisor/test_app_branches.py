@@ -973,6 +973,61 @@ async def test_qrcode_generate_returns_internal_error_when_service_fails(
     assert resp.json()["code"] == "INTERNAL_ERROR"
 
 
+async def test_qrcode_generate_unknown_barcode_format_returns_validation_error(
+    pdf_app, supervisor_token: str
+) -> None:
+    """未知条形码格式是请求侧问题：400 VALIDATION_ERROR，不是 500。
+
+    回归：旧实现把 BarcodeNotFoundError 兜底成 INTERNAL_ERROR，
+    Classic 前端 format 契约错位时只能看到无指向的"内部错误"。
+    """
+    async with _http(supervisor_token, pdf_app) as http:
+        resp = await http.post(
+            "/v2/qrcode/generate",
+            json={
+                "data": "x",
+                "format": "qrcode",
+                "options": {"format": "nonexistent_format"},
+            },
+        )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["code"] == "VALIDATION_ERROR"
+    assert "NONEXISTENT_FORMAT" in body["detail"]["reason"].upper()
+
+
+async def test_qrcode_generate_applies_label_options(
+    pdf_app, supervisor_token: str
+) -> None:
+    """options 中的 label_text 必须体现在返回图（高度增加）。"""
+    import base64
+    import io
+
+    from PIL import Image
+
+    async with _http(supervisor_token, pdf_app) as http:
+        plain = await http.post(
+            "/v2/qrcode/generate", json={"data": "labeled", "format": "qrcode"}
+        )
+        labeled = await http.post(
+            "/v2/qrcode/generate",
+            json={
+                "data": "labeled",
+                "format": "qrcode",
+                "options": {
+                    "format": "qr",
+                    "size": 300,
+                    "label_text": "Scan",
+                    "label_position": "bottom",
+                },
+            },
+        )
+    assert plain.status_code == 200 and labeled.status_code == 200
+    img_plain = Image.open(io.BytesIO(base64.b64decode(plain.json()["image"])))
+    img_labeled = Image.open(io.BytesIO(base64.b64decode(labeled.json()["image"])))
+    assert img_labeled.height > img_plain.height
+
+
 async def test_qrcode_generate_svg_path_emits_svg(
     pdf_app, supervisor_token: str
 ) -> None:

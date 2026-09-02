@@ -36,8 +36,31 @@ class QrcodeService:
     def generate(self, text: str, options: dict) -> Image.Image:
         fmt = options.get("format", "qr")
         if fmt == "qr":
-            return self._generate_qr(text, options)
-        return self._generate_barcode(text, options)
+            img = self._generate_qr(text, options)
+        else:
+            img = self._generate_barcode(text, options)
+        return self._apply_extras(img, options)
+
+    def _apply_extras(self, img: Image.Image, options: dict) -> Image.Image:
+        """按 options 应用 invert / logo / 文字标签。
+
+        Classic 前端一直在请求里携带这些选项；历史上端点没有应用它们，
+        导致 UI 的 Logo、标签与反色开关完全无效。
+        """
+        if options.get("invert"):
+            img = self.invert_colors(img)
+        logo_path = options.get("logo_path")
+        if logo_path:
+            img = self.apply_logo(img, logo_path, ratio=options.get("logo_ratio", 0.2))
+        label_text = options.get("label_text") or ""
+        if label_text:
+            img = self.apply_text_label(
+                img,
+                label_text,
+                position=options.get("label_position", "bottom"),
+                font_size=options.get("label_font_size", 12),
+            )
+        return img
 
     def _generate_qr(self, text: str, options: dict) -> Image.Image:
         import qrcode
