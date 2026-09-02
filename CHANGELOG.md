@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.7
+
+### Bug Fixes
+
+- **qrcode:** 未知格式返回校验错误并应用 logo/label/invert 选项 (#76) (4cb99c7)
+- **runtime:** 修复 base-only 安装后 inspect 按错误投影误判漂移 (#75) (2420623)
+
 ## 0.13.6
 
 ### Bug Fixes
