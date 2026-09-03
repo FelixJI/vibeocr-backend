@@ -722,7 +722,9 @@ def test_runtime_control_inspect_probes_components_once(tmp_path: Path) -> None:
     result = control.execute_with_result(operation="inspect")
 
     assert result.state.integrity == "verified"
-    assert result.profile["profile_id"] == "win-x64-cpu"
+    # base-only 安装后，展示投影按已安装闭包的覆盖 profile 回报
+    # win-x64-base，而不是 accelerator plan 的 cpu 视角。
+    assert result.profile["profile_id"] == "win-x64-base"
     assert len(probe_calls) == 1
     assert probe_calls[0][0] == inspected.paths.runtime_root
     assert all(
@@ -770,6 +772,136 @@ def test_inspect_ready_after_base_only_install_with_profile_divergent_bindings(
 
     assert state.status == "ready"
     assert state.integrity == "verified"
+
+
+def test_inspect_and_ensure_report_covering_profile_after_base_only_install(
+    tmp_path: Path,
+) -> None:
+    # 回归：base-only 安装后，inspect 与 ensure 信封的 profile 投影必须
+    # 回报已安装闭包的覆盖 profile（win-x64-base），而不是 accelerator
+    # plan（win-x64-cpu）——plan 视角的组件集与绑定并不描述已安装的
+    # 运行时，还会把闭包外组件谎报成 desired ready。
+    manifest, component = _release(
+        tmp_path / "release", divergent_image_code_tools=True
+    )
+
+    def probe(
+        _runtime_root: Path, component_ids: tuple[str, ...], _profile_id: str
+    ) -> dict[str, bool]:
+        return {component_id: True for component_id in component_ids}
+
+    product = tmp_path / "product"
+    control = RuntimeControl.from_installer_factory(
+        lambda **kwargs: RuntimeInstaller(
+            product_root=product,
+            component_lock=component,
+            runtime_manifest=manifest,
+            accelerator="cpu",
+            install_runner=_base_binding_install,
+            component_probe=probe,
+            **kwargs,
+        )
+    )
+    control.execute_with_result(
+        operation="ensure", install_component_ids=(), download_source_ids=("pypi",)
+    )
+
+    inspected = control.execute_with_result(operation="inspect")
+    ensured = control.execute_with_result(
+        operation="ensure", install_component_ids=(), download_source_ids=("pypi",)
+    )
+
+    for result in (inspected, ensured):
+        assert result.state.status == "ready"
+        assert result.profile["profile_id"] == "win-x64-base"
+        assert result.profile["accelerator"] == "cpu"
+        assert [item["component_id"] for item in result.profile["components"]] == [
+            "rapidocr-base",
+            "pdf_document_tools",
+            "image_code_tools",
+            "runtime_host",
+        ]
+        # 覆盖 profile 投影内全部组件都属于已安装闭包，desired ready 如实。
+        assert all(
+            item["desired_state"] == "ready" for item in result.profile["components"]
+        )
+        assert all(
+            item["actual_state"] == "ready" for item in result.profile["components"]
+        )
+
+
+def test_component_desired_state_not_required_outside_installed_closure(
+    tmp_path: Path,
+) -> None:
+    # 回归：cu126 的 gpu_runtime 精确 scope 不含 Paddle/MinerU；覆盖
+    # profile（cu126 plan）投影它们时必须标记 desired not_required，
+    # 不得谎报 ready / failed / 可修复。
+    manifest, component = _release(tmp_path / "release")
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="nvidia_cuda",
+        install_component_ids=("gpu_runtime",),
+        install_runner=_fake_install,
+        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
+    )
+    installer.ensure()
+
+    inspection = installer.inspect_snapshot(emit=False)
+
+    assert inspection.state.status == "ready"
+    assert inspection.profile["profile_id"] == "win-x64-cu126"
+    statuses = {item["component_id"]: item for item in inspection.profile["components"]}
+    for component_id in ("paddleocr-cuda", "mineru-cuda"):
+        assert statuses[component_id]["desired_state"] == "not_required"
+        assert statuses[component_id]["state"] == "not_required"
+        assert statuses[component_id]["drift_reason"] == "none"
+        assert statuses[component_id]["repairable"] is False
+    for component_id in ("rapidocr-base", "gpu_runtime", "runtime_host"):
+        assert statuses[component_id]["desired_state"] == "ready"
+        assert statuses[component_id]["actual_state"] == "ready"
+
+
+def test_runtime_status_ready_for_healthy_base_only_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 回归：健康的 base-only 运行时不得被 /v2/runtime/status 判成
+    # degraded——plan 投影下闭包外/绑定分歧组件显示 missing 是展示层
+    # 谎报，状态投影必须按已安装闭包的覆盖 profile 判定。
+    manifest, component = _release(
+        tmp_path / "release", divergent_image_code_tools=True
+    )
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_component_ids=(),
+        install_runner=_base_binding_install,
+        component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
+    )
+    launch = installer.ensure()
+    assert launch is not None
+    for key, value in launch.environment.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(
+        runtime_maintenance,
+        "_cached_runtime_component_probe",
+        lambda _root, component_ids, **_kwargs: dict.fromkeys(component_ids, True),
+    )
+    runtime_maintenance._component_probe_cache.clear()
+
+    status = runtime_status_from_environment("instance-test", "ready")
+
+    assert status["service_state"] == "ready"
+    assert status["profile"]["profile_id"] == "win-x64-base"
+    statuses = {item["component_id"]: item for item in status["profile"]["components"]}
+    assert statuses["image_code_tools"]["actual_state"] == "ready"
+    assert all(
+        item["desired_state"] == "ready" for item in status["profile"]["components"]
+    )
 
 
 def test_repair_of_in_sync_component_succeeds_without_claiming_global_ready(
@@ -2205,11 +2337,20 @@ def test_drift_projection_uses_covering_profile_declared_versions(
         runtime_root=runtime_root,
         profile_id="win-x64-base",
     )
+    # plan 视角必须显式请求：省略 profile_id 的默认投影按已安装闭包的
+    # 覆盖 profile（此处为 win-x64-base）选择组件集与绑定。
     cpu_view = runtime_profile_status(
         loaded,
         accelerator="cpu",
         runtime_root=runtime_root,
+        profile_id="win-x64-cpu",
     )
+    default_view = runtime_profile_status(
+        loaded,
+        accelerator="cpu",
+        runtime_root=runtime_root,
+    )
+    assert default_view["profile_id"] == "win-x64-base"
     base_states = {
         entry["component_id"]: entry["actual_state"]
         for entry in base_view["components"]

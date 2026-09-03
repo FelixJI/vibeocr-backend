@@ -39,6 +39,7 @@ from vibeocr.backend.runtime_maintenance import (
     RuntimeOperationNotFound,
     RuntimeOperationNotRetryable,
     RuntimeSourceIdentityMismatch,
+    declared_installed_closure,
     probe_runtime_components,
     profile_descriptor,
     runtime_profile_status,
@@ -49,6 +50,7 @@ from vibeocr.backend.runtime_manifest import (
     ManifestError,
     RuntimeInstallScope,
     RuntimeManifest,
+    covering_profile_id,
     load_runtime_manifest,
 )
 from vibeocr.backend.runtime_selection import (
@@ -747,25 +749,45 @@ class RuntimeInstaller:
         raise RuntimeInstallError("runtime manifest has no matching install scope")
 
     def _covering_profile(self, component_ids: tuple[str, ...]) -> str:
-        base_ids = {
-            component.component_id
-            for component in self.manifest.profiles[BASE_PROFILE].components
-        }
-        return BASE_PROFILE if set(component_ids) <= base_ids else self.plan
+        return covering_profile_id(
+            self.manifest,
+            accelerator=self.accelerator,
+            component_ids=component_ids,
+        )
+
+    def _projection_profile_id(self) -> str:
+        """展示投影的 profile：可信已安装闭包用其覆盖 profile，否则 plan。"""
+        closure = declared_installed_closure(
+            self._marker_value(),
+            manifest=self.manifest,
+            accelerator=self.accelerator,
+        )
+        if closure is None:
+            return self.plan
+        return covering_profile_id(
+            self.manifest,
+            accelerator=self.accelerator,
+            component_ids=closure,
+        )
 
     def profile_payload(
         self, *, probe_results: dict[str, bool] | None = None
     ) -> dict[str, Any]:
-        component_ids = self._profile_component_ids()
+        selected = self._projection_profile_id()
+        component_ids = tuple(
+            component.component_id
+            for component in self.manifest.profiles[selected].components
+        )
         return runtime_profile_status(
             self.manifest,
             accelerator=self.accelerator,
             runtime_root=self.paths.runtime_root,
             probe_results=(
-                self._component_probe(self.paths.runtime_root, component_ids, self.plan)
+                self._component_probe(self.paths.runtime_root, component_ids, selected)
                 if probe_results is None
                 else probe_results
             ),
+            profile_id=selected,
         )
 
     def maintenance_snapshot(self) -> dict[str, Any] | None:
@@ -852,10 +874,17 @@ class RuntimeInstaller:
 
     def inspect_snapshot(self, *, emit: bool = True) -> RuntimeInspection:
         started = self._start_operation("inspect") if emit else False
-        # 单次组件探测同时供 plan 展示投影与漂移判定复用；inspect 位于产品
-        # 启动关键路径，探测是真实子进程，不得加倍。
+        # 单次组件探测同时供展示投影与漂移判定复用；inspect 位于产品
+        # 启动关键路径，探测是真实子进程，不得加倍。探测范围与展示投影
+        # 一致：已安装闭包的覆盖 profile（无可信闭包时为 accelerator
+        # plan），漂移判定按同一闭包消费这份结果。
+        selected = self._projection_profile_id()
+        component_ids = tuple(
+            component.component_id
+            for component in self.manifest.profiles[selected].components
+        )
         probe_results = self._component_probe(
-            self.paths.runtime_root, self._profile_component_ids(), self.plan
+            self.paths.runtime_root, component_ids, selected
         )
         profile = self.profile_payload(probe_results=probe_results)
         # inspect 诚实反映“已安装闭包是否 ready”，不把缺 full 可选组件
