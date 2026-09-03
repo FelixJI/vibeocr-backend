@@ -1,6 +1,6 @@
 [project]
 name = "vibeocr-backend"
-version = "0.13.7"
+version = "0.13.8"
 description = "UI-free VibeOCR inference Supervisor runtime"
 requires-python = ">=3.13,<3.14"
 dependencies = [
