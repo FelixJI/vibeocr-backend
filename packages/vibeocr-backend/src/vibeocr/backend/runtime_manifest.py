@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import zipfile
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any
@@ -157,6 +158,31 @@ def runtime_component_binding(
             f"runtime component binding is missing: {profile_id}/{component_id}"
         )
     return binding
+
+
+def covering_profile_id(
+    manifest: RuntimeManifest,
+    *,
+    accelerator: str,
+    component_ids: Collection[str],
+) -> str:
+    """Return the profile that covers an installed component closure.
+
+    A closure inside the base profile is covered by ``win-x64-base``; any
+    larger closure falls back to the accelerator's plan profile. Installers
+    and display projections must agree on this rule so that drift, versions,
+    and import bindings are evaluated against the same covering profile.
+    """
+    base_ids = {
+        component.component_id
+        for component in manifest.profiles["win-x64-base"].components
+    }
+    if set(component_ids) <= base_ids:
+        return "win-x64-base"
+    try:
+        return ACCELERATOR_TO_PLAN[accelerator]
+    except KeyError as exc:
+        raise ManifestError(f"unsupported accelerator: {accelerator}") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -809,6 +835,7 @@ __all__ = [
     "RuntimeComponentBinding",
     "RuntimeInstallScope",
     "RuntimeProfile",
+    "covering_profile_id",
     "installer_executable_sha256",
     "load_runtime_manifest",
     "migrate_legacy_component_ids",

@@ -23,6 +23,7 @@ from vibeocr.backend.runtime_manifest import (
     ManifestError,
     RuntimeComponent,
     RuntimeProfile,
+    covering_profile_id,
     load_runtime_manifest,
     runtime_component_binding,
 )
@@ -911,21 +912,74 @@ def _cached_runtime_component_probe(
         return result
 
 
+def _installed_marker(runtime_root: Path | None) -> dict[str, Any] | None:
+    if runtime_root is None:
+        return None
+    try:
+        value = json.loads(
+            (runtime_root / ".installed.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _marker_identity_matches(
+    marker: dict[str, Any] | None,
+    *,
+    manifest: Any,
+    accelerator: str,
+) -> bool:
+    return marker is not None and all(
+        marker.get(key) == value
+        for key, value in (
+            ("schema_version", 1),
+            ("backend_version", manifest.backend_version),
+            ("manifest_sha256", manifest.sha256),
+            ("accelerator", accelerator),
+        )
+    )
+
+
+def declared_installed_closure(
+    marker: dict[str, Any] | None,
+    *,
+    manifest: Any,
+    accelerator: str,
+) -> frozenset[str] | None:
+    """Read the marker-declared installed closure for display projections.
+
+    The closure participates only when the marker's basic identity matches the
+    verified manifest and the declared ids stay inside the accelerator plan;
+    whether the closure is an installable scope remains owned by the
+    installer's integrity gate.
+    """
+    if not _marker_identity_matches(marker, manifest=manifest, accelerator=accelerator):
+        return None
+    installed = marker.get("component_ids")
+    if (
+        not isinstance(installed, list)
+        or not installed
+        or any(not isinstance(item, str) or not item for item in installed)
+        or len(set(installed)) != len(installed)
+    ):
+        return None
+    plan_ids = {
+        component.component_id
+        for component in manifest.profiles[ACCELERATOR_TO_PLAN[accelerator]].components
+    }
+    closure = frozenset(installed)
+    return closure if closure <= plan_ids else None
+
+
 def _component_statuses(
     descriptor: RuntimeProfileDescriptor,
     *,
     manifest: Any,
     runtime_root: Path | None,
     probe_results: dict[str, bool] | None = None,
+    marker: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    marker: dict[str, Any] | None = None
-    marker_path = runtime_root / ".installed.json" if runtime_root is not None else None
-    if marker_path is not None:
-        try:
-            value = json.loads(marker_path.read_text(encoding="utf-8"))
-            marker = value if isinstance(value, dict) else None
-        except (OSError, ValueError):
-            marker = None
     python_ready = runtime_root is not None and any(
         candidate.is_file()
         for candidate in (
@@ -935,19 +989,33 @@ def _component_statuses(
         )
     )
     # marker 的基础字段逐项比较：component_ids（安装闭包）是 2.7.0 新增
-    # 字段，由 installer 的 integrity gate 负责判定，不参与展示层 drift。
-    marker_matches = marker is not None and all(
-        marker.get(key) == value
-        for key, value in (
-            ("schema_version", 1),
-            ("backend_version", manifest.backend_version),
-            ("manifest_sha256", manifest.sha256),
-            ("accelerator", descriptor.accelerator),
-        )
+    # 字段，由 installer 的 integrity gate 负责判定，不参与展示层 drift；
+    # 闭包外的可选组件按 not_required 投影，不得谎报 desired ready。
+    marker_matches = _marker_identity_matches(
+        marker, manifest=manifest, accelerator=descriptor.accelerator
+    )
+    required_ids = declared_installed_closure(
+        marker, manifest=manifest, accelerator=descriptor.accelerator
     )
     versions = _distribution_versions(runtime_root) if runtime_root is not None else {}
     statuses: list[dict[str, Any]] = []
     for component in descriptor.components:
+        if required_ids is not None and component.component_id not in required_ids:
+            # base-only / 精确 scope 安装不含该可选组件：缺席是合法状态，
+            # 不是 drift，也不可 repair（扩闭包属于 ensure 的选择面）。
+            statuses.append(
+                {
+                    **component.to_payload(),
+                    "state": "not_required",
+                    "desired_state": "not_required",
+                    "desired_version": None,
+                    "actual_state": "missing",
+                    "actual_version": None,
+                    "drift_reason": "none",
+                    "repairable": False,
+                }
+            )
+            continue
         actual_version: str | None = None
         if marker is None or not python_ready:
             actual_state = "missing"
@@ -1004,24 +1072,34 @@ def runtime_profile_status(
 ) -> dict[str, Any]:
     """Project one desired/actual component view for every transport.
 
-    ``profile_id`` overrides the accelerator's plan profile for the projected
-    component set, declared versions, and import bindings. The installer uses
-    it to evaluate drift against the covering profile of the *installed*
-    closure. Callers that omit it keep the historical accelerator-plan
-    projection.
+    ``profile_id`` pins the projected component set, declared versions, and
+    import bindings; the installer's drift evaluation pins it to the covering
+    profile of the *installed* closure. When omitted, the projection follows
+    that same rule: the covering profile of the marker-declared installed
+    closure when one is trusted, and the historical accelerator-plan
+    projection otherwise, so a base-only installation reports
+    ``win-x64-base`` instead of a plan view it does not satisfy.
     """
-
-    selected = (
-        profile_id if profile_id is not None else ACCELERATOR_TO_PLAN[accelerator]
-    )
+    marker = _installed_marker(runtime_root)
+    if profile_id is None:
+        closure = declared_installed_closure(
+            marker, manifest=manifest, accelerator=accelerator
+        )
+        profile_id = (
+            covering_profile_id(
+                manifest, accelerator=accelerator, component_ids=closure
+            )
+            if closure is not None
+            else ACCELERATOR_TO_PLAN[accelerator]
+        )
     descriptor = profile_descriptor(
-        manifest.profiles[selected], accelerator=accelerator
+        manifest.profiles[profile_id], accelerator=accelerator
     )
     if probe_results is None and runtime_root is not None:
         probe_results = _cached_runtime_component_probe(
             runtime_root,
             tuple(component.component_id for component in descriptor.components),
-            profile_id=selected,
+            profile_id=profile_id,
         )
     return {
         "profile_id": descriptor.profile_id,
@@ -1031,6 +1109,7 @@ def runtime_profile_status(
             manifest=manifest,
             runtime_root=runtime_root,
             probe_results=probe_results,
+            marker=marker,
         ),
     }
 
@@ -1420,7 +1499,11 @@ def runtime_status_from_environment(
         runtime_root=Path(runtime_root_value) if runtime_root_value else None,
     )
     if service_state != "maintenance" and any(
-        component.get("actual_state") != "ready" for component in profile["components"]
+        # not_required 组件缺席是合法状态（base-only / 精确 scope 安装），
+        # 不得把健康的运行时判成 degraded。
+        component.get("desired_state") != "not_required"
+        and component.get("actual_state") != "ready"
+        for component in profile["components"]
     ):
         service_state = "degraded"
     maintenance = RuntimeOperationStore(Path(state_root_value)).latest_projection()
@@ -1458,6 +1541,7 @@ __all__ = [
     "RuntimeOperationStart",
     "RuntimeOperationStore",
     "RuntimeProfileDescriptor",
+    "declared_installed_closure",
     "profile_descriptor",
     "runtime_source_identity",
     "runtime_profile_status",
