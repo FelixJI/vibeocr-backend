@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.8
+
+### Bug Fixes
+
+- **runtime:** inspect 与 ensure 按已安装闭包覆盖 profile 回报投影 (#78) (7557152)
+
 ## 0.13.7
 
 ### Bug Fixes
