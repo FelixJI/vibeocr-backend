@@ -115,6 +115,29 @@ def _default_component_probe(
     return probe_runtime_components(runtime_root, component_ids, profile_id=profile_id)
 
 
+_OUTPUT_TAIL_MAX_LINES = 20
+_OUTPUT_TAIL_MAX_CHARS = 4000
+
+
+def _child_output_tail(*streams: str) -> str:
+    """Return the last non-empty lines of the first informative stream.
+
+    pip 把错误写进 stderr、下载进度写进 stdout，失败排障需要这份输出；
+    优先 stderr，全部为空时返回空串。tail 只拼进异常消息（随 journal 与
+    错误信封持久化），绝不写入 NDJSON stdout。
+    """
+
+    for stream in streams:
+        lines = [line.strip() for line in stream.splitlines() if line.strip()]
+        if not lines:
+            continue
+        tail = "\n".join(lines[-_OUTPUT_TAIL_MAX_LINES:])
+        if len(tail) > _OUTPUT_TAIL_MAX_CHARS:
+            tail = tail[-_OUTPUT_TAIL_MAX_CHARS:]
+        return "\n" + tail
+    return ""
+
+
 def _run_install_command(
     command: list[str],
     *,
@@ -134,15 +157,19 @@ def _run_install_command(
         errors="replace",
     )
     deadline = time.monotonic() + timeout
+    stdout = ""
+    stderr = ""
     try:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 process.kill()
-                process.communicate()
-                raise RuntimeInstallError(f"{heartbeat_code} timed out")
+                stdout, stderr = process.communicate()
+                raise RuntimeInstallError(
+                    f"{heartbeat_code} timed out{_child_output_tail(stderr, stdout)}"
+                )
             try:
-                process.communicate(timeout=min(5.0, remaining))
+                stdout, stderr = process.communicate(timeout=min(5.0, remaining))
                 break
             except subprocess.TimeoutExpired:
                 if reporter is not None:
@@ -150,6 +177,7 @@ def _run_install_command(
         if process.returncode != 0:
             raise RuntimeInstallError(
                 f"{heartbeat_code} failed with exit code {process.returncode}"
+                f"{_child_output_tail(stderr, stdout)}"
             )
     except BaseException:
         if process.poll() is None:
