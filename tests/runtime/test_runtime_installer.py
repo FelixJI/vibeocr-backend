@@ -1458,6 +1458,58 @@ def test_long_install_command_emits_heartbeat(
     assert events[-1]["message_code"] == "runtime.install_profile"
 
 
+def test_run_install_command_failure_keeps_stderr_tail() -> None:
+    """pip 失败时错误信息必须携带子进程输出尾部，不能再只剩 exit code。"""
+
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import sys\n"
+            "print('Collecting big-wheel')\n"
+            "print('ERROR: Could not find a version for req-x', file=sys.stderr)\n"
+            "sys.exit(1)\n"
+        ),
+    ]
+    with pytest.raises(RuntimeInstallError) as excinfo:
+        _run_install_command(
+            command,
+            timeout=60,
+            env={**os.environ},
+            reporter=None,
+            heartbeat_code="runtime.install_profile",
+        )
+    message = str(excinfo.value)
+    assert "runtime.install_profile failed with exit code 1" in message
+    assert "ERROR: Could not find a version for req-x" in message
+
+
+def test_run_install_command_failure_tail_is_bounded_and_prefers_stderr() -> None:
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import sys\n"
+            "for index in range(60):\n"
+            "    print(f'noise-{index}')\n"
+            "print('ERROR: hash mismatch for wheel-y', file=sys.stderr)\n"
+            "sys.exit(1)\n"
+        ),
+    ]
+    with pytest.raises(RuntimeInstallError) as excinfo:
+        _run_install_command(
+            command,
+            timeout=60,
+            env={**os.environ},
+            reporter=None,
+            heartbeat_code="runtime.install_profile",
+        )
+    message = str(excinfo.value)
+    assert "hash mismatch for wheel-y" in message
+    # stderr 优先且整条消息有界：stdout 噪声不应全部进入错误信息
+    assert "noise-0\n" not in message
+
+
 def test_runtime_host_rejects_legacy_profile_field(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
