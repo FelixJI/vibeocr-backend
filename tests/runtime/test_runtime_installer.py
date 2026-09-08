@@ -673,6 +673,47 @@ def test_runtime_control_inspect_probes_components_once(tmp_path: Path) -> None:
     )
 
 
+def test_ensure_ready_runtime_probes_components_once(tmp_path: Path) -> None:
+    # 回归：就绪运行时的启动 ensure 在 ready 判定与 _launch 校验之间
+    # 复用同一次组件导入探测；重复探测会让每次产品启动都多付一遍
+    # 已安装组件的冷导入成本。
+    manifest, component = _release(tmp_path / "release")
+    initial = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+        install_component_ids=(),
+    )
+    initial.ensure()
+    probe_calls: list[Path] = []
+
+    def probe(
+        runtime_root: Path, component_ids: tuple[str, ...], _profile_id: str
+    ) -> dict[str, bool]:
+        probe_calls.append(runtime_root)
+        return {component_id: True for component_id in component_ids}
+
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component,
+        runtime_manifest=manifest,
+        accelerator="cpu",
+        install_runner=_fake_install,
+        install_component_ids=(),
+        component_probe=probe,
+        operation_id="ensure-once",
+    )
+
+    launch = installer.ensure()
+
+    assert launch is not None
+    assert Path(launch.python_executable).is_file()
+    assert len(probe_calls) == 1
+    assert probe_calls[0] == installer.paths.runtime_root
+
+
 def test_inspect_and_ensure_report_covering_profile_after_base_only_install(
     tmp_path: Path,
 ) -> None:

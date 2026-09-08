@@ -1260,17 +1260,30 @@ class RuntimeInstaller:
     def ensure(self) -> RuntimeLaunch | None:
         # ready 额外要求已安装闭包等于期望闭包：从 base-only 扩到 full
         # （或反向）都会触发一次重装，而不是静默沿用旧范围。
+        # 漂移探测要真实导入已安装组件，是启动固定成本；结果在 ready
+        # 判定与 _launch 校验间复用，就绪路径每次 ensure 只探测一次。
+        # 重装路径不传结果，_launch 对新运行时重新探测。
+        installed = self._installed_scope_ids()
+        startup_probe = (
+            self._component_probe(
+                self.paths.runtime_root,
+                installed,
+                self._covering_profile(installed),
+            )
+            if installed
+            else None
+        )
         ready = (
             self._integrity_ok()
-            and self._installed_scope_ids() == self._desired_scope_ids()
-            and not self._drifted_component_ids()
+            and installed == self._desired_scope_ids()
+            and not self._drifted_component_ids(probe_results=startup_probe)
         )
         started = self._start_operation(
             "ensure",
             effective_component_ids=() if ready else self._desired_scope_ids(),
         )
         if not started:
-            return self._launch() if ready else None
+            return self._launch(startup_probe) if ready else None
         try:
             if not ready:
                 self._reporter.advance(
@@ -1298,7 +1311,7 @@ class RuntimeInstaller:
                     message_code="runtime.verify_runtime",
                 )
             self._save_preference()
-            launch = self._launch()
+            launch = self._launch(startup_probe if ready else None)
             self._reporter.succeed(
                 phase="commit_runtime",
                 current=7,
@@ -1461,8 +1474,10 @@ class RuntimeInstaller:
             self._reporter.fail(exc)
             raise
 
-    def _launch(self) -> RuntimeLaunch:
-        if not self._integrity_ok() or self._drifted_component_ids():
+    def _launch(self, probe_results: dict[str, bool] | None = None) -> RuntimeLaunch:
+        if not self._integrity_ok() or self._drifted_component_ids(
+            probe_results=probe_results
+        ):
             raise RuntimeInstallError("runtime installation did not verify")
         environment = self._environment()
         directory_keys = {
