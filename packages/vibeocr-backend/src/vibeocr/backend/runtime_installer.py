@@ -328,7 +328,6 @@ def _default_install_runner(
         "-m",
         "pip",
         "install",
-        "--only-binary=:all:",
     ]
     pack_files = [manifest.path.parent / name for name in runtime_pack]
     pack_present = bool(pack_files) and all(path.is_file() for path in pack_files)
@@ -359,6 +358,8 @@ def _default_install_runner(
             "--no-index",
             "--find-links",
             str(pack_dir),
+            # pack 是纯 wheel 闭包，only-binary 保证离线安装永不触发本机构建。
+            "--only-binary=:all:",
             "-r",
             str(requirements_file),
         ]
@@ -370,6 +371,10 @@ def _default_install_runner(
             raise RuntimeInstallError(
                 "online Runtime install requires one package_index source"
             )
+        # 不加 --only-binary：lock 的哈希行覆盖 index 上无 wheel 的 sdist
+        # 工件（如经 omegaconf 传递的 antlr4-python3-runtime==4.9.3 只发
+        # sdist），禁止 sdist 会直接解析失败。工件字节仍由 --require-hashes
+        # 锁定，与 build_runtime_pack 阶段 1 的下载语义一致。
         install_command += [
             "--index-url",
             package_indexes[0].endpoint,

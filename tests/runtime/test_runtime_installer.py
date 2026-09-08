@@ -1583,6 +1583,8 @@ class TestOfflineRuntimePack:
         assert "--no-index" in profile_install
         # 离线路径不做逐件 --require-hashes:pack 完整性由 manifest 绑定。
         assert "--require-hashes" not in profile_install
+        # pack 是纯 wheel 闭包，离线安装永不触发本机构建。
+        assert "--only-binary=:all:" in profile_install
         find_links = profile_install[
             profile_install.index("--find-links") + 1  # type: ignore[arg-type]
         ]
@@ -1616,6 +1618,9 @@ class TestOfflineRuntimePack:
         assert "--no-index" not in commands[0]
         assert "--find-links" not in commands[0]
         assert "--require-hashes" in commands[0]
+        # lock 的哈希行覆盖 sdist-only 工件（antlr4-python3-runtime==4.9.3），
+        # 在线路径禁止 sdist 会令完整 profile 无法解析。
+        assert "--only-binary=:all:" not in commands[0]
         assert commands[0][-2:] == [
             "-r",
             str(tmp_path / "release" / "requirements-win-x64-base.lock"),
