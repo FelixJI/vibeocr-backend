@@ -195,8 +195,6 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
         "rapidocr-base",
         "paddleocr-cpu",
         "mineru-cpu",
-        "pdf_document_tools",
-        "image_code_tools",
         "runtime_host",
     ]
     assert manifest.profiles["win-x64-cpu"].components[0].version is None
@@ -261,8 +259,6 @@ def test_build_emits_cuda_gpu_runtime_install_scope(tmp_path: Path) -> None:
             "scope_id": "gpu-runtime",
             "component_ids": [
                 "rapidocr-base",
-                "pdf_document_tools",
-                "image_code_tools",
                 "runtime_host",
                 "gpu_runtime",
             ],
@@ -312,14 +308,11 @@ def test_build_binds_base_profile_and_runtime_pack(tmp_path: Path) -> None:
     base = manifest.profiles["win-x64-base"]
     assert [c.component_id for c in base.components] == [
         "rapidocr-base",
-        "pdf_document_tools",
-        "image_code_tools",
         "runtime_host",
     ]
     # RapidOCR 是 Base Runtime 固有、可探针修复的必备 component。
     versions = {c.component_id: c.version for c in base.components}
     assert versions["rapidocr-base"] == "3.9.2"
-    assert versions["image_code_tools"] == "5.0.0.93"
     assert base.runtime_pack == (pack.name,)
     assert base.runtime_pack_sha256 == (hashlib.sha256(pack.read_bytes()).hexdigest(),)
     # 篡改输出目录中绑定的 pack 副本后 loader fail closed。
@@ -390,8 +383,6 @@ def test_loader_parses_additional_install_scope(tmp_path: Path) -> None:
             "scope_id": "gpu-runtime",
             "component_ids": [
                 "rapidocr-base",
-                "pdf_document_tools",
-                "image_code_tools",
                 "runtime_host",
                 "gpu_runtime",
             ],
@@ -419,8 +410,6 @@ def _cuda_scope(raw: dict) -> dict:
         "scope_id": "gpu-runtime",
         "component_ids": [
             "rapidocr-base",
-            "pdf_document_tools",
-            "image_code_tools",
             "runtime_host",
             "gpu_runtime",
         ],

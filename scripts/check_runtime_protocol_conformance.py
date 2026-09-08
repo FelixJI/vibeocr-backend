@@ -354,8 +354,6 @@ async def _selection_http_checks() -> None:
                     "rapidocr-base",
                     "paddleocr-cpu",
                     "mineru-cpu",
-                    "pdf_document_tools",
-                    "image_code_tools",
                     "runtime_host",
                 ]
             return {
@@ -406,7 +404,7 @@ async def _selection_http_checks() -> None:
         if {
             "ocr_engine",
             "rapidocr-base",
-            "pdf_document_tools",
+            "image_code_tools",
         }.intersection(selectable):
             raise RuntimeError("base components must not be selectable variants")
         # 引擎 catalog 的 required_component 必须是可准备的组件。
