@@ -74,7 +74,6 @@ def _release(
     root: Path,
     *,
     with_base_pack: bool = False,
-    divergent_image_code_tools: bool = False,
 ) -> tuple[Path, Path]:
     root.mkdir()
     wheel = root / "vibeocr_backend-0.7.0-py3-none-any.whl"
@@ -122,8 +121,6 @@ def _release(
             "scope_id": "gpu-runtime",
             "component_ids": [
                 "rapidocr-base",
-                "pdf_document_tools",
-                "image_code_tools",
                 "runtime_host",
                 "gpu_runtime",
             ],
@@ -132,50 +129,6 @@ def _release(
             "runtime_pack": None,
         }
     ]
-    if divergent_image_code_tools:
-        # 生产形态：image_code_tools 在 base 绑定 opencv-python、在 cpu 绑定
-        # opencv-contrib-python，声明版本随 profile 不同。base-only 安装只
-        # 满足 base 绑定，cpu 投影必然缺 contrib——inspect 不得据此判未就绪。
-        profiles["win-x64-base"]["components"] = [
-            {
-                "component_id": "rapidocr-base",
-                "display_name": "RapidOCR base inference",
-            },
-            {
-                "component_id": "pdf_document_tools",
-                "display_name": "PDF and document tools",
-            },
-            {
-                "component_id": "image_code_tools",
-                "display_name": "Image, QR, and barcode tools",
-                "version": "5.0.0.93",
-            },
-            {"component_id": "runtime_host", "display_name": "Runtime HTTP host"},
-        ]
-        profiles["win-x64-cpu"]["components"] = [
-            {
-                "component_id": "rapidocr-base",
-                "display_name": "RapidOCR base inference",
-            },
-            {
-                "component_id": "paddleocr-cpu",
-                "display_name": "PaddleOCR CPU inference",
-            },
-            {
-                "component_id": "mineru-cpu",
-                "display_name": "MinerU CPU document parsing",
-            },
-            {
-                "component_id": "pdf_document_tools",
-                "display_name": "PDF and document tools",
-            },
-            {
-                "component_id": "image_code_tools",
-                "display_name": "Image, QR, and barcode tools",
-                "version": "4.10.0.84",
-            },
-            {"component_id": "runtime_host", "display_name": "Runtime HTTP host"},
-        ]
     if with_base_pack:
         pack = root / "vibeocr-runtime-pack-win-x64-base-0.7.0.zip"
         with zipfile.ZipFile(pack, mode="w") as archive:
@@ -253,19 +206,6 @@ def _fake_install(partial: Path, _manifest, _profile: str) -> Path:
     python = partial / "Scripts" / "python.exe"
     python.parent.mkdir(parents=True)
     python.write_bytes(b"python")
-    return python
-
-
-def _base_binding_install(partial: Path, _manifest, _profile: str) -> Path:
-    # 模拟 base-only 安装结果：除 python.exe 外，落一个 opencv-python
-    # 5.0.0.93 的 dist-info，满足 win-x64-base 的 image_code_tools 绑定。
-    python = _fake_install(partial, _manifest, _profile)
-    dist_info = partial / "Lib" / "site-packages" / "opencv_python-5.0.0.93.dist-info"
-    dist_info.mkdir(parents=True)
-    (dist_info / "METADATA").write_text(
-        "Metadata-Version: 2.1\nName: opencv-python\nVersion: 5.0.0.93\n",
-        encoding="utf-8",
-    )
     return python
 
 
@@ -733,47 +673,6 @@ def test_runtime_control_inspect_probes_components_once(tmp_path: Path) -> None:
     )
 
 
-def test_inspect_ready_after_base_only_install_with_profile_divergent_bindings(
-    tmp_path: Path,
-) -> None:
-    # 回归：image_code_tools 在 base/cpu 绑定不同发行版时，base-only 安装
-    # 的 inspect 必须按已安装闭包的覆盖 profile 判漂移并报告 ready；
-    # 按 plan 投影判漂移会把该组件误判 missing，导致产品每次启动都
-    # 重新弹出 Runtime 安装界面。
-    manifest, component = _release(
-        tmp_path / "release", divergent_image_code_tools=True
-    )
-
-    def probe(
-        _runtime_root: Path, component_ids: tuple[str, ...], _profile_id: str
-    ) -> dict[str, bool]:
-        return {component_id: True for component_id in component_ids}
-
-    initial = RuntimeInstaller(
-        product_root=tmp_path / "product",
-        component_lock=component,
-        runtime_manifest=manifest,
-        accelerator="cpu",
-        install_runner=_base_binding_install,
-        install_component_ids=(),
-        component_probe=probe,
-    )
-    initial.ensure()
-
-    inspected = RuntimeInstaller(
-        product_root=tmp_path / "product",
-        component_lock=component,
-        runtime_manifest=manifest,
-        accelerator="cpu",
-        install_runner=_base_binding_install,
-        component_probe=probe,
-    )
-    state = inspected.inspect(emit=False)
-
-    assert state.status == "ready"
-    assert state.integrity == "verified"
-
-
 def test_inspect_and_ensure_report_covering_profile_after_base_only_install(
     tmp_path: Path,
 ) -> None:
@@ -781,9 +680,7 @@ def test_inspect_and_ensure_report_covering_profile_after_base_only_install(
     # 回报已安装闭包的覆盖 profile（win-x64-base），而不是 accelerator
     # plan（win-x64-cpu）——plan 视角的组件集与绑定并不描述已安装的
     # 运行时，还会把闭包外组件谎报成 desired ready。
-    manifest, component = _release(
-        tmp_path / "release", divergent_image_code_tools=True
-    )
+    manifest, component = _release(tmp_path / "release")
 
     def probe(
         _runtime_root: Path, component_ids: tuple[str, ...], _profile_id: str
@@ -797,7 +694,7 @@ def test_inspect_and_ensure_report_covering_profile_after_base_only_install(
             component_lock=component,
             runtime_manifest=manifest,
             accelerator="cpu",
-            install_runner=_base_binding_install,
+            install_runner=_fake_install,
             component_probe=probe,
             **kwargs,
         )
@@ -817,8 +714,6 @@ def test_inspect_and_ensure_report_covering_profile_after_base_only_install(
         assert result.profile["accelerator"] == "cpu"
         assert [item["component_id"] for item in result.profile["components"]] == [
             "rapidocr-base",
-            "pdf_document_tools",
-            "image_code_tools",
             "runtime_host",
         ]
         # 覆盖 profile 投影内全部组件都属于已安装闭包，desired ready 如实。
@@ -868,18 +763,16 @@ def test_runtime_status_ready_for_healthy_base_only_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # 回归：健康的 base-only 运行时不得被 /v2/runtime/status 判成
-    # degraded——plan 投影下闭包外/绑定分歧组件显示 missing 是展示层
+    # degraded——plan 投影下闭包外组件显示 missing 是展示层
     # 谎报，状态投影必须按已安装闭包的覆盖 profile 判定。
-    manifest, component = _release(
-        tmp_path / "release", divergent_image_code_tools=True
-    )
+    manifest, component = _release(tmp_path / "release")
     installer = RuntimeInstaller(
         product_root=tmp_path / "product",
         component_lock=component,
         runtime_manifest=manifest,
         accelerator="cpu",
         install_component_ids=(),
-        install_runner=_base_binding_install,
+        install_runner=_fake_install,
         component_probe=lambda _root, ids, _profile_id: dict.fromkeys(ids, True),
     )
     launch = installer.ensure()
@@ -898,7 +791,7 @@ def test_runtime_status_ready_for_healthy_base_only_runtime(
     assert status["service_state"] == "ready"
     assert status["profile"]["profile_id"] == "win-x64-base"
     statuses = {item["component_id"]: item for item in status["profile"]["components"]}
-    assert statuses["image_code_tools"]["actual_state"] == "ready"
+    assert statuses["rapidocr-base"]["actual_state"] == "ready"
     assert all(
         item["desired_state"] == "ready" for item in status["profile"]["components"]
     )
@@ -1123,8 +1016,6 @@ def test_component_drift_uses_installed_distribution_and_selected_repair(
             {"component_id": component_id, "display_name": display_name}
             for component_id, display_name in (
                 ("mineru-cpu", "MinerU CPU document parsing"),
-                ("pdf_document_tools", "PDF and document tools"),
-                ("image_code_tools", "Image and code tools"),
                 ("runtime_host", "Runtime HTTP host"),
             )
         ],
@@ -1376,7 +1267,7 @@ def test_install_progress_and_http_status_share_the_persisted_snapshot(
     assert status["maintenance"]["message_code"] == "runtime.ensure_complete"
     assert status["profile"]["components"][0] == {
         "component_id": "rapidocr-base",
-        "display_name": "RapidOCR base inference",
+        "display_name": "RapidOCR 基础识别",
         "state": "ready",
         "desired_state": "ready",
         "desired_version": None,
@@ -1561,7 +1452,13 @@ def _run_default_installer(
     def fake_extract_python(archive_path, destination, *, progress=None):  # type: ignore[no-untyped-def]
         (destination / "python.exe").write_bytes(b"python")
 
+    def fake_prepare(_python, _lock, _endpoint, _cache, _reporter, _env):  # type: ignore[no-untyped-def]
+        downloads = tmp_path / "downloads"
+        downloads.mkdir(exist_ok=True)
+        return downloads
+
     monkeypatch.setattr(installer, "_run_install_command", fake_run)
+    monkeypatch.setattr(installer, "_prepare_online_artifacts", fake_prepare)
     monkeypatch.setattr(installer, "_extract_python_archive", fake_extract_python)
     installer._default_install_runner(
         partial_root,
@@ -1583,6 +1480,8 @@ class TestOfflineRuntimePack:
         assert "--no-index" in profile_install
         # 离线路径不做逐件 --require-hashes:pack 完整性由 manifest 绑定。
         assert "--require-hashes" not in profile_install
+        # pack 是纯 wheel 闭包，离线安装永不触发本机构建。
+        assert "--only-binary=:all:" in profile_install
         find_links = profile_install[
             profile_install.index("--find-links") + 1  # type: ignore[arg-type]
         ]
@@ -1614,8 +1513,14 @@ class TestOfflineRuntimePack:
             tmp_path, monkeypatch, with_base_pack=False
         )
         assert "--no-index" not in commands[0]
-        assert "--find-links" not in commands[0]
+        # 在线路径的 find-links 指向自管下载的已验证工件目录。
+        assert commands[0][commands[0].index("--find-links") + 1] == str(
+            tmp_path / "downloads"
+        )
         assert "--require-hashes" in commands[0]
+        # lock 的哈希行覆盖 sdist-only 工件（antlr4-python3-runtime==4.9.3），
+        # 在线路径禁止 sdist 会令完整 profile 无法解析。
+        assert "--only-binary=:all:" not in commands[0]
         assert commands[0][-2:] == [
             "-r",
             str(tmp_path / "release" / "requirements-win-x64-base.lock"),
@@ -1674,7 +1579,16 @@ def test_online_install_uses_selected_source_and_isolates_parent_config(
     def fake_extract_python(archive_path, destination, *, progress=None):  # type: ignore[no-untyped-def]
         (destination / "python.exe").write_bytes(b"python")
 
+    resolved_endpoints: list[str] = []
+
+    def fake_prepare(_python, _lock, endpoint, _cache, _reporter, _env):  # type: ignore[no-untyped-def]
+        resolved_endpoints.append(endpoint)
+        downloads = tmp_path / "downloads"
+        downloads.mkdir(exist_ok=True)
+        return downloads
+
     monkeypatch.setattr(installer_module, "_run_install_command", fake_run)
+    monkeypatch.setattr(installer_module, "_prepare_online_artifacts", fake_prepare)
     monkeypatch.setattr(
         installer_module,
         "_extract_python_archive",
@@ -1697,6 +1611,7 @@ def test_online_install_uses_selected_source_and_isolates_parent_config(
     launch = runtime.ensure()
 
     profile_command, child_env = captured[0]
+    assert resolved_endpoints == [expected_endpoint]
     assert profile_command[profile_command.index("--index-url") + 1] == (
         expected_endpoint
     )
@@ -1723,7 +1638,13 @@ def test_cuda_gpu_only_selection_uses_exact_install_scope(
     def fake_extract_python(archive_path, destination, *, progress=None):  # type: ignore[no-untyped-def]
         (destination / "python.exe").write_bytes(b"python")
 
+    def fake_prepare(_python, _lock, _endpoint, _cache, _reporter, _env):  # type: ignore[no-untyped-def]
+        downloads = tmp_path / "downloads"
+        downloads.mkdir(exist_ok=True)
+        return downloads
+
     monkeypatch.setattr(installer_module, "_run_install_command", fake_run)
+    monkeypatch.setattr(installer_module, "_prepare_online_artifacts", fake_prepare)
     monkeypatch.setattr(
         installer_module,
         "_extract_python_archive",
@@ -1748,8 +1669,6 @@ def test_cuda_gpu_only_selection_uses_exact_install_scope(
     )
     assert marker["component_ids"] == [
         "rapidocr-base",
-        "pdf_document_tools",
-        "image_code_tools",
         "runtime_host",
         "gpu_runtime",
     ]
@@ -1895,10 +1814,17 @@ def test_full_profile_without_pack_falls_back_online(tmp_path: Path) -> None:
     def fake_extract_python(archive_path, destination, *, progress=None):  # type: ignore[no-untyped-def]
         (destination / "python.exe").write_bytes(b"python")
 
+    def fake_prepare(_python, _lock, _endpoint, _cache, _reporter, _env):  # type: ignore[no-untyped-def]
+        downloads = tmp_path / "downloads"
+        downloads.mkdir(exist_ok=True)
+        return downloads
+
     original_run = installer._run_install_command
     original_extract = installer._extract_python_archive
+    original_prepare = installer._prepare_online_artifacts
     installer._run_install_command = fake_run  # type: ignore[assignment]
     installer._extract_python_archive = fake_extract_python  # type: ignore[assignment]
+    installer._prepare_online_artifacts = fake_prepare  # type: ignore[assignment]
     try:
         installer._default_install_runner(
             partial_root,
@@ -1909,9 +1835,11 @@ def test_full_profile_without_pack_falls_back_online(tmp_path: Path) -> None:
     finally:
         installer._run_install_command = original_run  # type: ignore[assignment]
         installer._extract_python_archive = original_extract  # type: ignore[assignment]
-    # 回退在线:require-hashes + lock,而非 --no-index。
+        installer._prepare_online_artifacts = original_prepare  # type: ignore[assignment]
+    # 回退在线:require-hashes + lock + 已验证工件的 find-links,而非 --no-index。
     assert "--require-hashes" in commands[0]
     assert "--no-index" not in commands[0]
+    assert "--find-links" in commands[0]
     assert commands[0][-1].endswith("requirements-win-x64-cpu.lock")
 
 
@@ -2308,14 +2236,6 @@ def test_drift_projection_uses_covering_profile_declared_versions(
             "display_name": "RapidOCR base inference",
             "version": "3.9.2",
         },
-        {
-            "component_id": "pdf_document_tools",
-            "display_name": "PDF and document tools",
-        },
-        {
-            "component_id": "image_code_tools",
-            "display_name": "Image, QR, and barcode tools",
-        },
         {"component_id": "runtime_host", "display_name": "Runtime HTTP host"},
     ]
     document["profiles"]["win-x64-cpu"]["components"] = [
@@ -2332,14 +2252,6 @@ def test_drift_projection_uses_covering_profile_declared_versions(
         {
             "component_id": "mineru-cpu",
             "display_name": "MinerU CPU document parsing",
-        },
-        {
-            "component_id": "pdf_document_tools",
-            "display_name": "PDF and document tools",
-        },
-        {
-            "component_id": "image_code_tools",
-            "display_name": "Image, QR, and barcode tools",
         },
         {"component_id": "runtime_host", "display_name": "Runtime HTTP host"},
     ]
@@ -2373,8 +2285,6 @@ def test_drift_projection_uses_covering_profile_declared_versions(
                 "accelerator": "cpu",
                 "component_ids": [
                     "rapidocr-base",
-                    "pdf_document_tools",
-                    "image_code_tools",
                     "runtime_host",
                 ],
             }
@@ -2412,7 +2322,7 @@ def test_drift_projection_uses_covering_profile_declared_versions(
     }
 
     assert base_states["rapidocr-base"] == "ready"
-    assert base_states["pdf_document_tools"] == "ready"
+    assert base_states["runtime_host"] == "ready"
     assert cpu_states["rapidocr-base"] == "ready"
     assert cpu_states["paddleocr-cpu"] == "missing"
 
@@ -2499,3 +2409,167 @@ def test_document_parsing_ensure_passes_selected_model_source_to_native_clients(
     } == expected_source_environment
     assert "VIBEOCR_MODEL_ROOT" not in launch.environment
     assert "VIBEOCR_RESOLVED_MODELS" not in launch.environment
+
+
+class _MeasuredRecorder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int, int]] = []
+
+    def advance_measured(
+        self,
+        *,
+        phase: str,
+        unit: str,
+        current: int,
+        total: int,
+        message_code: str,
+        component_id: str | None = None,
+        estimated_remaining_seconds: int | None = None,
+    ) -> None:
+        self.calls.append((unit, current, total))
+
+
+class _FakeResponse:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+        self._offset = 0
+
+    def read(self, size: int = -1) -> bytes:
+        if self._offset >= len(self._payload):
+            return b""
+        window = self._payload[self._offset :]
+        chunk = window if size < 0 else window[:size]
+        self._offset += len(chunk)
+        return chunk
+
+    def __enter__(self) -> _FakeResponse:
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+
+class TestOnlineArtifactDownload:
+    def test_lock_allowed_hashes_parses_equals_and_direct_url_declarations(
+        self, tmp_path: Path
+    ) -> None:
+        from vibeocr.backend import runtime_installer as installer
+
+        lock = tmp_path / "requirements.lock"
+        lock.write_text(
+            "antlr4-python3-runtime==4.9.3 \\n"
+            "    --hash=sha256:" + "a" * 64 + " \\n"
+            "    --hash=sha256:" + "b" * 64 + "\n"
+            "paddlepaddle-gpu @ https://example.invalid/paddle.whl \\n"
+            "    --hash=sha256:" + "c" * 64 + "\n",
+            encoding="utf-8",
+        )
+        allowed = installer._lock_allowed_hashes(lock)
+        assert allowed["antlr4-python3-runtime"] == {"a" * 64, "b" * 64}
+        assert allowed["paddlepaddle-gpu"] == {"c" * 64}
+
+    def test_download_reports_byte_progress_and_verifies_hashes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from vibeocr.backend import runtime_installer as installer
+
+        payloads = {
+            "alpha-1.0-py3-none-any.whl": b"a" * (5 * 1024 * 1024),
+            "beta-2.0.tar.gz": b"b" * 1024,
+        }
+        artifacts = []
+        for filename, payload in payloads.items():
+            digest = hashlib.sha256(payload).hexdigest()
+            artifacts.append(
+                installer._ResolvedArtifact(
+                    name=filename.split("-")[0],
+                    url=f"https://example.invalid/{filename}",
+                    sha256=digest,
+                    filename=filename,
+                )
+            )
+        allowed = {
+            artifact.name: {hashlib.sha256(payloads[artifact.filename]).hexdigest()}
+            for artifact in artifacts
+        }
+        opened: list[str] = []
+
+        def fake_urlopen(request, timeout=None):  # type: ignore[no-untyped-def]
+            url = request.full_url
+            opened.append(url.rsplit("/", 1)[-1])
+            return _FakeResponse(payloads[url.rsplit("/", 1)[-1]])
+
+        monkeypatch.setattr(installer.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(
+            installer,
+            "_remote_content_length",
+            lambda url: len(payloads[url.rsplit("/", 1)[-1]]),
+        )
+        reporter = _MeasuredRecorder()
+        root = installer._download_resolved_artifacts(
+            tuple(artifacts), allowed, tmp_path / "downloads", reporter
+        )
+
+        assert sorted(path.name for path in root.iterdir()) == sorted(payloads)
+        assert reporter.calls[0] == ("bytes", 0, sum(map(len, payloads.values())))
+        assert reporter.calls[-1][0] == "bytes"
+        assert reporter.calls[-1][2] == sum(map(len, payloads.values()))
+        # 已验证文件直接复用：第二次调用不再发起网络请求。
+        opened.clear()
+        reporter2 = _MeasuredRecorder()
+        installer._download_resolved_artifacts(
+            tuple(artifacts), allowed, root, reporter2
+        )
+        assert opened == []
+        assert reporter2.calls[0][1] == sum(map(len, payloads.values()))
+
+    def test_download_fails_closed_on_hash_mismatch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from vibeocr.backend import runtime_installer as installer
+
+        payload = b"tampered-payload"
+        artifact = installer._ResolvedArtifact(
+            name="alpha",
+            url="https://example.invalid/alpha-1.0.whl",
+            sha256=None,
+            filename="alpha-1.0.whl",
+        )
+        monkeypatch.setattr(
+            installer.urllib.request,
+            "urlopen",
+            lambda request, timeout=None: _FakeResponse(payload),
+        )
+        monkeypatch.setattr(installer, "_remote_content_length", lambda url: None)
+        with pytest.raises(RuntimeInstallError, match="hash mismatch"):
+            installer._download_resolved_artifacts(
+                (artifact,), {"alpha": {"0" * 64}}, tmp_path / "downloads", None
+            )
+        assert not list((tmp_path / "downloads").glob("*.part"))
+
+    def test_download_falls_back_to_item_progress_without_sizes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from vibeocr.backend import runtime_installer as installer
+
+        payload = b"payload"
+        artifact = installer._ResolvedArtifact(
+            name="alpha",
+            url="https://example.invalid/alpha-1.0.whl",
+            sha256=hashlib.sha256(payload).hexdigest(),
+            filename="alpha-1.0.whl",
+        )
+        monkeypatch.setattr(
+            installer.urllib.request,
+            "urlopen",
+            lambda request, timeout=None: _FakeResponse(payload),
+        )
+        monkeypatch.setattr(installer, "_remote_content_length", lambda url: None)
+        reporter = _MeasuredRecorder()
+        installer._download_resolved_artifacts(
+            (artifact,),
+            {"alpha": {hashlib.sha256(payload).hexdigest()}},
+            tmp_path / "downloads",
+            reporter,
+        )
+        assert reporter.calls == [("items", 0, 1), ("items", 1, 1)]

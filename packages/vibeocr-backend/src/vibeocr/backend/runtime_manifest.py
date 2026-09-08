@@ -21,30 +21,26 @@ ACCELERATOR_TO_PLAN = {
     "nvidia_cuda": "win-x64-cu126",
 }
 PROFILE_COMPONENTS = {
-    # base-offline 必备闭包：随 Portable 携带、禁网可安装（计划 §4.1）。
+    # 组件目录面向引擎/能力划分：基础（RapidOCR）+ Paddle + MinerU + 必要
+    # 环境（runtime_host/gpu_runtime）。PDF/二维码等工具库属于基础闭包的
+    # 一部分，不再作为并列组件身份展示（其依赖始终随闭包安装）。
     # rapidocr-base 是 Base Runtime 的必备探针身份，不进入高级组件选择目录。
     "win-x64-base": (
-        ("rapidocr-base", "RapidOCR base inference"),
-        ("pdf_document_tools", "PDF and document tools"),
-        ("image_code_tools", "Image, QR, and barcode tools"),
-        ("runtime_host", "Runtime HTTP host"),
+        ("rapidocr-base", "RapidOCR 基础识别"),
+        ("runtime_host", "Runtime 服务环境"),
     ),
     "win-x64-cpu": (
-        ("rapidocr-base", "RapidOCR base inference"),
-        ("paddleocr-cpu", "PaddleOCR CPU inference"),
-        ("mineru-cpu", "MinerU CPU document parsing"),
-        ("pdf_document_tools", "PDF and document tools"),
-        ("image_code_tools", "Image, QR, and barcode tools"),
-        ("runtime_host", "Runtime HTTP host"),
+        ("rapidocr-base", "RapidOCR 基础识别"),
+        ("paddleocr-cpu", "PaddleOCR 引擎（CPU）"),
+        ("mineru-cpu", "MinerU 文档解析（CPU）"),
+        ("runtime_host", "Runtime 服务环境"),
     ),
     "win-x64-cu126": (
-        ("rapidocr-base", "RapidOCR base inference"),
-        ("paddleocr-cuda", "PaddleOCR CUDA inference"),
-        ("mineru-cuda", "MinerU CUDA document parsing"),
-        ("pdf_document_tools", "PDF and document tools"),
-        ("image_code_tools", "Image, QR, and barcode tools"),
-        ("runtime_host", "Runtime HTTP host"),
-        ("gpu_runtime", "CUDA and Torch runtime"),
+        ("rapidocr-base", "RapidOCR 基础识别"),
+        ("paddleocr-cuda", "PaddleOCR 引擎（CUDA）"),
+        ("mineru-cuda", "MinerU 文档解析（CUDA）"),
+        ("runtime_host", "Runtime 服务环境"),
+        ("gpu_runtime", "CUDA/Torch 运行环境"),
     ),
 }
 _DEFAULT_COMPONENT_DEPENDENCIES = {
@@ -94,18 +90,8 @@ _RUNTIME_COMPONENT_BINDINGS = {
         "paddleocr", "paddleocr"
     ),
     ("win-x64-cu126", "mineru-cuda"): RuntimeComponentBinding("mineru", "mineru"),
-    ("win-x64-base", "image_code_tools"): RuntimeComponentBinding(
-        "opencv-python", "cv2"
-    ),
-    ("win-x64-cpu", "image_code_tools"): RuntimeComponentBinding(
-        "opencv-contrib-python", "cv2"
-    ),
-    ("win-x64-cu126", "image_code_tools"): RuntimeComponentBinding(
-        "opencv-contrib-python", "cv2"
-    ),
 }
 _SHARED_RUNTIME_COMPONENT_BINDINGS = {
-    "pdf_document_tools": RuntimeComponentBinding("pymupdf", "fitz"),
     "runtime_host": RuntimeComponentBinding("fastapi", "fastapi"),
     "gpu_runtime": RuntimeComponentBinding("torch", "torch"),
 }
@@ -138,6 +124,14 @@ def migrate_legacy_component_ids(
         }
     else:
         raise ManifestError(f"unsupported profile: {profile_id}")
+    # 2.8 前的功能域组件已并入基础闭包，不再作为组件身份；历史请求与
+    # 持久化选择中的这两项直接丢弃，而不是拒绝整个选择。
+    replacements.update(
+        {
+            "pdf_document_tools": (),
+            "image_code_tools": (),
+        }
+    )
     migrated: list[str] = []
     for component_id in component_ids:
         for replacement in replacements.get(component_id, (component_id,)):

@@ -215,8 +215,6 @@ def test_selection_policy_resolves_exact_cuda_dependency_closure() -> None:
     assert gpu_only.install_scope.scope_id == "gpu-runtime"
     assert gpu_only.effective_component_ids == (
         "rapidocr-base",
-        "pdf_document_tools",
-        "image_code_tools",
         "runtime_host",
         "gpu_runtime",
     )
@@ -225,8 +223,6 @@ def test_selection_policy_resolves_exact_cuda_dependency_closure() -> None:
         "rapidocr-base",
         "paddleocr-cuda",
         "mineru-cuda",
-        "pdf_document_tools",
-        "image_code_tools",
         "runtime_host",
         "gpu_runtime",
     )

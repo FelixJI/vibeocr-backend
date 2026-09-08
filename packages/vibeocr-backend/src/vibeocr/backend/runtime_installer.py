@@ -8,6 +8,7 @@ never dependency names, index URLs or pip arguments.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -16,6 +17,8 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.parse
+import urllib.request
 import zipfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -257,6 +260,258 @@ def _python_in(runtime_root: Path) -> Path:
     return next((path for path in candidates if path.is_file()), candidates[0])
 
 
+_LOCK_DECLARATION_RE = re.compile(r"(?m)^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:==|@)")
+_LOCK_HASH_RE = re.compile(r"--hash=sha256:([0-9a-f]{64})")
+_DOWNLOAD_EVENT_MIN_BYTES = 4 * 1024 * 1024
+_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+_DOWNLOAD_HTTP_TIMEOUT_SECONDS = 60.0
+
+
+def _normalize_dist_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedArtifact:
+    name: str
+    url: str
+    sha256: str | None
+    filename: str
+
+
+def _lock_allowed_hashes(lock_path: Path) -> dict[str, set[str]]:
+    """Parse the per-distribution sha256 allow-list from an exact lock."""
+    allowed: dict[str, set[str]] = {}
+    block: list[str] = []
+    for raw_line in lock_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.rstrip()
+        if line.endswith("\\"):
+            block.append(line[:-1])
+            continue
+        block.append(line)
+        joined = " ".join(block)
+        block = []
+        match = _LOCK_DECLARATION_RE.match(joined)
+        if match is None:
+            continue
+        allowed.setdefault(_normalize_dist_name(match.group(1)), set()).update(
+            _LOCK_HASH_RE.findall(joined)
+        )
+    return allowed
+
+
+def _parse_resolve_report(report_path: Path) -> tuple[_ResolvedArtifact, ...]:
+    try:
+        document = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeInstallError("pip resolve report is unreadable") from exc
+    items = document.get("install") if isinstance(document, dict) else None
+    if not isinstance(items, list) or not items:
+        raise RuntimeInstallError("pip resolve report has no artifacts")
+    artifacts: list[_ResolvedArtifact] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise RuntimeInstallError("pip resolve report artifact is invalid")
+        metadata = item.get("metadata")
+        download = item.get("download_info")
+        archive = download.get("archive_info") if isinstance(download, dict) else None
+        hashes = archive.get("hashes") if isinstance(archive, dict) else None
+        sha256 = hashes.get("sha256") if isinstance(hashes, dict) else None
+        url = download.get("url") if isinstance(download, dict) else None
+        name = metadata.get("name") if isinstance(metadata, dict) else None
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(url, str)
+            or not url.startswith(("http://", "https://"))
+            or (sha256 is not None and not isinstance(sha256, str))
+        ):
+            raise RuntimeInstallError("pip resolve report artifact is invalid")
+        filename = urllib.parse.unquote(url.rsplit("/", 1)[-1])
+        if (
+            not filename
+            or "/" in filename
+            or "\\" in filename
+            or ":" in filename
+            or ".." in filename
+        ):
+            raise RuntimeInstallError(f"pip resolve artifact url is unsafe: {url}")
+        artifacts.append(_ResolvedArtifact(name, url, sha256, filename))
+    return tuple(artifacts)
+
+
+def _remote_content_length(url: str) -> int | None:
+    request = urllib.request.Request(url, method="HEAD")
+    try:
+        with urllib.request.urlopen(
+            request, timeout=_DOWNLOAD_HTTP_TIMEOUT_SECONDS
+        ) as response:
+            if response.status != 200:
+                return None
+            value = response.headers.get("Content-Length")
+    except (OSError, ValueError):
+        return None
+    try:
+        return int(value) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(_DOWNLOAD_CHUNK_BYTES), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download_resolved_artifacts(
+    artifacts: tuple[_ResolvedArtifact, ...],
+    allowed_hashes: dict[str, set[str]],
+    download_root: Path,
+    reporter: RuntimeMaintenanceReporter | None,
+) -> Path:
+    """Resolve the exact lock closure and download it with byte progress.
+
+    The download reuses previously verified files so a retry after a network
+    failure only refetches the missing artifacts. Every completed file is
+    verified against the lock allow-list before the offline install consumes
+    it.
+    """
+    download_root.mkdir(parents=True, exist_ok=True)
+    cached: dict[int, int] = {}
+    for index, artifact in enumerate(artifacts):
+        destination = download_root / artifact.filename
+        if destination.is_file() and _file_sha256(destination) in allowed_hashes.get(
+            _normalize_dist_name(artifact.name), set()
+        ):
+            cached[index] = destination.stat().st_size
+    sizes = {
+        index: cached.get(index)
+        if index in cached
+        else _remote_content_length(artifact.url)
+        for index, artifact in enumerate(artifacts)
+    }
+    total_bytes = sum(size for size in sizes.values() if size is not None)
+    known_bytes = all(size is not None for size in sizes.values())
+
+    def report_progress(current: int, total: int, unit: str) -> None:
+        if reporter is None:
+            return
+        reporter.advance_measured(
+            phase="install_profile",
+            unit=unit,  # type: ignore[arg-type]
+            current=current,
+            total=total,
+            message_code="runtime.download_package",
+        )
+
+    if known_bytes:
+        report_progress(sum(cached.values()), total_bytes, "bytes")
+    else:
+        report_progress(len(cached), len(artifacts), "items")
+
+    completed_bytes = sum(cached.values())
+    completed_items = len(cached)
+    last_event_bytes = completed_bytes
+    for index, artifact in enumerate(artifacts):
+        if index in cached:
+            continue
+        destination = download_root / artifact.filename
+        temporary = destination.with_suffix(destination.suffix + ".part")
+        expected = allowed_hashes.get(_normalize_dist_name(artifact.name), set())
+        digest = hashlib.sha256()
+        request = urllib.request.Request(artifact.url)
+        with (
+            urllib.request.urlopen(
+                request, timeout=_DOWNLOAD_HTTP_TIMEOUT_SECONDS
+            ) as response,
+            temporary.open("wb") as stream,
+        ):
+            while True:
+                chunk = response.read(_DOWNLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                stream.write(chunk)
+                digest.update(chunk)
+                if known_bytes:
+                    completed_bytes += len(chunk)
+                    if completed_bytes - last_event_bytes >= _DOWNLOAD_EVENT_MIN_BYTES:
+                        report_progress(completed_bytes, total_bytes, "bytes")
+                        last_event_bytes = completed_bytes
+        if digest.hexdigest() not in expected:
+            temporary.unlink(missing_ok=True)
+            raise RuntimeInstallError(
+                f"downloaded artifact hash mismatch: {artifact.name}"
+            )
+        os.replace(temporary, destination)
+        completed_items += 1
+        if not known_bytes:
+            report_progress(completed_items, len(artifacts), "items")
+        elif completed_bytes > last_event_bytes:
+            report_progress(completed_bytes, total_bytes, "bytes")
+    return download_root
+
+
+def _resolve_online_report(
+    python: Path,
+    lock: Path,
+    endpoint: str,
+    cache: Path,
+    reporter: RuntimeMaintenanceReporter | None,
+    env: dict[str, str],
+) -> Path:
+    """Resolve the lock closure with ``pip --dry-run --report``.
+
+    ``--require-hashes`` keeps pip's resolver pinned to the exact lock
+    artifacts, so the report's URLs are precisely what a direct install
+    would download.
+    """
+    report_path = cache / "resolve" / f"{lock.stem}-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    _run_install_command(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--dry-run",
+            "--quiet",
+            "--report",
+            str(report_path),
+            "--index-url",
+            endpoint,
+            "--require-hashes",
+            "-r",
+            str(lock),
+        ],
+        timeout=1800,
+        env=env,
+        reporter=reporter,
+        heartbeat_code="runtime.resolve_packages",
+    )
+    return report_path
+
+
+def _prepare_online_artifacts(
+    python: Path,
+    lock: Path,
+    endpoint: str,
+    cache: Path,
+    reporter: RuntimeMaintenanceReporter | None,
+    env: dict[str, str],
+) -> Path:
+    """Resolve and download the online lock closure; return the artifact dir."""
+    return _download_resolved_artifacts(
+        _parse_resolve_report(
+            _resolve_online_report(python, lock, endpoint, cache, reporter, env)
+        ),
+        _lock_allowed_hashes(lock),
+        cache / "downloads" / lock.stem,
+        reporter,
+    )
+
+
 def _default_install_runner(
     partial_root: Path,
     manifest: RuntimeManifest,
@@ -328,7 +583,6 @@ def _default_install_runner(
         "-m",
         "pip",
         "install",
-        "--only-binary=:all:",
     ]
     pack_files = [manifest.path.parent / name for name in runtime_pack]
     pack_present = bool(pack_files) and all(path.is_file() for path in pack_files)
@@ -359,6 +613,8 @@ def _default_install_runner(
             "--no-index",
             "--find-links",
             str(pack_dir),
+            # pack 是纯 wheel 闭包，only-binary 保证离线安装永不触发本机构建。
+            "--only-binary=:all:",
             "-r",
             str(requirements_file),
         ]
@@ -370,9 +626,22 @@ def _default_install_runner(
             raise RuntimeInstallError(
                 "online Runtime install requires one package_index source"
             )
+        # 在线路径两步走：pip dry-run 解析出 lock 的精确工件清单，自管下载
+        # 逐件校验哈希并推送字节级下载进度；最终安装把已验证工件作为
+        # --find-links 输入，pip 直接复用本地文件不重复下载。不加
+        # --only-binary：lock 的哈希行覆盖 index 上无 wheel 的 sdist 工件
+        # （如经 omegaconf 传递的 antlr4-python3-runtime==4.9.3 只发
+        # sdist），禁止 sdist 会直接解析失败。工件字节仍由 --require-hashes
+        # 锁定，与 build_runtime_pack 阶段 1 的下载语义一致。
+        endpoint = package_indexes[0].endpoint
+        download_root = _prepare_online_artifacts(
+            python, lock, endpoint, cache, reporter, portable_env
+        )
         install_command += [
             "--index-url",
-            package_indexes[0].endpoint,
+            endpoint,
+            "--find-links",
+            str(download_root),
             "--require-hashes",
             "-r",
             str(lock),
@@ -917,10 +1186,8 @@ class RuntimeInstaller:
         profile = self.profile_payload(probe_results=probe_results)
         # inspect 诚实反映“已安装闭包是否 ready”，不把缺 full 可选组件
         # 当作失败（base-only 是合法的安装状态）。漂移必须按已安装闭包的
-        # 覆盖 profile 投影（``_drifted_component_ids``）：plan 投影会把
-        # base/cpu 绑定不同的组件（如 image_code_tools 的 opencv-python 与
-        # opencv-contrib-python）误判为 missing，导致 base-only 安装每次
-        # inspect 都被判未就绪。
+        # 覆盖 profile 投影（``_drifted_component_ids``）：plan 视角的组件
+        # 集与绑定并不描述已安装的运行时，会把闭包外组件误判为 missing。
         ready = self._integrity_ok() and not self._drifted_component_ids(
             probe_results=probe_results
         )
