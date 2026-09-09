@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.10
+
+### Bug Fixes
+
+- **runtime:** 修复在线安装 sdist 解析失败并按引擎重组组件目录与下载进度 (#82) (5d35351)
+
+### Performance
+
+- **runtime:** 启动 ensure 复用组件探测结果避免重复导入 (#83) (646a5aa)
+
 ## 0.13.9
 
 ### Bug Fixes
