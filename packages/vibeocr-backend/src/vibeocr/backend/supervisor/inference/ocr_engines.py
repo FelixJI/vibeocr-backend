@@ -1,6 +1,6 @@
 """通用文本 OCR 引擎深模块：稳定接口、registry、resolver 与 fail-closed 错误。
 
-Plan（docs/ocr-engine-runtime-profiles-execution-plan.md §3）约束：
+约束：
 
 * ``GeneralTextOcrEngine`` 是 application/core 边界上与具体库无关的接口；
   RapidOCR / Windows Media OCR / PaddleOCR 三个 adapter 在接口之后实现。
