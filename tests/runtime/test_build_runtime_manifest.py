@@ -80,11 +80,14 @@ def _inputs(root: Path) -> dict[str, Path]:
     values["cu126_lock"].write_text(_lock("win-x64-cu126"), encoding="utf-8")
     values["cu126_gpu_lock"].write_text(_lock("win-x64-cu126"), encoding="utf-8")
     values["python_archive"].write_bytes(b"python-archive")
+    # writestr 对字符串文件名取当前时间做 DOS 时间戳（2 秒分辨率），两次
+    # 构建跨过时间边界会令“字节确定性”夹具自身不稳定；固定 date_time。
+    installer_entry = zipfile.ZipInfo(
+        "runtime-installer/vibeocr-runtime-installer.exe",
+        date_time=(1980, 1, 1, 0, 0, 0),
+    )
     with zipfile.ZipFile(values["installer_archive"], mode="w") as archive:
-        archive.writestr(
-            "runtime-installer/vibeocr-runtime-installer.exe",
-            b"installer",
-        )
+        archive.writestr(installer_entry, b"installer")
     return values
 
 
