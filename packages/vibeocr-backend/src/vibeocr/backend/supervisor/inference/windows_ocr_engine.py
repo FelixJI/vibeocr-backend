@@ -1,6 +1,6 @@
 """Windows Media OCR 引擎 adapter：使用 Windows 自带 OCR 能力。
 
-约束（docs/ocr-engine-runtime-profiles-execution-plan.md §B0.3/§B3）：
+约束：
 
 * adapter 随 base 运行时携带；系统 OCR/语言包由 Windows 动态探测，
   未通过探测时必须显示 unavailable，不能伪造成空识别结果。

@@ -1,6 +1,6 @@
 """RapidOCR 引擎 adapter：全局默认的轻量离线纯文本 OCR。
 
-约束（docs/ocr-engine-runtime-profiles-execution-plan.md §B3）：
+约束：
 
 * 惰性初始化：首次 ``recognize_many`` 才加载模型；禁用网络下载，
   模型随 base-offline 运行时携带（wheel 内置或固定本地路径）。

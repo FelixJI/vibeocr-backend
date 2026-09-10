@@ -1,6 +1,6 @@
 """OcrEngineRoutingAdapter：RECOGNITION 的通用引擎入口。
 
-职责（docs/ocr-engine-runtime-profiles-execution-plan.md §3.2）：
+职责：
 
 * ``OCR`` pipeline（纯文本）按请求的 engine ID 经 resolver 路由到对应
   引擎 adapter；请求缺省 engine 时使用 Backend 默认引擎（rapidocr）。
