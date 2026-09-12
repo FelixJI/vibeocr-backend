@@ -1359,35 +1359,64 @@ def test_long_install_command_emits_heartbeat(
         reporter.check_cancelled()
     assert events == events_before_cancel_checks
 
-    class FakeProcess:
-        returncode = 0
+    from vibeocr.backend import runtime_installer as installer_module
 
-        def __init__(self) -> None:
-            self.communicate_calls = 0
-
-        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
-            self.communicate_calls += 1
-            if self.communicate_calls == 1:
-                raise subprocess.TimeoutExpired("pip", timeout)
-            return "", ""
-
-        def poll(self) -> int:
-            return self.returncode
-
-    process = FakeProcess()
-    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(
+        installer_module,
+        "_CHILD_HEARTBEAT_INTERVAL_SECONDS",
+        0.2,
+    )
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import sys, time\n"
+            "print('Collecting torch-2.7.0', flush=True)\n"
+            "time.sleep(0.6)\n"
+            "print('noise line without status prefix', flush=True)\n"
+            "time.sleep(0.6)\n"
+            "print('Downloading torch-2.7.0-cp313 (2.5 GB)', flush=True)\n"
+        ),
+    ]
 
     _run_install_command(
-        ["python.exe", "-m", "pip"],
+        command,
         timeout=60,
-        env={},
+        env={**os.environ},
         reporter=reporter,
         heartbeat_code="runtime.install_profile",
     )
 
-    assert events[-1]["event_type"] == "heartbeat"
-    assert events[-1]["snapshot"]["phase"] == "install_profile"
-    assert events[-1]["message_code"] == "runtime.install_profile"
+    heartbeats = [event for event in events if event["event_type"] == "heartbeat"]
+    assert heartbeats
+    assert heartbeats[0]["snapshot"]["phase"] == "install_profile"
+    assert heartbeats[0]["message_code"] == "runtime.install_profile"
+    # 状态行明细按变化回报：无前缀的噪声行不产生事件
+    detail_events = [event for event in events if event.get("fallback_message")]
+    assert [event["fallback_message"] for event in detail_events] == [
+        "Collecting torch-2.7.0",
+        "Downloading torch-2.7.0-cp313 (2.5 GB)",
+    ]
+    for event in detail_events:
+        assert event["event_type"] == "progress"
+        assert event["snapshot"]["phase"] == "install_profile"
+
+
+def test_child_status_detail_only_matches_known_prefixes() -> None:
+    from vibeocr.backend.runtime_installer import _child_status_detail
+
+    assert (
+        _child_status_detail("Collecting numpy==2.3.1\n") == "Collecting numpy==2.3.1"
+    )
+    assert (
+        _child_status_detail("Downloading torch-2.7.0-cp313 (2.5 GB)\r\n")
+        == "Downloading torch-2.7.0-cp313 (2.5 GB)"
+    )
+    assert _child_status_detail("Using cached scipy-1.16.0.whl") is not None
+    assert _child_status_detail("noise line") is None
+    assert _child_status_detail("   ") is None
+    # 超长行（如 Installing collected packages 全量列表）有界截断
+    assert len(_child_status_detail("Collecting " + "x" * 500)) == 160
 
 
 def test_run_install_command_failure_keeps_stderr_tail() -> None:

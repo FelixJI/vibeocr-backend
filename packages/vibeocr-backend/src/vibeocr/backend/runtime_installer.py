@@ -11,11 +11,13 @@ import argparse
 import hashlib
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -141,6 +143,48 @@ def _child_output_tail(*streams: str) -> str:
     return ""
 
 
+_CHILD_HEARTBEAT_INTERVAL_SECONDS = 5.0
+_CHILD_DETAIL_MAX_CHARS = 160
+# pip 在非交互管道下按行输出解析/下载/安装状态；进度条等噪声行不匹配
+# 前缀，自然被忽略。明细行只经 maintenance 事件的 ``fallback_message``
+# 回报，绝不把包管理器的原始输出 bulk 写进 NDJSON stdout。
+_CHILD_STATUS_PREFIXES = (
+    "Collecting ",
+    "Downloading ",
+    "Using cached ",
+    "Installing collected packages",
+    "Successfully installed",
+)
+
+
+def _child_status_detail(line: str) -> str | None:
+    """Return one displayable package-manager status line, if any."""
+
+    text = line.strip()
+    if text.startswith(_CHILD_STATUS_PREFIXES):
+        return text[:_CHILD_DETAIL_MAX_CHARS]
+    return None
+
+
+def _drain_child_lines(
+    stream: Any,
+    channel: str,
+    lines: dict[str, list[str]],
+    line_queue: "queue.Queue[tuple[str, str | None]]",
+) -> None:
+    try:
+        for line in stream:
+            lines[channel].append(line)
+            line_queue.put((channel, line))
+    finally:
+        line_queue.put((channel, None))
+
+
+def _join_child_readers(readers: list[threading.Thread]) -> None:
+    for reader in readers:
+        reader.join(timeout=5)
+
+
 def _run_install_command(
     command: list[str],
     *,
@@ -149,7 +193,12 @@ def _run_install_command(
     reporter: RuntimeMaintenanceReporter | None,
     heartbeat_code: str,
 ) -> None:
-    """Run a child without leaking package-manager output into NDJSON stdout."""
+    """Run a child, surfacing its status lines as maintenance event details.
+
+    子进程输出按行消费：错误尾部照旧进入异常消息；同时把包管理器的
+    解析/下载/安装状态行（``fallback_message``）作为 progress 事件回报，
+    前端不再只能看到 5 秒一跳的心跳。NDJSON stdout 仍只接收结构化事件。
+    """
     process = subprocess.Popen(
         command,
         env=env,
@@ -159,28 +208,76 @@ def _run_install_command(
         encoding="utf-8",
         errors="replace",
     )
+    assert process.stdout is not None
+    assert process.stderr is not None
+    lines: dict[str, list[str]] = {"stdout": [], "stderr": []}
+    line_queue: "queue.Queue[tuple[str, str | None]]" = queue.Queue()
+    readers = [
+        threading.Thread(
+            target=_drain_child_lines,
+            args=(stream, channel, lines, line_queue),
+            daemon=True,
+        )
+        for channel, stream in (
+            ("stdout", process.stdout),
+            ("stderr", process.stderr),
+        )
+    ]
+    for reader in readers:
+        reader.start()
     deadline = time.monotonic() + timeout
-    stdout = ""
-    stderr = ""
+    last_heartbeat = time.monotonic()
+    last_detail: str | None = None
+    completed: set[str] = set()
     try:
-        while True:
+        while len(completed) < 2:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 process.kill()
-                stdout, stderr = process.communicate()
+                _join_child_readers(readers)
+                stderr_tail = "".join(lines["stderr"])
+                stdout_tail = "".join(lines["stdout"])
                 raise RuntimeInstallError(
-                    f"{heartbeat_code} timed out{_child_output_tail(stderr, stdout)}"
+                    f"{heartbeat_code} timed out"
+                    f"{_child_output_tail(stderr_tail, stdout_tail)}"
                 )
             try:
-                stdout, stderr = process.communicate(timeout=min(5.0, remaining))
-                break
-            except subprocess.TimeoutExpired:
-                if reporter is not None:
-                    reporter.heartbeat(message_code=heartbeat_code)
+                channel, line = line_queue.get(timeout=min(0.5, remaining))
+            except queue.Empty:
+                channel, line = "", None
+            if channel and line is None:
+                completed.add(channel)
+            elif line is not None:
+                detail = _child_status_detail(line)
+                if (
+                    detail is not None
+                    and detail != last_detail
+                    and reporter is not None
+                ):
+                    last_detail = detail
+                    reporter.child_status_detail(
+                        message_code=heartbeat_code,
+                        fallback_message=detail,
+                    )
+            now = time.monotonic()
+            if (
+                reporter is not None
+                and now - last_heartbeat >= _CHILD_HEARTBEAT_INTERVAL_SECONDS
+            ):
+                reporter.heartbeat(message_code=heartbeat_code)
+                last_heartbeat = now
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise RuntimeInstallError(f"{heartbeat_code} timed out")
         if process.returncode != 0:
+            stderr_tail = "".join(lines["stderr"])
+            stdout_tail = "".join(lines["stdout"])
             raise RuntimeInstallError(
                 f"{heartbeat_code} failed with exit code {process.returncode}"
-                f"{_child_output_tail(stderr, stdout)}"
+                f"{_child_output_tail(stderr_tail, stdout_tail)}"
             )
     except BaseException:
         if process.poll() is None:
