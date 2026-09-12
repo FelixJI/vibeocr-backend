@@ -1287,6 +1287,26 @@ class RuntimeMaintenanceReporter:
             component_id=self._snapshot.get("component_id"),
         )
 
+    def child_status_detail(self, *, message_code: str, fallback_message: str) -> None:
+        """Republish the current snapshot carrying one child status line.
+
+        在线安装等长阶段里，包管理器按行输出“正在解析/下载/安装哪个包”；
+        该明细不改变快照状态，仅作为 progress 事件的 ``fallback_message``
+        透出，前端可在心跳间隙展示当前实际在做什么。
+        """
+        if self._snapshot is None:
+            return
+        self._abort_if_cancel_requested()
+        self._publish(
+            event_type="progress",
+            operation_state="running",
+            phase=str(self._snapshot["phase"]),
+            progress=self._snapshot.get("progress"),
+            message_code=message_code,
+            component_id=self._snapshot.get("component_id"),
+            fallback_message=fallback_message,
+        )
+
     def check_cancelled(self) -> None:
         """Observe cancellation without publishing a durable event."""
         self._abort_if_cancel_requested()
@@ -1415,6 +1435,7 @@ class RuntimeMaintenanceReporter:
         message_code: str,
         component_id: str | None = None,
         failure: dict[str, Any] | None = None,
+        fallback_message: str | None = None,
     ) -> None:
         if self._operation is None or self._operation_id is None:
             raise RuntimeError("maintenance operation has not started")
@@ -1460,6 +1481,7 @@ class RuntimeMaintenanceReporter:
                 snapshot=snapshot,
                 message_code=message_code,
                 failure=failure,
+                fallback_message=fallback_message,
             )
         except RuntimeOperationError:
             if operation_state != "cancelled" and self._store.cancel_requested(
