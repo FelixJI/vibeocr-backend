@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.11
+
+### Features
+
+- **runtime:** 安装命令按行回报子进程状态明细 (#87) (51e98c6)
+
 ## 0.13.10
 
 ### Bug Fixes
