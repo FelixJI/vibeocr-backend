@@ -78,3 +78,9 @@
 - 本仓发布的正式 Runtime Release 是 `vibeocr-classic` 与 `vibeocr-next` CI 的上游。前端总是选择最新正式 Backend，并从 runtime manifest 获取它实际绑定的 Protocol。
 - Backend 与两个前端分别发布；本仓发版不直接触发前端 CD。兼容性由 Protocol major、minor-compatible 规则和 required capabilities 保证。
 - `file-toolbox`、`vibetable` 与本仓无源码/运行时依赖，只共享六仓自动化治理。
+
+<!-- AI-FLOW-V4:START -->
+## AI Flow v4.0
+
+执行 AI Flow 任务前，读取 `.ai-flow/AGENTS.md`、`.ai-flow/AI_CODING_PLAYBOOK.md`、`.ai-flow/project.json` 和对应 GitHub Issue。工作流补充而不覆盖上面的工程规则；Issue-first、balanced、人工跨工具交接、Codex 只读 reviewer 子代理、人工合并。
+<!-- AI-FLOW-V4:END -->
