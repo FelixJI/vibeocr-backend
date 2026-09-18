@@ -14,6 +14,7 @@ import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -22,11 +23,12 @@ import time
 import urllib.parse
 import urllib.request
 import zipfile
+from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from vibeocr.backend.runtime_layout import resolve_runtime_store
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
@@ -64,6 +66,7 @@ from vibeocr.backend.runtime_selection import (
     RuntimeSelectionError,
     RuntimeSelectionPolicy,
 )
+from vibeocr.backend.utils.job_object import JobObjectGuard
 
 
 class RuntimeInstallError(RuntimeInstallFailure):
@@ -136,7 +139,9 @@ def _child_output_tail(*streams: str) -> str:
         lines = [line.strip() for line in stream.splitlines() if line.strip()]
         if not lines:
             continue
-        tail = "\n".join(lines[-_OUTPUT_TAIL_MAX_LINES:])
+        tail = "\n".join(
+            _safe_child_text(line) for line in lines[-_OUTPUT_TAIL_MAX_LINES:]
+        )
         if len(tail) > _OUTPUT_TAIL_MAX_CHARS:
             tail = tail[-_OUTPUT_TAIL_MAX_CHARS:]
         return "\n" + tail
@@ -144,6 +149,10 @@ def _child_output_tail(*streams: str) -> str:
 
 
 _CHILD_HEARTBEAT_INTERVAL_SECONDS = 5.0
+_RESOLVE_NETWORK_TIMEOUT_SECONDS = 30
+_RESOLVE_NETWORK_RETRIES = 2
+_RESOLVE_IDLE_TIMEOUT_SECONDS = 300
+_RESOLVE_TOTAL_TIMEOUT_SECONDS = 1800
 _CHILD_DETAIL_MAX_CHARS = 160
 # pip 在非交互管道下按行输出解析/下载/安装状态；进度条等噪声行不匹配
 # 前缀，自然被忽略。明细行只经 maintenance 事件的 ``fallback_message``
@@ -154,35 +163,70 @@ _CHILD_STATUS_PREFIXES = (
     "Using cached ",
     "Installing collected packages",
     "Successfully installed",
+    "Preparing metadata",
+    "Installing build dependencies",
+    "Getting requirements to build",
+    "Building wheel",
+    "Would install ",
+    "Progress ",
 )
 
 
 def _child_status_detail(line: str) -> str | None:
     """Return one displayable package-manager status line, if any."""
 
-    text = line.strip()
+    text = _safe_child_text(line.strip())
     if text.startswith(_CHILD_STATUS_PREFIXES):
         return text[:_CHILD_DETAIL_MAX_CHARS]
     return None
 
 
+def _safe_child_text(text: str) -> str:
+    """Remove locations and credentials before output reaches events or errors."""
+    text = re.sub(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s<>\"']+", "[url]", text)
+    text = re.sub(
+        r"(?i)\b(?:authorization|password|token|api[_-]?key)\s*[:=]\s*(?:Bearer\s+)?\S+",
+        "[credential]",
+        text,
+    )
+    text = re.sub(r"(?i)(?:[a-z]:[\\/]|\\\\)[^\r\n\"']+", "[path]", text)
+    text = re.sub(r"(?<![\w])/(?:[^\s/]+/)*[^\s,;)]+", "[path]", text)
+    return text
+
+
 def _drain_child_lines(
-    stream: Any,
-    channel: str,
-    lines: dict[str, list[str]],
-    line_queue: "queue.Queue[tuple[str, str | None]]",
+    stream: TextIO,
+    lines: deque[str],
+    line_queue: queue.Queue[str],
+    done: threading.Event,
 ) -> None:
+    # Bound both memory and individual lines. Never publish fragments of a long
+    # line: a credential could straddle the read boundary.
+    dropping = False
     try:
-        for line in stream:
-            lines[channel].append(line)
-            line_queue.put((channel, line))
+        while line := stream.readline(_OUTPUT_TAIL_MAX_CHARS + 1):
+            too_long = len(line) > _OUTPUT_TAIL_MAX_CHARS
+            if dropping or too_long:
+                dropping = not line.endswith("\n")
+                continue
+            safe = _safe_child_text(line)
+            lines.append(safe)
+            try:
+                line_queue.put_nowait(safe)
+            except queue.Full:
+                # Stale display output may be discarded, but draining must never
+                # block cancellation. The independent stderr/stdout tails remain.
+                try:
+                    line_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    line_queue.put_nowait(safe)
+                except queue.Full:
+                    pass
     finally:
-        line_queue.put((channel, None))
-
-
-def _join_child_readers(readers: list[threading.Thread]) -> None:
-    for reader in readers:
-        reader.join(timeout=5)
+        stream.close()
+        done.set()
 
 
 def _run_install_command(
@@ -192,102 +236,169 @@ def _run_install_command(
     env: dict[str, str],
     reporter: RuntimeMaintenanceReporter | None,
     heartbeat_code: str,
+    idle_timeout: float | None = None,
 ) -> None:
-    """Run a child, surfacing its status lines as maintenance event details.
+    """Supervise one Python command with bounded diagnostics and owned cleanup.
 
-    子进程输出按行消费：错误尾部照旧进入异常消息；同时把包管理器的
-    解析/下载/安装状态行（``fallback_message``）作为 progress 事件回报，
-    前端不再只能看到 5 秒一跳的心跳。NDJSON stdout 仍只接收结构化事件。
+    On Windows a Python gate waits on stdin until its anonymous Job is assigned.
+    Only then can pip or its build children start. Closing the Job also kills
+    descendants whose parent has already exited; unrelated operations are safe.
     """
-    process = subprocess.Popen(
-        command,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    assert process.stdout is not None
-    assert process.stderr is not None
-    lines: dict[str, list[str]] = {"stdout": [], "stderr": []}
-    line_queue: "queue.Queue[tuple[str, str | None]]" = queue.Queue()
-    readers = [
-        threading.Thread(
-            target=_drain_child_lines,
-            args=(stream, channel, lines, line_queue),
-            daemon=True,
-        )
-        for channel, stream in (
-            ("stdout", process.stdout),
-            ("stderr", process.stderr),
-        )
-    ]
-    for reader in readers:
-        reader.start()
-    deadline = time.monotonic() + timeout
-    last_heartbeat = time.monotonic()
+    started = time.monotonic()
+    last_activity = started
     last_detail: str | None = None
-    completed: set[str] = set()
+    snapshot = reporter.snapshot if reporter is not None else None
+    source_ids = (snapshot or {}).get("effective_download_source_ids", [])
+    operation_id = reporter.operation_id if reporter is not None else None
+    resolver = heartbeat_code == "runtime.resolve_packages"
+    tails = [deque[str](maxlen=_OUTPUT_TAIL_MAX_LINES) for _ in range(2)]
+
+    def diagnostic(reason: str) -> str:
+        now = time.monotonic()
+        return (
+            f"{heartbeat_code} reason={reason}; elapsed={now - started:.2f}s; "
+            f"last_activity={now - last_activity:.2f}s ago; "
+            f"operation={operation_id or 'unbound'}; "
+            f"sources={','.join(source_ids) or 'unbound'}; "
+            f"detail={last_detail or 'no effective activity'}"
+        )
+
+    if reporter is not None:
+        reporter.check_cancelled(fallback_message=diagnostic("cancelled"))
+    guard = JobObjectGuard(allow_breakaway=False)
+    launched = command
+    if os.name == "nt":
+        launched = [
+            command[0],
+            "-c",
+            (
+                "import subprocess,sys; "
+                "gate=sys.stdin.buffer.read(1); "
+                "sys.exit(subprocess.call(sys.argv[1:], stdin=subprocess.DEVNULL) "
+                "if gate == b'1' else 125)"
+            ),
+            *command,
+        ]
     try:
-        while len(completed) < 2:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                process.kill()
-                _join_child_readers(readers)
-                stderr_tail = "".join(lines["stderr"])
-                stdout_tail = "".join(lines["stdout"])
-                raise RuntimeInstallError(
-                    f"{heartbeat_code} timed out"
-                    f"{_child_output_tail(stderr_tail, stdout_tail)}"
+        process = subprocess.Popen(
+            launched,
+            env=env,
+            stdin=subprocess.PIPE if os.name == "nt" else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            start_new_session=os.name != "nt",
+        )
+    except OSError:
+        if reporter is not None:
+            reporter.clear_cancellation_detail()
+        guard.close()
+        raise RuntimeInstallError(diagnostic("spawn_failed")) from None
+    readers: list[threading.Thread] = []
+    done = [threading.Event(), threading.Event()]
+    line_queue: queue.Queue[str] = queue.Queue(maxsize=64)
+    try:
+        if os.name == "nt":
+            if not guard.assign_from_popen(process):
+                raise RuntimeInstallError(diagnostic("process_containment_failed"))
+            assert process.stdin is not None
+            process.stdin.write("1")
+            process.stdin.close()
+        assert process.stdout is not None and process.stderr is not None
+        for index, stream in enumerate((process.stdout, process.stderr)):
+            reader = threading.Thread(
+                target=_drain_child_lines,
+                args=(stream, tails[index], line_queue, done[index]),
+                daemon=True,
+            )
+            readers.append(reader)
+            reader.start()
+        last_heartbeat = started
+        if resolver and reporter is not None:
+            reporter.child_status_detail(
+                message_code=heartbeat_code, fallback_message=diagnostic("started")
+            )
+        while True:
+            now = time.monotonic()
+            if reporter is not None:
+                reporter.check_cancelled(
+                    fallback_message=diagnostic("cancelled")
+                    + _child_output_tail("".join(tails[1]), "".join(tails[0]))
                 )
+            if (
+                all(event.is_set() for event in done)
+                and line_queue.empty()
+                and process.poll() is not None
+            ):
+                break
+            reason = None
+            if now - started >= timeout:
+                reason = "total_timeout"
+            elif idle_timeout is not None and now - last_activity >= idle_timeout:
+                reason = "idle_timeout"
+            if reason is not None:
+                raise RuntimeInstallError(diagnostic(reason))
             try:
-                channel, line = line_queue.get(timeout=min(0.5, remaining))
+                line = line_queue.get(
+                    timeout=min(0.1, max(0.001, timeout - (now - started)))
+                )
             except queue.Empty:
-                channel, line = "", None
-            if channel and line is None:
-                completed.add(channel)
-            elif line is not None:
-                detail = _child_status_detail(line)
-                if (
-                    detail is not None
-                    and detail != last_detail
-                    and reporter is not None
-                ):
-                    last_detail = detail
+                line = ""
+            detail = _child_status_detail(line)
+            if detail is not None and detail != last_detail:
+                last_detail = detail
+                last_activity = time.monotonic()
+                if reporter is not None:
                     reporter.child_status_detail(
                         message_code=heartbeat_code,
-                        fallback_message=detail,
+                        fallback_message=diagnostic("activity") if resolver else detail,
                     )
             now = time.monotonic()
             if (
                 reporter is not None
                 and now - last_heartbeat >= _CHILD_HEARTBEAT_INTERVAL_SECONDS
             ):
-                reporter.heartbeat(message_code=heartbeat_code)
+                reporter.heartbeat(
+                    message_code=heartbeat_code,
+                    fallback_message=diagnostic("running") if resolver else None,
+                )
                 last_heartbeat = now
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-            raise RuntimeInstallError(f"{heartbeat_code} timed out")
         if process.returncode != 0:
-            stderr_tail = "".join(lines["stderr"])
-            stdout_tail = "".join(lines["stdout"])
             raise RuntimeInstallError(
-                f"{heartbeat_code} failed with exit code {process.returncode}"
-                f"{_child_output_tail(stderr_tail, stdout_tail)}"
+                f"{heartbeat_code} failed with exit code {process.returncode}; "
+                + diagnostic("exit_nonzero")
             )
-    except BaseException:
-        if process.poll() is None:
-            process.terminate()
+        if resolver and reporter is not None:
+            reporter.child_status_detail(
+                message_code=heartbeat_code, fallback_message=diagnostic("succeeded")
+            )
+    except RuntimeInstallError as exc:
+        raise RuntimeInstallError(
+            str(exc) + _child_output_tail("".join(tails[1]), "".join(tails[0]))
+        ) from None
+    finally:
+        if reporter is not None:
+            reporter.clear_cancellation_detail()
+        guard.close()
+        if os.name != "nt":
             try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-        raise
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
+        for reader in readers:
+            reader.join(timeout=5)
+        if not readers:
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+        if process.stdin is not None:
+            process.stdin.close()
 
 
 def _default_accelerator(component_lock: dict[str, Any]) -> str:
@@ -573,7 +684,16 @@ def _resolve_online_report(
             "pip",
             "install",
             "--dry-run",
-            "--quiet",
+            "--no-input",
+            "--disable-pip-version-check",
+            "--progress-bar",
+            "raw",
+            "--timeout",
+            str(_RESOLVE_NETWORK_TIMEOUT_SECONDS),
+            "--retries",
+            str(_RESOLVE_NETWORK_RETRIES),
+            "--resume-retries",
+            str(_RESOLVE_NETWORK_RETRIES),
             "--report",
             str(report_path),
             "--index-url",
@@ -582,8 +702,12 @@ def _resolve_online_report(
             "-r",
             str(lock),
         ],
-        timeout=1800,
-        env=env,
+        # A hard ceiling still bounds repeated resolver/backtracking activity.
+        # Network reads have a shorter pip bound; only effective status changes
+        # reset the idle budget, never our heartbeat or arbitrary stderr noise.
+        timeout=_RESOLVE_TOTAL_TIMEOUT_SECONDS,
+        idle_timeout=_RESOLVE_IDLE_TIMEOUT_SECONDS,
+        env={**env, "PYTHONUNBUFFERED": "1", "PIP_NO_INPUT": "1"},
         reporter=reporter,
         heartbeat_code="runtime.resolve_packages",
     )

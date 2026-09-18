@@ -1133,6 +1133,7 @@ class RuntimeMaintenanceReporter:
         self._sequence = 0
         self._snapshot: dict[str, Any] | None = None
         self._message_code: str | None = None
+        self._cancellation_detail: str | None = None
         # requested None = 请求省略（wire 上省略该字段）；() = 显式空集
         # （ensure base-only），两者在 intent 与回显上都不同。
         self._requested_component_ids: tuple[str, ...] | None = None
@@ -1274,7 +1275,9 @@ class RuntimeMaintenanceReporter:
             component_id=component_id,
         )
 
-    def heartbeat(self, *, message_code: str) -> None:
+    def heartbeat(
+        self, *, message_code: str, fallback_message: str | None = None
+    ) -> None:
         if self._snapshot is None:
             return
         self._abort_if_cancel_requested()
@@ -1285,6 +1288,7 @@ class RuntimeMaintenanceReporter:
             progress=self._snapshot.get("progress"),
             message_code=message_code,
             component_id=self._snapshot.get("component_id"),
+            fallback_message=fallback_message,
         )
 
     def child_status_detail(self, *, message_code: str, fallback_message: str) -> None:
@@ -1307,9 +1311,14 @@ class RuntimeMaintenanceReporter:
             fallback_message=fallback_message,
         )
 
-    def check_cancelled(self) -> None:
-        """Observe cancellation without publishing a durable event."""
+    def check_cancelled(self, *, fallback_message: str | None = None) -> None:
+        """Observe cancellation, retaining the latest bounded child diagnostic."""
+        self._cancellation_detail = fallback_message
         self._abort_if_cancel_requested()
+
+    def clear_cancellation_detail(self) -> None:
+        """End the child diagnostic scope without observing a new cancellation."""
+        self._cancellation_detail = None
 
     def succeed(
         self,
@@ -1402,6 +1411,7 @@ class RuntimeMaintenanceReporter:
             progress=self._snapshot.get("progress"),
             message_code=message_code,
             component_id=self._snapshot.get("component_id"),
+            fallback_message=self._cancellation_detail,
         )
 
     def _abort_if_cancel_requested(self) -> None:

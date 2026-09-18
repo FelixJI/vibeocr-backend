@@ -66,7 +66,24 @@ class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
 
 def _get_kernel32():
     """获取 kernel32 句柄（仅 Windows 可调用）。"""
-    return ctypes.windll.kernel32  # type: ignore[attr-defined]
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # HANDLE is pointer-sized; the ctypes default int truncates 64-bit handles.
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
 
 
 class JobObjectGuard:
@@ -78,8 +95,11 @@ class JobObjectGuard:
     仅 Windows 生效；其他平台为 no-op。
     """
 
-    def __init__(self, name: str | None = None) -> None:
+    def __init__(
+        self, name: str | None = None, *, allow_breakaway: bool = True
+    ) -> None:
         self._name = name
+        self._allow_breakaway = allow_breakaway
         self._handle: int | None = None  # Windows: HANDLE；其他平台: None
 
         if not _IS_WINDOWS:
@@ -102,7 +122,8 @@ class JobObjectGuard:
             # 配置 KILL_ON_JOB_CLOSE + BREAKAWAY_OK
             info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
             info.BasicLimitInformation.LimitFlags = (
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                | (JOB_OBJECT_LIMIT_BREAKAWAY_OK if self._allow_breakaway else 0)
             )
             ok = kernel32.SetInformationJobObject(
                 handle,
