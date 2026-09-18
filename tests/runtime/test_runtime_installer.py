@@ -515,8 +515,10 @@ def test_failed_install_leaves_no_partial_or_final(tmp_path: Path) -> None:
     assert installer.maintenance_snapshot()["operation_state"] == "failed"
 
 
+@pytest.mark.parametrize("resolver_timeout", [False, True])
 def test_failed_repair_preserves_previous_runtime_until_verified_commit(
     tmp_path: Path,
+    resolver_timeout: bool,
 ) -> None:
     manifest, component = _release(tmp_path / "release")
     initial = RuntimeInstaller(
@@ -534,6 +536,14 @@ def test_failed_repair_preserves_previous_runtime_until_verified_commit(
     marker_before = (initial.paths.runtime_root / ".installed.json").read_bytes()
 
     def fail(_partial: Path, _manifest, _profile: str) -> Path:
+        if resolver_timeout:
+            _run_install_command(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                timeout=0.3,
+                env=dict(os.environ),
+                reporter=repair._reporter,
+                heartbeat_code="runtime.resolve_packages",
+            )
         raise RuntimeInstallError("repair failed")
 
     repair = RuntimeInstaller(
@@ -549,7 +559,8 @@ def test_failed_repair_preserves_previous_runtime_until_verified_commit(
         operation_id="failed-repair",
     )
 
-    with pytest.raises(RuntimeInstallError, match="repair failed"):
+    reason = "reason=total_timeout" if resolver_timeout else "repair failed"
+    with pytest.raises(RuntimeInstallError, match=reason):
         repair.repair()
 
     assert preserved.read_text(encoding="utf-8") == "previous-runtime"
@@ -559,6 +570,14 @@ def test_failed_repair_preserves_previous_runtime_until_verified_commit(
     assert Path(launch.python_executable).is_file()
     assert not initial.paths.runtime_root.with_name("runtime.installing").exists()
     assert not initial.paths.runtime_root.with_name("runtime.rollback").exists()
+
+    assert repair._reporter.snapshot["operation_state"] == "failed"
+    if resolver_timeout:
+        with pytest.raises(
+            RuntimeInstallFailure, match="operation=failed-repair"
+        ) as replayed:
+            repair._reporter._store.raise_replayed_failure("failed-repair")
+        assert "reason=total_timeout" in str(replayed.value)
 
 
 def test_component_import_probe_reports_integrity_failed_drift(
