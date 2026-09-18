@@ -1316,6 +1316,10 @@ class RuntimeMaintenanceReporter:
         self._cancellation_detail = fallback_message
         self._abort_if_cancel_requested()
 
+    def clear_cancellation_detail(self) -> None:
+        """End the child diagnostic scope without observing a new cancellation."""
+        self._cancellation_detail = None
+
     def succeed(
         self,
         *,

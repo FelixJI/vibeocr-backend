@@ -356,3 +356,29 @@ def test_uncontained_command_is_never_started(
             heartbeat_code="runtime.resolve_packages",
         )
     assert not marker.exists()
+
+
+def test_finished_resolver_diagnostic_does_not_leak_into_download_cancel(
+    tmp_path: Path,
+) -> None:
+    reporter = _reporter(tmp_path / "state")
+    _run_install_command(
+        [sys.executable, "-c", "print('Collecting finished', flush=True)"],
+        timeout=4,
+        env=dict(os.environ),
+        reporter=reporter,
+        heartbeat_code="runtime.resolve_packages",
+    )
+    RuntimeOperationStore(tmp_path / "state").request_cancel("resolve-test")
+    with pytest.raises(RuntimeOperationCancelled):
+        reporter.advance_measured(
+            phase="download_artifacts",
+            message_code="runtime.download_artifacts",
+            current=1,
+            total=10,
+            unit="bytes",
+        )
+    terminal = reporter.observe(after_sequence=0)["events"][-1]
+    assert terminal["snapshot"]["operation_state"] == "cancelled"
+    assert "runtime.resolve_packages" not in terminal.get("fallback_message", "")
+    assert "Collecting finished" not in terminal.get("fallback_message", "")

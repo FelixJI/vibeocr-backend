@@ -292,6 +292,8 @@ def _run_install_command(
             start_new_session=os.name != "nt",
         )
     except OSError:
+        if reporter is not None:
+            reporter.clear_cancellation_detail()
         guard.close()
         raise RuntimeInstallError(diagnostic("spawn_failed")) from None
     readers: list[threading.Thread] = []
@@ -377,6 +379,8 @@ def _run_install_command(
             str(exc) + _child_output_tail("".join(tails[1]), "".join(tails[0]))
         ) from None
     finally:
+        if reporter is not None:
+            reporter.clear_cancellation_detail()
         guard.close()
         if os.name != "nt":
             try:
