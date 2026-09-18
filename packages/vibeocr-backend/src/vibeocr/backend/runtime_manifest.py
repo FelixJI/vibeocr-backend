@@ -180,6 +180,14 @@ def covering_profile_id(
 
 
 @dataclass(frozen=True, slots=True)
+class PaddleEnvironment:
+    """Release-bound dependencies installed in engines/paddle only."""
+
+    lock_path: Path
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeInstallScope:
     scope_id: str
     component_ids: tuple[str, ...]
@@ -187,6 +195,7 @@ class RuntimeInstallScope:
     sha256: str
     runtime_pack: tuple[str, ...]
     runtime_pack_sha256: tuple[str, ...]
+    paddle_environment: PaddleEnvironment | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,7 +362,9 @@ def _validate_protocol_release_manifest(
         raise ManifestError("Protocol wheel is not bound by its release manifest")
 
 
-def validate_requirements_lock(path: Path, *, profile: str) -> None:
+def validate_requirements_lock(
+    path: Path, *, profile: str, paddle_isolated: bool = False
+) -> None:
     """Require an exact artifact and at least one hash for every entry."""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -388,6 +399,10 @@ def validate_requirements_lock(path: Path, *, profile: str) -> None:
             raise ManifestError(f"runtime requirement has no SHA-256: {declaration}")
 
     lowered = "\n".join(lines).lower()
+    if paddle_isolated:
+        declarations = "\n".join(entry[0].lower() for entry in entries)
+        if "paddle" in declarations or "opencv-contrib-python" in declarations:
+            raise ManifestError("isolated host lock contains Paddle dependencies")
     if profile == "win-x64-base":
         # base 闭包必须自带缺省引擎（RapidOCR + 显式 ORT + Windows adapter），
         # 且不得混入 full 闭包的重型组件或第二套 OpenCV。winrt 投影的跨命名
@@ -413,11 +428,25 @@ def validate_requirements_lock(path: Path, *, profile: str) -> None:
         ):
             if forbidden in lowered:
                 raise ManifestError(f"base lock contains {forbidden}")
+    elif profile in ("win-x64-paddle-cpu", "win-x64-paddle-cu126"):
+        declarations = "\n".join(entry[0].lower() for entry in entries)
+        for forbidden in ("opencv-python==", "mineru==", "rapidocr=="):
+            if forbidden in declarations:
+                raise ManifestError(f"Paddle environment contains {forbidden}")
+        if "opencv-contrib-python==" not in declarations:
+            raise ManifestError("Paddle environment is missing opencv-contrib-python")
+        if profile.endswith("-cpu") and "paddlepaddle-gpu" in declarations:
+            raise ManifestError("Paddle CPU environment contains GPU Paddle")
+        if profile.endswith("-cu126") and "paddlepaddle-gpu" not in declarations:
+            raise ManifestError("Paddle CUDA environment is missing GPU Paddle")
     elif profile == "win-x64-cpu":
         if "paddlepaddle-gpu" in lowered or "cu126" in lowered:
             raise ManifestError("CPU lock contains a GPU/cu126 artifact")
     elif profile == "win-x64-cu126":
-        for required in ("paddlepaddle-gpu", "torch", "torchvision", "cu126"):
+        required_packages = ("torch", "torchvision", "cu126")
+        if not paddle_isolated:
+            required_packages += ("paddlepaddle-gpu",)
+        for required in required_packages:
             if required not in lowered:
                 raise ManifestError(f"cu126 lock is missing {required}")
         if re.search(r"(?m)^paddlepaddle==", lowered):
@@ -644,16 +673,37 @@ def load_runtime_manifest(
 
         for component_id in dependencies_by_id:
             visit(component_id)
+        paddle_environment = None
+        paddle_record = record.get("paddle_environment")
+        if paddle_record is not None:
+            if name == "win-x64-base" or not isinstance(paddle_record, dict):
+                raise ManifestError("invalid Paddle environment binding")
+            paddle_lock = manifest_path.parent / _relative_filename(
+                paddle_record.get("lock"), field=f"{name}.paddle_environment.lock"
+            )
+            paddle_sha = _sha256(
+                paddle_record.get("sha256"), field=f"{name}.paddle_environment.sha256"
+            )
+            paddle_environment = PaddleEnvironment(paddle_lock, paddle_sha)
+            if verify_artifacts:
+                if sha256_file(paddle_lock) != paddle_sha:
+                    raise ManifestError("Paddle environment lock SHA-256 mismatch")
+                validate_requirements_lock(
+                    paddle_lock, profile=name.replace("win-x64-", "win-x64-paddle-")
+                )
         if verify_artifacts:
             if sha256_file(lock_path) != lock_sha:
                 raise ManifestError(f"{name} lock SHA-256 mismatch")
-            validate_requirements_lock(lock_path, profile=name)
+            validate_requirements_lock(
+                lock_path, profile=name, paddle_isolated=paddle_environment is not None
+            )
             for pack_name, pack_sha in zip(
                 runtime_pack, runtime_pack_shas, strict=True
             ):
                 if sha256_file(manifest_path.parent / pack_name) != pack_sha:
                     raise ManifestError(f"{name} runtime pack SHA-256 mismatch")
         default_scope = RuntimeInstallScope(
+            paddle_environment=paddle_environment,
             scope_id="default",
             component_ids=tuple(component.component_id for component in components),
             lock_path=lock_path,
@@ -725,7 +775,11 @@ def load_runtime_manifest(
             if verify_artifacts:
                 if sha256_file(scope_lock_path) != scope_lock_sha:
                     raise ManifestError(f"{scope_field} lock SHA-256 mismatch")
-                validate_requirements_lock(scope_lock_path, profile=name)
+                validate_requirements_lock(
+                    scope_lock_path,
+                    profile=name,
+                    paddle_isolated=paddle_environment is not None,
+                )
                 for pack_name, pack_sha in zip(
                     scope_pack, scope_pack_shas, strict=True
                 ):
@@ -736,6 +790,11 @@ def load_runtime_manifest(
             scopes.append(
                 RuntimeInstallScope(
                     scope_id=scope_id,
+                    paddle_environment=(
+                        paddle_environment
+                        if any(x.startswith("paddleocr-") for x in scope_component_ids)
+                        else None
+                    ),
                     component_ids=scope_component_ids,
                     lock_path=scope_lock_path,
                     sha256=scope_lock_sha,

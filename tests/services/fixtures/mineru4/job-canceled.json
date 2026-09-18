@@ -1,0 +1,35 @@
+{
+  "job": {
+    "job_id": "job_05c1b15b77798bfa5b3500c6",
+    "status": "canceled",
+    "tier": "basic",
+    "output_formats": [
+      "markdown",
+      "middle_json",
+      "structured_content",
+      "zip"
+    ],
+    "access_level": "anonymous",
+    "progress": {
+      "completed": 0,
+      "failed": 0,
+      "total": 1
+    },
+    "files": [
+      {
+        "file_id": "file-7a5b5a06693d5619e8a922a9",
+        "name": "sample.pdf",
+        "page_range": "all",
+        "status": "queued",
+        "parse": null,
+        "output_files": null,
+        "error": null
+      }
+    ],
+    "links": {
+      "self": "/v1/parse/jobs/job_05c1b15b77798bfa5b3500c6",
+      "cancel": "/v1/parse/jobs/job_05c1b15b77798bfa5b3500c6"
+    }
+  },
+  "outputs": {}
+}

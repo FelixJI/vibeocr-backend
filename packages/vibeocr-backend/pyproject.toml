@@ -4,7 +4,7 @@ version = "0.13.11"
 description = "UI-free VibeOCR inference Supervisor runtime"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "vibeocr-runtime-contracts>=2.8.0,<3.0.0",
+    "vibeocr-runtime-contracts>=2.8.1,<3.0.0",
     "pillow>=12.3.0",
     "numpy>=2.3.5",
     "httpx>=0.28.1",
@@ -19,7 +19,6 @@ dependencies = [
     "openpyxl>=3.1.5",
     "qrcode[pil]>=8.2",
     "python-barcode>=0.16.1",
-    "opencv-contrib-python>=4.10.0.84",
     "pyzbar>=0.1.9",
     "pynvml>=11.5.0",
     "packaging>=26.0",
@@ -27,17 +26,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cpu = [
-    "paddlepaddle>=3.3.1",
-    "paddleocr[doc-parser]>=3.7.0",
-    "mineru>=3.4.3",
-]
-gpu-cu126 = [
-    "paddlepaddle-gpu>=3.3.1",
-    "torch>=2.6.0",
-    "paddleocr[doc-parser]>=3.7.0",
-    "mineru[core]>=3.4.3",
-]
+# Engine environments are installed separately by the runtime installer.
+cpu = ["mineru==4.0.2", "opencv-python>=4.11"]
+gpu-cu126 = ["mineru[torch]==4.0.2", "opencv-python>=4.11"]
+paddle-cpu = ["paddlepaddle>=3.3.1", "paddleocr[doc-parser]>=3.7.0"]
+paddle-cu126 = ["paddlepaddle-gpu>=3.3.1", "paddleocr[doc-parser]>=3.7.0"]
 
 [project.scripts]
 vibeocr-supervisor = "vibeocr.backend.supervisor.main:main"

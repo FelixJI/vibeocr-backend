@@ -1,0 +1,94 @@
+{
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "header",
+          "bbox": [
+            0.115,
+            0.131,
+            0.364,
+            0.15
+          ],
+          "content": "VibeOCR MinerU 4 page 1"
+        }
+      ]
+    },
+    {
+      "page_idx": 1,
+      "blocks": [
+        {
+          "type": "header",
+          "bbox": [
+            0.116,
+            0.131,
+            0.365,
+            0.15
+          ],
+          "content": "VibeOCR MinerU 4 page 2"
+        }
+      ]
+    },
+    {
+      "page_idx": 2,
+      "blocks": [
+        {
+          "type": "header",
+          "bbox": [
+            0.116,
+            0.131,
+            0.365,
+            0.15
+          ],
+          "content": "VibeOCR MinerU 4 page 3"
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "file_suffix": "pdf",
+    "producer": {
+      "name": "mineru",
+      "version": "4.0.2"
+    },
+    "document": {
+      "title": "untitled",
+      "authors": [
+        "anonymous"
+      ],
+      "subject": "unspecified",
+      "creator_application": "anonymous",
+      "producer_application": "ReportLab PDF Library - (opensource)",
+      "page_count": 3,
+      "page_count_kind": "physical"
+    }
+  },
+  "extensions": {
+    "mineru": {
+      "tier": "basic",
+      "parse_mode": "txt"
+    },
+    "docvortex_layout": {
+      "version": 1,
+      "pages": [
+        {
+          "page_idx": 0,
+          "width_pt": 595.2755737304688,
+          "height_pt": 841.8897705078125
+        },
+        {
+          "page_idx": 1,
+          "width_pt": 595.2755737304688,
+          "height_pt": 841.8897705078125
+        },
+        {
+          "page_idx": 2,
+          "width_pt": 595.2755737304688,
+          "height_pt": 841.8897705078125
+        }
+      ]
+    }
+  },
+  "is_full_document": true
+}

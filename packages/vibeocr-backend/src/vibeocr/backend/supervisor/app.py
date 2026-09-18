@@ -23,6 +23,10 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import TypeAdapter, ValidationError
 from vibeocr.backend.ipc.schemas import ProgressEvent, ProgressPhase
+from vibeocr.backend.services.mineru_config import (
+    MineruConfigError,
+    resolve_mineru_config,
+)
 from vibeocr.runtime_contracts.generated import (
     ALL_CAPABILITIES,
     OPERATION_IDS,
@@ -201,6 +205,10 @@ def _capability_descriptors(
         elif name == RUNTIME_DOWNLOAD_SOURCES_V1:
             # 源目录来自 Backend 声明（release-wide、确定性）。
             descriptor["download_source_catalog"] = download_source_catalog_payload()
+        elif name == "ocr.mineru-config.v1":
+            from vibeocr.backend.services.mineru_readiness import catalog_payload
+
+            descriptor["mineru_config_catalog"] = catalog_payload()
         elif name == RUNTIME_COMPONENT_SELECTION_V1:
             # 可选组件目录由 manifest/profile 派生：feature+accelerator ->
             # component_id；base 必备组件不进入可选目录。
@@ -429,6 +437,14 @@ def create_app(
                     pipeline_id=pipeline.pipeline_id,
                     engine=None,
                 )
+            if pipeline is not None and pipeline.pipeline_id == "MinerU":
+                config = resolve_mineru_config(pipeline)
+                from vibeocr.backend.services.mineru_readiness import require_ready
+
+                require_ready(config.tier)
+                manifest = replace(
+                    manifest, pipeline=replace(pipeline, options={}, mineru=config)
+                )
             attachments: dict[str, tuple[str | None, bytes]] = {}
             for item in manifest.items:
                 if item.source.get("type") != "upload.v1":
@@ -445,6 +461,8 @@ def create_app(
                     await upload.read(),
                 )
             ref = module.submit_request(manifest, attachments)
+        except MineruConfigError as exc:
+            return _error_response(exc.code, instance_id, detail={"reason": exc.reason})
         except RecognitionModeError as exc:
             return _recognition_mode_error_response(exc, instance_id)
         except OcrEngineError as exc:

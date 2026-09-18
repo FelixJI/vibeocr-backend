@@ -52,6 +52,7 @@ DEFAULT_CAPABILITIES = (
     "task.progress.v1",
     "ocr.engine-selection.v1",
     "ocr.recognition-modes.v1",
+    "ocr.mineru-config.v1",
     "runtime.download-sources.v1",
     "runtime.component-selection.v1",
 )
@@ -114,11 +115,15 @@ def _locked_version(path: Path, project: str) -> str | None:
     return artifact.group(1) if artifact is not None else None
 
 
-def _profile_components(path: Path, profile: str) -> list[dict[str, str]]:
+def _profile_components(
+    path: Path, profile: str, paddle_lock: Path | None = None
+) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
     for descriptor in default_profile_components(profile):
         version = _locked_version(
-            path,
+            paddle_lock
+            if paddle_lock and descriptor.component_id.startswith("paddleocr-")
+            else path,
             _component_version_package(profile, descriptor.component_id),
         )
         result.append(
@@ -149,6 +154,7 @@ def build_runtime_manifest(
     output_dir: Path,
     capabilities: tuple[str, ...] = DEFAULT_CAPABILITIES,
     runtime_packs: dict[str, list[Path]] | None = None,
+    paddle_locks: dict[str, Path] | None = None,
 ) -> Path:
     if not _STABLE_SEMVER.fullmatch(backend_version):
         raise ValueError("backend_version must be stable SemVer")
@@ -176,10 +182,23 @@ def build_runtime_manifest(
         "win-x64-cpu": cpu_lock.resolve(strict=True),
         "win-x64-cu126": cu126_lock.resolve(strict=True),
     }
+    paddle_locks = paddle_locks or {}
+    if paddle_locks and set(paddle_locks) != {"win-x64-cpu", "win-x64-cu126"}:
+        raise ValueError("Paddle locks must cover CPU and cu126")
     for profile in PROFILE_NAMES:
-        validate_requirements_lock(profile_sources[profile], profile=profile)
+        validate_requirements_lock(
+            profile_sources[profile],
+            profile=profile,
+            paddle_isolated=profile in paddle_locks,
+        )
+    for profile, lock in paddle_locks.items():
+        validate_requirements_lock(
+            lock, profile=profile.replace("win-x64-", "win-x64-paddle-")
+        )
     cu126_gpu_lock = cu126_gpu_lock.resolve(strict=True)
-    validate_requirements_lock(cu126_gpu_lock, profile="win-x64-cu126")
+    validate_requirements_lock(
+        cu126_gpu_lock, profile="win-x64-cu126", paddle_isolated=bool(paddle_locks)
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     copied_backend = _copy_exact(backend_wheel, output_dir)
@@ -205,6 +224,9 @@ def build_runtime_manifest(
         for profile in PROFILE_NAMES
     }
     copied_cu126_gpu_lock = _copy_exact(cu126_gpu_lock, output_dir)
+    copied_paddle = {
+        profile: _copy_exact(lock, output_dir) for profile, lock in paddle_locks.items()
+    }
     base_component_ids = [
         component.component_id
         for component in default_profile_components("win-x64-base")
@@ -251,7 +273,19 @@ def build_runtime_manifest(
                     else {"runtime_pack": None}
                 ),
                 "sha256": sha256_file(copied_profiles[profile]),
-                "components": _profile_components(copied_profiles[profile], profile),
+                "components": _profile_components(
+                    copied_profiles[profile], profile, copied_paddle.get(profile)
+                ),
+                **(
+                    {
+                        "paddle_environment": {
+                            "lock": copied_paddle[profile].name,
+                            "sha256": sha256_file(copied_paddle[profile]),
+                        }
+                    }
+                    if profile in copied_paddle
+                    else {}
+                ),
                 **(
                     {
                         "install_scopes": [
@@ -290,6 +324,7 @@ def build_runtime_manifest(
         *(pack for packs in copied_packs.values() for pack in packs),
         *(copied_profiles[profile] for profile in PROFILE_NAMES),
         copied_cu126_gpu_lock,
+        *copied_paddle.values(),
         manifest_path,
     ]
     checksum_lines = [
@@ -313,6 +348,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cpu-lock", type=Path, required=True)
     parser.add_argument("--cu126-lock", type=Path, required=True)
     parser.add_argument("--cu126-gpu-lock", type=Path, required=True)
+    parser.add_argument("--paddle-cpu-lock", type=Path, required=True)
+    parser.add_argument("--paddle-cu126-lock", type=Path, required=True)
     parser.add_argument("--python-archive", type=Path, required=True)
     parser.add_argument("--python-version", default="3.13.15")
     parser.add_argument(
@@ -352,6 +389,10 @@ def main(argv: list[str] | None = None) -> int:
         cpu_lock=args.cpu_lock,
         cu126_lock=args.cu126_lock,
         cu126_gpu_lock=args.cu126_gpu_lock,
+        paddle_locks={
+            "win-x64-cpu": args.paddle_cpu_lock,
+            "win-x64-cu126": args.paddle_cu126_lock,
+        },
         python_archive=args.python_archive,
         python_version=args.python_version,
         python_source_url=args.python_source_url,

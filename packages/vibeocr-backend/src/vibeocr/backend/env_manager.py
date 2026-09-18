@@ -1077,7 +1077,7 @@ def _probe_module(
     """双层检测一个 OCR 模块：发行版是否存在 + 是否可导入
 
     解决"装了发行版但 import 失败"被误判为"未安装"的问题（典型场景：
-    ``mineru[core]`` 的间接依赖 torch/paddle/opencv/rapid-table 没装完时，
+    MinerU 的运行依赖未安装完整时，
     ``import mineru`` 抛 ModuleNotFoundError，旧逻辑静默判 False，掩盖了
     "包已装但依赖损坏"的真实状态）。
 

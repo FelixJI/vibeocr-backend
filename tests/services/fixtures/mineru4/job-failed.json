@@ -1,0 +1,40 @@
+{
+  "job": {
+    "job_id": "job_d3174cf8ad0ea5346afd6c53",
+    "status": "failed",
+    "tier": "flash",
+    "output_formats": [
+      "markdown",
+      "middle_json",
+      "structured_content",
+      "zip"
+    ],
+    "access_level": "anonymous",
+    "progress": {
+      "completed": 0,
+      "failed": 1,
+      "total": 1
+    },
+    "files": [
+      {
+        "file_id": "file-39735fff559d042ed51ed6b4",
+        "name": "broken.pdf",
+        "page_range": "all",
+        "status": "failed",
+        "parse": null,
+        "output_files": null,
+        "error": {
+          "type": "engine_error",
+          "code": "parse_failed",
+          "message": "Failed to load document (PDFium: Data format error).",
+          "param": null
+        }
+      }
+    ],
+    "links": {
+      "self": "/v1/parse/jobs/job_d3174cf8ad0ea5346afd6c53",
+      "cancel": "/v1/parse/jobs/job_d3174cf8ad0ea5346afd6c53"
+    }
+  },
+  "outputs": {}
+}

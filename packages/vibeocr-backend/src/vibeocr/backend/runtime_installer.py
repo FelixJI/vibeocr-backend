@@ -25,7 +25,7 @@ import urllib.request
 import zipfile
 from collections import deque
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, TextIO
@@ -739,6 +739,8 @@ def _default_install_runner(
     install_scope: RuntimeInstallScope,
     download_sources: tuple[BoundDownloadSource, ...],
     reporter: RuntimeMaintenanceReporter | None = None,
+    *,
+    cache_root: Path | None = None,
 ) -> Path:
     """Extract bound Python and install only hash-locked dependencies.
 
@@ -774,7 +776,7 @@ def _default_install_runner(
     for name in tuple(portable_env):
         if name.upper().startswith(("PIP_", "UV_")):
             portable_env.pop(name)
-    cache = partial_root.parent.parent / "state" / "installer-cache"
+    cache = cache_root or partial_root.parent.parent / "state" / "installer-cache"
     portable_env.update(
         {
             "PIP_CACHE_DIR": str(cache / "pip"),
@@ -925,6 +927,37 @@ def _default_install_runner(
         reporter=reporter,
         heartbeat_code="runtime.verify_runtime",
     )
+    _run_install_command(
+        [str(python), "-m", "pip", "check"],
+        timeout=60,
+        env=portable_env,
+        reporter=reporter,
+        heartbeat_code="runtime.verify_runtime",
+    )
+    paddle_environment = install_scope.paddle_environment
+    if paddle_environment is not None:
+        # Both interpreters stay inside the unactivated candidate. A failure
+        # leaves the old runtime active; existing activation commits them together.
+        paddle_scope = replace(
+            install_scope,
+            scope_id="paddle-environment",
+            component_ids=tuple(
+                x for x in install_scope.component_ids if x.startswith("paddleocr-")
+            ),
+            lock_path=paddle_environment.lock_path,
+            sha256=paddle_environment.sha256,
+            runtime_pack=(),
+            runtime_pack_sha256=(),
+            paddle_environment=None,
+        )
+        _default_install_runner(
+            partial_root / "engines" / "paddle",
+            manifest,
+            paddle_scope,
+            download_sources,
+            reporter,
+            cache_root=cache,
+        )
     return python
 
 
@@ -1459,7 +1492,7 @@ class RuntimeInstaller:
             "HF_HOME": str(state / "cache" / "huggingface"),
             "MODELSCOPE_CACHE": str(state / "cache" / "modelscope"),
             "PADDLE_PDX_CACHE_HOME": str(state / "cache" / "paddlex"),
-            "MINERU_TOOLS_CONFIG_JSON": str(state / "config" / "mineru.json"),
+            "MINERU_HOME": str(state / "mineru4"),
             "TEMP": str(state / "temp"),
             "TMP": str(state / "temp"),
             "PIP_CONFIG_FILE": os.devnull,
@@ -1718,7 +1751,7 @@ class RuntimeInstaller:
             path = Path(directory)
             if path.is_absolute() and directory.startswith(str(self.paths.store_root)):
                 path.mkdir(parents=True, exist_ok=True)
-        Path(environment["MINERU_TOOLS_CONFIG_JSON"]).parent.mkdir(
+        Path(environment["MINERU_HOME"]).mkdir(
             parents=True,
             exist_ok=True,
         )
@@ -1962,6 +1995,12 @@ def _success_envelope(
         for name in result.available_capabilities
         if name in definitions
     ]
+    from .services.mineru_readiness import catalog_payload
+
+    for descriptor in capability_descriptors:
+        if descriptor["name"] == "ocr.mineru-config.v1":
+            # An installer cannot attest that the Supervisor executed a tier.
+            descriptor["mineru_config_catalog"] = catalog_payload(observe_runtime=False)
     return {
         "protocol_version": PROTOCOL_VERSION,
         "ok": True,

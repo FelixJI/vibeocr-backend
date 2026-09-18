@@ -16,17 +16,13 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
 from vibeocr.backend.core.constants import Constants
-from vibeocr.backend.core.pipelines.pipeline_mineru import (
-    MINERU_BACKEND_CHAIN,
-    MINERU_BACKEND_DEFAULT,
-    MINERU_EFFORT_DEFAULT,
-)
 from vibeocr.backend.core.singleton_meta import SingletonMeta
 from vibeocr.backend.models.ocr_result import (
     DISCARDED_BLOCK_TYPES,
@@ -43,11 +39,16 @@ from vibeocr.backend.tables.projections import table_model_to_plain_text
 from vibeocr.backend.tables.reducer import rebuild_result_projections
 from vibeocr.backend.utils.job_object import JobObjectGuard
 from vibeocr.backend.utils.mime_types import mime_to_extension
+from vibeocr.runtime_contracts import MineruConfig, MineruOcrMode, MineruTier
 from vibeocr.runtime_contracts.contracts.tables import TableProvenanceV1
 from vibeocr.runtime_contracts.utils.http_log import (
     guess_response_size,
     log_http_response,
 )
+
+from .mineru_api import MineruApiClient, MineruApiError, MineruDocument
+from .mineru_config import migrate_legacy_options
+from .mineru_result import project_document
 
 if TYPE_CHECKING:
     from vibeocr.backend.models.ocr_options import OCROptions
@@ -66,6 +67,8 @@ class MinerUService(metaclass=SingletonMeta):
     _api_url: str = ""
     _lock = threading.RLock()
     _initialized = False
+    _language = "ch"
+    _server_tier = "basic"
     _job_guard: JobObjectGuard | None = None
 
     def __init__(self):
@@ -107,7 +110,7 @@ class MinerUService(metaclass=SingletonMeta):
         """启动守护线程读取 mineru-api 子进程的 stderr 并转发到项目日志系统。
 
         注意：mineru-api 是第三方 FastAPI 服务，其日志格式（uvicorn 风格，
-        如 ``INFO:     127.0.0.1:... "POST /file_parse HTTP/1.1" 200``）不符合
+        如 ``INFO:     127.0.0.1:... "POST /v1/parse/jobs HTTP/1.1" 200``）不符合
         SubprocessLogForwarder 的结构化正则（YYYY-MM-DD HH:MM:SS [LEVEL] name: msg），
         因此这里不复用 forwarder 的折叠逻辑（会把 uvicorn 的有用 INFO 全折叠掉），
         而是保留原有的"按级别词匹配 + 原文转发"。仅 logger 名统一到
@@ -137,10 +140,10 @@ class MinerUService(metaclass=SingletonMeta):
 
     def _check_api_running(self, url: str) -> bool:
         """检查 mineru-api 是否运行"""
-        request_url = f"{url}/health"
+        request_url = f"{url}/v1/health"
         started = time.perf_counter()
         try:
-            resp = httpx.get(request_url, timeout=3)
+            resp = httpx.get(request_url, timeout=3, trust_env=False)
             log_http_response(
                 logger=_logger,
                 method="GET",
@@ -150,7 +153,10 @@ class MinerUService(metaclass=SingletonMeta):
                 elapsed_ms=(time.perf_counter() - started) * 1000,
                 response_bytes=guess_response_size(dict(resp.headers), resp.content),
             )
-            return resp.status_code == 200
+            return (
+                resp.status_code == 200
+                and str(resp.json().get("version", "")).split(".")[0] == "4"
+            )
         except Exception as exc:
             _logger.warning(
                 "[MinerU] GET %s failed after %.1f ms: %s",
@@ -186,9 +192,7 @@ class MinerUService(metaclass=SingletonMeta):
         """启动 mineru-api 进程"""
         python_exe = self._resolve_python_executable()
         if python_exe is None:
-            raise RuntimeError(
-                "找不到 Python 解释器。请确保已安装 Python 和 mineru[core]"
-            )
+            raise RuntimeError("找不到 Python 解释器。请确保已安装 Python 和 MinerU 4")
 
         port = self._find_free_port()
         url = f"http://127.0.0.1:{port}"
@@ -198,20 +202,42 @@ class MinerUService(metaclass=SingletonMeta):
         cmd = [
             str(python_exe),
             "-m",
-            "mineru.cli.fast_api",
+            "mineru.parser.api_server",
             "--host",
             "127.0.0.1",
             "--port",
             str(port),
+            "--tier",
+            self.__class__._server_tier,
+            "--language",
+            self.__class__._language,
         ]
 
         env = os.environ.copy()
+        # A separate home leaves MinerU 3 config and model paths untouched.
+        from vibeocr.backend.env_manager import get_project_root
+
+        home = Path(
+            env.get("MINERU_HOME") or get_project_root() / "data" / "mineru4"
+        ).resolve()
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = Path(env.get("MINERU_CONFIG") or home / "config.yaml").resolve()
+        if "MINERU_CONFIG" in env and not config_path.is_file():
+            raise ValueError("MINERU_CONFIG must reference an existing config file")
+        if not config_path.exists():
+            config_path.write_text(
+                "model:\n  small_backend: onnx\n  vlm:\n    engine: llama-cpp\n",
+                encoding="utf-8",
+            )
+        env["MINERU_HOME"] = str(home)
+        env["MINERU_CONFIG"] = str(config_path)
 
         self.__class__._api_process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             env=env,
+            cwd=home,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
 
@@ -258,233 +284,147 @@ class MinerUService(metaclass=SingletonMeta):
                     self.__class__._api_process.kill()
                 self.__class__._api_process = None
             # 不预探测/预下载模型：mineru-api 不依赖模型即可启动，模型在首次
-            # /file_parse 解析时由 mineru 自己按需下载（auto_download_and_get_
+            # job 解析时由 mineru 自己按需下载（auto_download_and_get_
             # model_root_path）。旧的预探测用 mineru.cli.models_download 当探测
             # 命令、30s 超时，反而会杀掉 mineru 自己正在进行的下载，导致"永远
             # 下不完"。模型下载是 mineru 内部事务，我们只管发请求 + 给足超时。
             self._start_api()
 
+    @staticmethod
+    def _config(options: OCROptions | MineruConfig | None) -> MineruConfig:
+        if isinstance(options, MineruConfig):
+            return options
+        values = (
+            {}
+            if options is None
+            else {
+                name: getattr(options, name)
+                for name in (
+                    "backend",
+                    "effort",
+                    "parse_method",
+                    "enable_formula",
+                    "enable_table",
+                    "lang_list",
+                    "start_page_id",
+                    "end_page_id",
+                )
+            }
+        )
+        return migrate_legacy_options(values)
+
     def _call_api(
         self,
         data: bytes,
         filename: str,
-        options: OCROptions | None = None,
+        options: OCROptions | MineruConfig | None = None,
         *,
         files: list[tuple[str, bytes]] | None = None,
-    ) -> dict[str, Any]:
-        """调用 mineru-api 的 /file_parse 端点
-
-        Args:
-            data: 单个文件数据（bytes）。当 ``files`` 提供时本参数被忽略，
-                仅为保持向后兼容签名。
-            filename: 单个文件的上传文件名（含扩展名）。当 ``files`` 提供
-                时本参数被忽略。
-            options: OCR 选项（含 backend 和 parse_method）
-            files: 可选的多文件上传列表 ``[(name, data), ...]``。提供时
-                以单次 HTTP 请求上传全部文件（同字段名 ``files`` 重复），
-                mineru-api 返回的 ``results`` 以文件 stem 为键。
-
-        Returns:
-            API 响应字典（多文件时 ``results`` 含多个 stem）
-
-        Note:
-            真实 mineru-api 是否接受单请求多文件在当前代码库尚未验证过。
-            若本地实测不支持，可在 :meth:`file_parse` 中降级为逐文件循环
-            （与 ``MinerUBatchService.batch_commit`` 的历史生产路径一致）。
-        """
-        self._ensure_api_running()
-
-        backend = options.backend if options else MINERU_BACKEND_DEFAULT
-        parse_method = options.parse_method if options else "auto"
-        effort = options.effort if options else MINERU_EFFORT_DEFAULT
-        lang_list_str = (
-            ",".join(options.lang_list) if options and options.lang_list else ""
-        )
-
-        if files is not None:
-            # httpx 多文件上传：同一表单字段名重复出现即可。
-            upload = [("files", (name, payload)) for name, payload in files]
-            request_bytes = sum(len(payload) for _, payload in files)
-        else:
-            upload = {"files": (filename, data)}
-            request_bytes = len(data)
-        request_url = f"{self.__class__._api_url}/file_parse"
-        params = {
-            "return_md": "true",
-            "return_content_list": "true",
-            "return_images": "true",
-            "formula_enable": str(options.enable_formula if options else True).lower(),
-            "table_enable": str(options.enable_table if options else True).lower(),
-            "backend": backend,
-            "effort": effort,
-            "parse_method": parse_method,
-            "start_page_id": str(options.start_page_id if options else 0),
-            "end_page_id": str(
-                options.end_page_id
-                if options and options.end_page_id is not None
-                else "99999"
-            ),
-        }
-        # 仅当 lang_list 非空时才发送该字段。发 lang_list="" 会被 mineru-api 的
-        # FastAPI 表单解析成 [""]（含一个空字符串），过不了 validate_public_ocr_lang，
-        # 报 "Language  not supported"（报错里两个空格 = 空字符串）。留空则 mineru-api
-        # 用默认 ["ch"]。
-        if lang_list_str:
-            params["lang_list"] = lang_list_str
-
-        # 回退链: hybrid-engine → vlm-engine → pipeline
-        fallback_chain = list(MINERU_BACKEND_CHAIN)
-        # 从当前 backend 开始，构建回退链
-        if backend in fallback_chain:
-            start_idx = fallback_chain.index(backend)
-            backends_to_try = fallback_chain[start_idx:]
-        else:
-            backends_to_try = [backend]
-
-        last_error: Exception | None = None
-        for current_backend in backends_to_try:
-            request_params = {**params, "backend": current_backend}
-            _logger.debug(f"[MinerU] 使用后端: {current_backend}")
-            started = time.perf_counter()
-            try:
-                resp = httpx.post(
-                    request_url,
-                    files=upload,
-                    data=request_params,
-                    timeout=httpx.Timeout(
-                        timeout=Constants.Timeout.MINERU_HTTP_TOTAL,
-                        connect=Constants.Timeout.MINERU_HTTP_CONNECT,
-                    ),
-                )
-                log_http_response(
-                    logger=_logger,
-                    method="POST",
-                    url=request_url,
-                    status_code=resp.status_code,
-                    reason=resp.reason_phrase,
-                    elapsed_ms=(time.perf_counter() - started) * 1000,
-                    request_bytes=request_bytes,
-                    response_bytes=guess_response_size(
-                        dict(resp.headers),
-                        resp.content,
-                    ),
-                )
-            except httpx.TimeoutException as e:
-                last_error = e
-                _logger.warning(f"[MinerU] 后端 {current_backend} 超时，尝试回退...")
-                continue
-            except httpx.ConnectError as e:
-                last_error = e
-                _logger.warning(
-                    f"[MinerU] 后端 {current_backend} 连接失败，尝试回退..."
-                )
-                continue
-
-            if resp.status_code == 200:
-                result = resp.json()
-                status = result.get("status")
-                if status and status != "completed":
-                    raise RuntimeError(f"mineru-api 任务状态异常: {status}")
-                return result
-
-            # 解析错误信息
-            try:
-                body = resp.json()
-                detail = body.get("message") or body.get("error") or resp.text[:200]
-            except Exception:
-                detail = resp.text[:200]
-
-            last_error = RuntimeError(f"mineru-api 错误 ({resp.status_code}): {detail}")
-            _logger.warning(
-                f"[MinerU] 后端 {current_backend} 失败: {detail}，尝试回退..."
+        cancelled: Callable[[], bool] = lambda: False,
+    ) -> dict[str, MineruDocument | MineruApiError]:
+        config = self._config(options)
+        # Language is service-wide. Serialize jobs through shutdown/start and
+        # result download; never mutate a live service used by another job.
+        with self._lock:
+            tier = (
+                "standard"
+                if config.tier in (MineruTier.STANDARD, MineruTier.ADVANCED)
+                else "basic"
+            )
+            if (
+                self.__class__._language != config.language
+                or self.__class__._server_tier != tier
+            ):
+                self.shutdown()
+                self.__class__._language = config.language
+                self.__class__._server_tier = tier
+            self._ensure_api_running()
+            return MineruApiClient(
+                self.__class__._api_url, timeout=Constants.Timeout.MINERU_HTTP_TOTAL
+            ).parse(
+                files if files is not None else [(filename, data)],
+                config,
+                cancelled=cancelled,
             )
 
-        raise last_error or RuntimeError("mineru-api 请求失败")
+    def prepare(self) -> None:
+        """Explicit preload verifies actual parsing instead of claiming health is ready."""
+        import fitz
+
+        from .mineru_readiness import mark_executed, mark_failed
+
+        with fitz.open() as pdf:
+            page = pdf.new_page()
+            page.insert_textbox(
+                fitz.Rect(72, 150, 520, 500),
+                "VibeOCR readiness document. Document parsing preserves readable text.\n"
+                "This generated sample verifies the requested parsing tier.",
+                fontsize=14,
+            )
+            data = pdf.tobytes()
+        for tier in MineruTier:
+            try:
+                document = self._call_api(
+                    data,
+                    "readiness.pdf",
+                    MineruConfig(
+                        tier=tier,
+                        ocr_mode=MineruOcrMode.TXT
+                        if tier == MineruTier.FLASH
+                        else MineruOcrMode.OCR,
+                    ),
+                )["readiness.pdf"]
+                if isinstance(document, MineruApiError):
+                    raise document
+                result = project_document(document)
+                if not result.raw_text.strip():
+                    raise MineruApiError(
+                        f"MinerU {tier.value} readiness produced no text"
+                    )
+            except Exception:
+                mark_failed(tier)
+                raise
+            mark_executed(tier)
 
     def parse(
         self,
         data: bytes,
         mime_type: str,
-        options: OCROptions | None = None,
+        options: OCROptions | MineruConfig | None = None,
     ) -> OCRResult:
-        """解析文档
-
-        Args:
-            data: 文件数据（bytes）
-            mime_type: MIME 类型
-            options: OCR 选项
-
-        Returns:
-            OCRResult 对象
-        """
-        ext = self._get_extension(mime_type)
-        filename = f"input{ext}"
-
-        api_result = self._call_api(data, filename, options)
-        return self._build_ocr_result(api_result, filename, data=data)
+        filename = "input" + self._get_extension(mime_type)
+        document = self._call_api(data, filename, options)[filename]
+        if isinstance(document, MineruApiError):
+            raise document
+        return project_document(document)
 
     def file_parse(
         self,
         files: list[tuple[str, bytes]],
         *,
-        options: OCROptions | None = None,
+        options: OCROptions | MineruConfig | None = None,
         backend: str | None = None,
+        cancelled: Callable[[], bool] = lambda: False,
     ) -> dict[str, dict[str, Any]]:
-        """单次多文件解析，返回按上传文件名(stem)索引的 payload 字典。
-
-        供 supervisor 的 :class:`MinerUProcessAdapter.recognize_many` 调用：
-        一次 ``/file_parse`` 请求上传全部文件，再把 ``api_result["results"]``
-        （以文件 stem 为键）逐个构建为 :class:`OCRResult` 并序列化为 JSON-native
-        payload。键名 = 调用方传入的文件名 stem，调用方据此还原输入顺序。
-
-        Args:
-            files: ``[(filename, data), ...]``，文件名需全局唯一（adapter 已用
-                ``unique_stem`` 保证）。
-            options: OCR 选项。
-            backend: 可选 backend 覆盖（透传到 ``_call_api`` 的 options.backend）。
-
-        Returns:
-            ``{filename_stem: payload_dict}``。缺失 stem 不会出现在结果中，
-            调用方按位置把缺失项标记为空。
-        """
         if not files:
             return {}
-        # 把 backend 透传进 options（_call_api 从 options.backend 读取）。
-        effective_options = options
-        if backend is not None:
-            if effective_options is None:
-                from vibeocr.backend.models.ocr_options import OCROptions as _Opt
-
-                effective_options = _Opt()
-            try:
-                effective_options.backend = backend
-            except Exception:  # pragma: no cover - defensive
-                pass
-
-        api_result = self._call_api(
-            b"",  # data/filename 在 files 分支被忽略
-            "multi.bin",
-            effective_options,
-            files=files,
+        if backend is not None and backend != "hybrid-engine":
+            # Old callers must explicitly reselect an equivalent new tier.
+            migrate_legacy_options({"backend": backend})
+        documents = self._call_api(
+            b"", "multi.bin", options, files=files, cancelled=cancelled
         )
-        results_map = api_result.get("results", {}) or {}
-        out: dict[str, dict[str, Any]] = {}
-        for filename, _data in files:
-            stem = Path(filename).stem
-            file_result = results_map.get(stem)
-            if file_result is None:
-                # mineru-api 可能用完整文件名而非 stem 作为键 —— 兼容两种形态。
-                file_result = results_map.get(filename)
-            if file_result is None:
-                continue
-            # 复用 _build_ocr_result：它按 stem 从 api_result["results"][stem] 取值，
-            # 所以这里用一个只含单 stem 的合成 api_result。
-            synthetic = {"results": {stem: file_result}}
-            ocr_result = self._build_ocr_result(synthetic, filename, data=None)
-            from vibeocr.backend.models import ocr_result_to_payload
+        from vibeocr.backend.models import ocr_result_to_payload
 
-            out[stem] = ocr_result_to_payload(ocr_result)
-        return out
+        result = {}
+        for filename, document in documents.items():
+            if isinstance(document, MineruApiError):
+                result[Path(filename).stem] = {"mineru_error": str(document)}
+                continue
+            result[Path(filename).stem] = ocr_result_to_payload(
+                project_document(document)
+            )
+        return result
 
     def _get_extension(self, mime_type: str) -> str:
         return mime_to_extension(mime_type) or ".pdf"

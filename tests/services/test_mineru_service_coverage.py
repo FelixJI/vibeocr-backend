@@ -147,6 +147,7 @@ class TestCheckApiRunning:
 
         resp = MagicMock()
         resp.status_code = 200
+        resp.json.return_value = {"version": "4.0.2"}
         resp.reason_phrase = "OK"
         resp.headers = {}
         resp.content = b""
@@ -352,179 +353,11 @@ class TestEnsureApiRunning:
         start_mock.assert_not_called()
 
 
-class TestCallApiErrors:
-    def test_multi_file_upload(self, monkeypatch):
-        """files 参数 → 多文件上传分支（lines 307-308）。"""
-        s = _make_service()
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json.return_value = {"results": {}}
-
-        import vibeocr.backend.services.mineru_service as mod
-
-        monkeypatch.setattr(mod.httpx, "post", lambda *a, **k: resp)
-        with patch.object(s, "_ensure_api_running"):
-            s._call_api(
-                b"", "multi.bin", files=[("a.pdf", b"data1"), ("b.pdf", b"data2")]
-            )
-
-    def test_backend_not_in_chain(self, monkeypatch):
-        """backend 不在 MINERU_BACKEND_CHAIN → backends_to_try=[backend]（line 343）。"""
-        s = _make_service()
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json.return_value = {"results": {}}
-
-        import vibeocr.backend.services.mineru_service as mod
-
-        monkeypatch.setattr(mod.httpx, "post", lambda *a, **k: resp)
-        from vibeocr.backend.models.ocr_options import OCROptions
-
-        opts = OCROptions()
-        opts.backend = "custom-backend"
-        with patch.object(s, "_ensure_api_running"):
-            s._call_api(b"data", "input.pdf", opts)
-
-    def test_timeout_fallback(self, monkeypatch):
-        """httpx.TimeoutException → 记 warning + continue（lines 373-376）。"""
-        import httpx
-
-        s = _make_service()
-
-        call = {"n": 0}
-
-        def _post(*a, **k):
-            call["n"] += 1
-            if call["n"] == 1:
-                raise httpx.TimeoutException("timeout")
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.json.return_value = {"results": {}}
-            return resp
-
-        import vibeocr.backend.services.mineru_service as mod
-
-        monkeypatch.setattr(mod.httpx, "post", _post)
-        with patch.object(s, "_ensure_api_running"):
-            s._call_api(b"data", "input.pdf")
-
-    def test_connect_error_fallback(self, monkeypatch):
-        """httpx.ConnectError → 记 warning + continue（lines 377-382）。"""
-        import httpx
-
-        s = _make_service()
-
-        call = {"n": 0}
-
-        def _post(*a, **k):
-            call["n"] += 1
-            if call["n"] == 1:
-                raise httpx.ConnectError("conn")
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.json.return_value = {"results": {}}
-            return resp
-
-        import vibeocr.backend.services.mineru_service as mod
-
-        monkeypatch.setattr(mod.httpx, "post", _post)
-        with patch.object(s, "_ensure_api_running"):
-            s._call_api(b"data", "input.pdf")
-
-    def test_error_response_json_parse(self, monkeypatch):
-        """错误响应 body 非合法 JSON → 用 text 回退（lines 395-396）。"""
-        s = _make_service()
-        resp = MagicMock()
-        resp.status_code = 500
-        resp.json.side_effect = ValueError("not json")
-        resp.text = "internal error text"
-
-        import vibeocr.backend.services.mineru_service as mod
-
-        monkeypatch.setattr(mod.httpx, "post", lambda *a, **k: resp)
-        with patch.object(s, "_ensure_api_running"):
-            with pytest.raises(RuntimeError, match="500"):
-                s._call_api(b"data", "input.pdf")
-
-    def test_all_backends_fail_raises_last_error(self, monkeypatch):
-        """所有 backend 都失败 → raise last_error（line 403）。"""
-        s = _make_service()
-        resp = MagicMock()
-        resp.status_code = 500
-        resp.json.return_value = {"message": "fail"}
-        resp.text = '{"message": "fail"}'
-
-        import vibeocr.backend.services.mineru_service as mod
-
-        monkeypatch.setattr(mod.httpx, "post", lambda *a, **k: resp)
-        with patch.object(s, "_ensure_api_running"):
-            with pytest.raises(RuntimeError, match="mineru-api 错误"):
-                s._call_api(b"data", "input.pdf")
-
-
 class TestFileParse:
     def test_empty_files_returns_empty(self):
         """空 files → 返回 {}（line 451-452）。"""
         s = _make_service()
         assert s.file_parse([]) == {}
-
-    def test_file_parse_multi_file(self, monkeypatch):
-        """多文件 file_parse 返回按 stem 索引的字典（lines 453-488）。"""
-        s = _make_service()
-        api_result = {
-            "results": {
-                "a": {"md_content": "# A", "content_list": json.dumps([])},
-                "b": {"md_content": "# B", "content_list": json.dumps([])},
-            }
-        }
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json.return_value = api_result
-
-        import vibeocr.backend.services.mineru_service as mod
-
-        monkeypatch.setattr(mod.httpx, "post", lambda *a, **k: resp)
-        with patch.object(s, "_ensure_api_running"):
-            out = s.file_parse([("a.pdf", b"data1"), ("b.pdf", b"data2")])
-        assert "a" in out
-        assert "b" in out
-
-    def test_file_parse_missing_stem_skipped(self, monkeypatch):
-        """results_map 缺失某 stem → 该文件不在结果中（lines 478-480）。"""
-        s = _make_service()
-        api_result = {
-            "results": {
-                "a": {"md_content": "# A", "content_list": json.dumps([])},
-            }
-        }
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json.return_value = api_result
-
-        import vibeocr.backend.services.mineru_service as mod
-
-        monkeypatch.setattr(mod.httpx, "post", lambda *a, **k: resp)
-        with patch.object(s, "_ensure_api_running"):
-            out = s.file_parse([("a.pdf", b"data1"), ("missing.pdf", b"data2")])
-        assert "a" in out
-        assert "missing" not in out
-
-    def test_file_parse_with_backend_override(self, monkeypatch):
-        """backend 参数透传到 options（lines 454-463）。"""
-        s = _make_service()
-        api_result = {
-            "results": {"x": {"md_content": "# X", "content_list": json.dumps([])}}
-        }
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json.return_value = api_result
-
-        import vibeocr.backend.services.mineru_service as mod
-
-        monkeypatch.setattr(mod.httpx, "post", lambda *a, **k: resp)
-        with patch.object(s, "_ensure_api_running"):
-            out = s.file_parse([("x.pdf", b"data")], backend="pipeline")
-        assert "x" in out
 
 
 class TestBuildOcrResultEdges:
@@ -674,27 +507,6 @@ class TestRemainingBranches:
         ):
             s._ensure_api_running()
         start_mock.assert_not_called()
-
-    def test_file_parse_backend_with_existing_options(self, monkeypatch):
-        """file_parse 传 backend 且 options 非 None → 设 backend（branch 456->460）。"""
-        s = _make_service()
-        api_result = {
-            "results": {"x": {"md_content": "# X", "content_list": json.dumps([])}}
-        }
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json.return_value = api_result
-
-        import vibeocr.backend.services.mineru_service as mod
-
-        monkeypatch.setattr(mod.httpx, "post", lambda *a, **k: resp)
-        from vibeocr.backend.models.ocr_options import OCROptions
-
-        opts = OCROptions()
-        with patch.object(s, "_ensure_api_running"):
-            out = s.file_parse([("x.pdf", b"data")], options=opts, backend="pipeline")
-        assert "x" in out
-        assert opts.backend == "pipeline"
 
     def test_build_ocr_result_raw_block_not_dict(self, monkeypatch):
         """normalized block 的 raw 非 dict → continue（line 630）。
