@@ -349,7 +349,7 @@ def test_confirmed_native_cancel_deletes_owned_inputs(monkeypatch):
 
 
 def test_native_code_body_is_not_rendered_markdown():
-    # Validated docvortex.middle/2.0 and rendered by locked docvortex 0.4.12.
+    # Validated docvortex.middle/2.0 and rendered by locked docvortex 0.4.14.
     middle = json.loads((FIXTURES / "code-middle.json").read_text(encoding="utf-8"))
     structured = json.loads(
         (FIXTURES / "code-structured.json").read_text(encoding="utf-8")
@@ -360,3 +360,24 @@ def test_native_code_body_is_not_rendered_markdown():
     assert result.content_list[0]["code_body"] == "print(1)"
     assert result.markdown_text == "```\nprint(1)\n```"
     assert "<pre><code>print(1)</code></pre>" in result.html_text
+
+
+def test_native_semantic_text_lists_equations_and_code_annotations():
+    # Validated and rendered with locked docvortex 0.4.14; no OCR inference claim.
+    middle = json.loads((FIXTURES / "semantic-middle.json").read_text(encoding="utf-8"))
+    structured = json.loads(
+        (FIXTURES / "semantic-structured.json").read_text(encoding="utf-8")
+    )
+    result = project_document(MineruDocument("", structured, middle, b""))
+    assert (
+        result.raw_text
+        == "A * B < C\nfirst\nsecond\nx=1\nExample code\nprint(1)\nCode note"
+    )
+    assert result.content_list[1]["list_items"] == ["first", "second"]
+    assert "- first\n- second" in result.markdown_text
+    assert "- - " not in result.markdown_text
+    assert "$$x=1$$" in result.markdown_text
+    assert "Example code\n\n```\nprint(1)\n```\n\nCode note" in result.markdown_text
+    assert "<p>A * B &lt; C</p>" in result.html_text
+    assert "<li>first</li><li>second</li>" in result.html_text
+    assert "Example code" in result.html_text and "Code note" in result.html_text

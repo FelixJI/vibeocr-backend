@@ -236,9 +236,15 @@ def build_result_projections(
                 markdown_parts.append(f"{'#' * level} {text}")
             html_parts.append(f"<h{level}>{escaped}</h{level}>")
         elif block_type == "code":
+            captions = _text_items(block.get("code_caption"))
+            footnotes = _text_items(block.get("code_footnote"))
             if include_markdown:
+                markdown_parts.extend(captions)
                 markdown_parts.append(f"```\n{text}\n```")
+                markdown_parts.extend(footnotes)
+            html_parts.extend(f"<p>{_escaped_text(value)}</p>" for value in captions)
             html_parts.append(f"<pre><code>{escaped}</code></pre>")
+            html_parts.extend(f"<p>{_escaped_text(value)}</p>" for value in footnotes)
         elif block_type in {
             "equation",
             "formula",
@@ -314,8 +320,12 @@ def _raw_parts_from_content(
                 or block.get("content")
                 or ""
             )
+        if block_type == "code":
+            raw_parts.extend(_text_items(block.get("code_caption")))
         if text:
             raw_parts.append(text)
+        if block_type == "code":
+            raw_parts.extend(_text_items(block.get("code_footnote")))
 
     for text_index, text_block in enumerate(text_blocks):
         if text_index in used_text_indices:

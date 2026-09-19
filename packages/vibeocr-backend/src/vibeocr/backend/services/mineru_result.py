@@ -41,6 +41,19 @@ def _plain_content(value: object) -> str:
     raise MineruApiError("Invalid MinerU semantic content")
 
 
+def _list_items(value: object) -> list[str]:
+    if not isinstance(value, list):
+        raise MineruApiError("Invalid MinerU semantic list")
+    items: list[str] = []
+    for value_item in value:
+        item = object_value(value_item, "list item")
+        if item.get("type") == "list":
+            items.extend(_list_items(item.get("content")))
+        else:
+            items.append(_plain_content(item.get("content")))
+    return items
+
+
 def _image_paths(value: object) -> set[str]:
     paths: set[str] = set()
     if isinstance(value, dict):
@@ -139,7 +152,9 @@ def project_document(document: MineruDocument) -> OCRResult:
             block: dict = {
                 "block_id": block_id,
                 "type": _TYPE_MAP.get(kind, kind),
-                "text": content,
+                "text": content
+                if kind in {"table", "image", "chart", "code", "list"}
+                else _plain_content(source_block.get("content")),
                 "page_idx": page_idx,
                 "source": {"provider_schema": "docvortex.middle/2.0", "block": native},
             }
@@ -175,20 +190,16 @@ def project_document(document: MineruDocument) -> OCRResult:
                 }
             if block["type"] == "title":
                 block["level"] = native.get("level", 1)
-            if kind in ("table", "image", "chart"):
-                for source_key, suffix in (
-                    ("captions", "caption"),
-                    ("footnotes", "footnote"),
-                ):
-                    annotations = native.get(source_key, [])
-                    if not isinstance(annotations, list):
-                        raise MineruApiError("Invalid MinerU visual annotations")
+            if kind in ("table", "image", "chart", "code"):
+                source_children = source_block.get("content")
+                if not isinstance(source_children, list):
+                    raise MineruApiError("Invalid MinerU visual content")
+                for suffix in ("caption", "footnote"):
                     block[f"{kind}_{suffix}"] = [
-                        string_value(
-                            object_value(a, "annotation").get("content"),
-                            "annotation content",
-                        )
-                        for a in annotations
+                        _plain_content(child.get("content"))
+                        for child in source_children
+                        if isinstance(child, dict)
+                        and child.get("type") == f"{kind}_{suffix}"
                     ]
             if kind == "table":
                 bodies = source_block.get("content", [])
@@ -250,7 +261,8 @@ def project_document(document: MineruDocument) -> OCRResult:
                     )
                 block["text"] = block["code_body"] = _plain_content(bodies[0])
             elif kind == "list":
-                block["list_items"] = content.splitlines()
+                block["list_items"] = _list_items(source_block.get("content"))
+                block["text"] = "\n".join(block["list_items"])
             blocks.append(block)
             if kind in DISCARDED_BLOCK_TYPES:
                 continue

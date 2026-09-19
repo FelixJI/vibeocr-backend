@@ -77,6 +77,10 @@ Backend 的 MinerU 依赖固定为正式 4.0.2，使用 `mineru.parser.api_serve
 不同语言的任务在服务重启、解析和下载期间串行隔离。原生 Office 文档可能由上游使用无模型提取，
 不能据此宣称扫描 OCR 或 GPU 加速已验证。
 
+结果正文从原生 middle 语义节点提取，不把 structured Markdown 当纯文本再包装；代码说明和脚注保留。
+现有 VibeOCR block 模型将行内字体样式、链接和嵌套列表层级扁平化为可读文本；
+原生 structured block 保存在 source 中，表格仍走既有结构化表格合同，不宣称原样保留全部 Office 排版。
+
 新配置保存于 `MINERU_HOME/config.yaml`，也支持显式 `MINERU_CONFIG`；安装器为新版本提供独立
 MinerU home，不覆盖旧 `mineru.json` 或旧模型。默认 `model.small_backend: onnx`、
 `model.vlm.engine: llama-cpp`；cu126 profile 额外安装 `[torch]`，只有显式选择
