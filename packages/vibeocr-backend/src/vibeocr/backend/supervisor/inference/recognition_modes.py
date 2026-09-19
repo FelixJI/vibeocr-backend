@@ -287,17 +287,15 @@ class RecognitionModeRegistry:
         recognition_modes: tuple[str, ...] | None,
         pipelines: tuple[str, ...],
     ) -> tuple[str, ...]:
-        """校验新旧 preload 字段一致，并返回实际 Paddle model 管道。
+        """校验新旧 preload 字段一致，并返回实际可准备的管道。
 
         legacy ``OCR`` 同时映射三个产品模式，不能再被解释为默认引擎预热。
-        MinerU 也不支持显式 preload；它的 child process 只能通过实际任务启动。
+        MinerU 唯一映射文档模式，显式 preload 验证各 tier 的实际解析能力。
         """
         canonical_pipelines = tuple(dict.fromkeys(pipelines))
         if recognition_modes is None:
             ambiguous = [
-                pipeline
-                for pipeline in canonical_pipelines
-                if pipeline in {"OCR", "MinerU"}
+                pipeline for pipeline in canonical_pipelines if pipeline == "OCR"
             ]
             if ambiguous:
                 raise RecognitionModeError(

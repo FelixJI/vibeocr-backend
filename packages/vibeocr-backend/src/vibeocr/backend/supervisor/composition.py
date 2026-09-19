@@ -237,13 +237,13 @@ class _MinerUServiceLifecycle:
     def start(self) -> None:
         from vibeocr.backend.services.mineru_service import MinerUService
 
-        MinerUService.instance()  # blocks until API up
+        MinerUService()  # blocks until API up
 
     def stop(self) -> None:
         from vibeocr.backend.services.mineru_service import MinerUService
 
         try:
-            MinerUService.instance().shutdown()
+            MinerUService().shutdown()
         except Exception:  # pragma: no cover - defensive
             pass
 
@@ -263,7 +263,7 @@ def _build_mineru_executor(*, scheduler: Any = None) -> Executor:
         from vibeocr.backend.services.mineru_service import MinerUService
 
         return MinerUProcessAdapter(
-            client_factory=lambda: MinerUService.instance(),
+            client_factory=lambda: MinerUService(),
             lifecycle=_MinerUServiceLifecycle(),
         )
 

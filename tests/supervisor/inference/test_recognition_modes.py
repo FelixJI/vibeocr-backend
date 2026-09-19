@@ -97,7 +97,7 @@ def test_catalog_exposes_stable_semantics_without_runtime_state_ambiguity() -> N
             "advanced_component",
             {
                 "kind": "process_keep_alive",
-                "supports_preload": False,
+                "supports_preload": True,
                 "supports_ttl": True,
                 "supports_pinning": False,
                 "supports_release": True,
@@ -240,7 +240,6 @@ def test_lifecycle_validation_distinguishes_models_processes_and_unmanaged() -> 
     for mode, operation in (
         ("rapid_text", "preload"),
         ("windows_text", "release"),
-        ("mineru_document", "preload"),
         ("mineru_document", "pinning"),
     ):
         with pytest.raises(RecognitionModeError) as unsupported:
@@ -278,6 +277,8 @@ def test_preload_resolver_requires_mode_pipeline_agreement_and_rejects_legacy_oc
         ("OCR", "PP-StructureV3"),
     ) == ("OCR", "PP-StructureV3")
     assert registry.resolve_preload(None, ("PP-StructureV3",)) == ("PP-StructureV3",)
+    assert registry.resolve_preload(None, ("MinerU",)) == ("MinerU",)
+    assert registry.resolve_preload(("mineru_document",), ("MinerU",)) == ("MinerU",)
 
     with pytest.raises(RecognitionModeError) as mismatch:
         registry.resolve_preload(("paddle_text",), ("PP-StructureV3",))
