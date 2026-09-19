@@ -154,6 +154,113 @@
             0.8,
             0.8
           ]
+        },
+        {
+          "type": "table",
+          "index": 11,
+          "content": [
+            {
+              "type": "table_body",
+              "index": 11,
+              "content": "Item  Count\nApple  12"
+            },
+            {
+              "type": "table_caption",
+              "index": 12,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Fallback caption"
+                }
+              ]
+            },
+            {
+              "type": "table_footnote",
+              "index": 13,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Fallback note"
+                }
+              ]
+            }
+          ],
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "index",
+          "index": 14,
+          "content": [
+            {
+              "type": "text",
+              "index": 14,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Chapter A ... 1"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "index": 15,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Chapter B ... 2"
+                }
+              ]
+            }
+          ],
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "table",
+          "index": 16,
+          "content": [
+            {
+              "type": "table_body",
+              "index": 16,
+              "content": "",
+              "image_base64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII="
+            },
+            {
+              "type": "table_caption",
+              "index": 17,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Image fallback caption"
+                }
+              ]
+            },
+            {
+              "type": "table_footnote",
+              "index": 18,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Image fallback note"
+                }
+              ]
+            }
+          ],
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ]
         }
       ]
     }

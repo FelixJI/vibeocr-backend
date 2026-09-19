@@ -48,7 +48,7 @@ def _list_items(value: object) -> list[str]:
     items: list[str] = []
     for value_item in value:
         item = object_value(value_item, "list item")
-        if item.get("type") == "list":
+        if item.get("type") in {"list", "index"}:
             items.extend(_list_items(item.get("content")))
         else:
             items.append(_plain_content(item.get("content")))
@@ -232,6 +232,7 @@ def project_document(document: MineruDocument) -> OCRResult:
                     block["text"] = table_model_to_plain_text(model)
                 else:
                     block["type"] = "table_unparsed"
+                    block["text"] = _plain_content(table_html)
                     block["source_type"] = "table"
                     block["projection_warnings"] = [
                         f"{block_id}:structured-table-unsupported"
@@ -272,6 +273,8 @@ def project_document(document: MineruDocument) -> OCRResult:
                         "MinerU code block must have one semantic body"
                     )
                 block["text"] = block["code_body"] = _plain_content(bodies[0])
+            elif kind == "index":
+                block["text"] = "\n".join(_list_items(source_block.get("content")))
             elif kind == "list":
                 block["list_items"] = _list_items(source_block.get("content"))
                 block["text"] = "\n".join(block["list_items"])

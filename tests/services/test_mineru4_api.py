@@ -431,3 +431,32 @@ def test_native_visual_bodies_formula_fallback_and_nested_code_fence(suffix):
         "<pre><code>first\n```\n# literal heading\nlast</code></pre>"
         in result.html_text
     )
+
+
+@pytest.mark.parametrize("suffix", ["docx", "pdf"])
+def test_native_table_fallback_and_index_keep_semantic_content(suffix):
+    middle = json.loads(
+        (FIXTURES / f"annotations-{suffix}-middle.json").read_text(encoding="utf-8")
+    )
+    structured = json.loads(
+        (FIXTURES / f"annotations-{suffix}-structured.json").read_text(encoding="utf-8")
+    )
+    result = project_document(MineruDocument("", structured, middle, b""))
+    fallback = next(b for b in result.content_list if b["type"] == "table_unparsed")
+    assert fallback["text"] == "Item  Count\nApple  12"
+    for projection in (result.raw_text, result.markdown_text, result.html_text):
+        assert projection.count("Fallback caption") == 1
+        assert projection.count("Fallback note") == 1
+        assert "Apple  12" in projection
+    assert "Fallback caption\nItem  Count\nApple  12\nFallback note" in result.raw_text
+    assert "Chapter A ... 1\nChapter B ... 2" in result.raw_text
+    assert "Chapter A ... 1<br>Chapter B ... 2" in result.html_text
+
+    image_table = [b for b in result.content_list if b["type"] == "table_unparsed"][1]
+    assert image_table["text"] == ""
+    assert image_table["img_path"] in result.images
+    assert image_table["img_path"] in result.markdown_text
+    assert image_table["img_path"] in result.html_text
+    for projection in (result.raw_text, result.markdown_text, result.html_text):
+        assert projection.count("Image fallback caption") == 1
+        assert projection.count("Image fallback note") == 1

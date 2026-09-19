@@ -195,14 +195,22 @@ def build_result_projections(
                 for footnote in _text_items(block.get("table_footnote"))
             )
             continue
-        if block_type in {"image", "figure", "chart", "seal"}:
+        if block_type in {"image", "figure", "chart", "seal", "table_unparsed"}:
             captions = _text_items(
-                block.get("image_caption") or block.get("chart_caption")
+                block.get("image_caption")
+                or block.get("chart_caption")
+                or block.get("table_caption")
             )
             footnotes = _text_items(
-                block.get("image_footnote") or block.get("chart_footnote")
+                block.get("image_footnote")
+                or block.get("chart_footnote")
+                or block.get("table_footnote")
             )
-            body = str(block.get("image_body") or block.get("chart_body") or "")
+            body = str(
+                block.get("text", "")
+                if block_type == "table_unparsed"
+                else block.get("image_body") or block.get("chart_body") or ""
+            )
             source = (
                 block.get("img_path") or block.get("image_path") or block.get("src")
             )
@@ -354,12 +362,13 @@ def _raw_parts_from_content(
                 or block.get("content")
                 or ""
             )
-        if block_type in {"code", "table"}:
-            raw_parts.extend(_text_items(block.get(f"{block_type}_caption")))
+        annotation_type = "table" if block_type == "table_unparsed" else block_type
+        if annotation_type in {"code", "table"}:
+            raw_parts.extend(_text_items(block.get(f"{annotation_type}_caption")))
         if text:
             raw_parts.append(text)
-        if block_type in {"code", "table"}:
-            raw_parts.extend(_text_items(block.get(f"{block_type}_footnote")))
+        if annotation_type in {"code", "table"}:
+            raw_parts.extend(_text_items(block.get(f"{annotation_type}_footnote")))
 
     for text_index, text_block in enumerate(text_blocks):
         if text_index in used_text_indices:

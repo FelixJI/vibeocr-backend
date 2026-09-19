@@ -86,6 +86,57 @@
           "content": "````markdown\nfirst\n```\n# literal heading\nlast\n````",
           "captions": [],
           "footnotes": []
+        },
+        {
+          "type": "table",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "```\nItem  Count\nApple  12\n```",
+          "captions": [
+            {
+              "content": "Fallback caption"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "Fallback note"
+            }
+          ]
+        },
+        {
+          "type": "index",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "- Chapter A ... 1\n- Chapter B ... 2"
+        },
+        {
+          "type": "table",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "",
+          "captions": [
+            {
+              "content": "Image fallback caption"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "Image fallback note"
+            }
+          ],
+          "image_source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII="
         }
       ]
     }
