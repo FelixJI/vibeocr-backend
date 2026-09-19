@@ -405,3 +405,29 @@ def test_native_visual_annotations_survive_all_projections(suffix):
         assert caption in result.html_text
         assert f"{kind} note &lt;b&gt;literal&lt;/b&gt;" in result.html_text
     assert result.raw_text.count("Cell") == 1
+
+
+@pytest.mark.parametrize("suffix", ["docx", "pdf"])
+def test_native_visual_bodies_formula_fallback_and_nested_code_fence(suffix):
+    middle = json.loads(
+        (FIXTURES / f"annotations-{suffix}-middle.json").read_text(encoding="utf-8")
+    )
+    structured = json.loads(
+        (FIXTURES / f"annotations-{suffix}-structured.json").read_text(encoding="utf-8")
+    )
+    result = project_document(MineruDocument("", structured, middle, b""))
+    assert result.raw_text.count("image body *literal*") == 1
+    assert "image body \\*literal\\*" in result.markdown_text
+    assert "image body *literal*" in result.html_text
+    for projection in (result.raw_text, result.markdown_text, result.html_text):
+        assert "Revenue" in projection and "42" in projection
+    assert "<table>" not in result.raw_text
+    equation = next(b for b in result.content_list if b["type"] == "equation")
+    assert equation["img_path"] in result.images
+    assert f"![]({equation['img_path']})" in result.markdown_text
+    assert f'<img src="{equation["img_path"]}"' in result.html_text
+    assert "````\nfirst\n```\n# literal heading\nlast\n````" in result.markdown_text
+    assert (
+        "<pre><code>first\n```\n# literal heading\nlast</code></pre>"
+        in result.html_text
+    )

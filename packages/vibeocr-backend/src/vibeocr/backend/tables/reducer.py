@@ -202,6 +202,7 @@ def build_result_projections(
             footnotes = _text_items(
                 block.get("image_footnote") or block.get("chart_footnote")
             )
+            body = str(block.get("image_body") or block.get("chart_body") or "")
             source = (
                 block.get("img_path") or block.get("image_path") or block.get("src")
             )
@@ -211,6 +212,8 @@ def build_result_projections(
                     markdown_parts.append(f"![{caption_text}]({source})")
                 else:
                     markdown_parts.extend(map(_markdown_text, captions))
+                if body:
+                    markdown_parts.append(_markdown_text(body))
                 markdown_parts.extend(map(_markdown_text, footnotes))
             html_parts.extend(
                 f'<p class="image-caption">{_escaped_text(caption)}</p>'
@@ -220,6 +223,8 @@ def build_result_projections(
                 html_parts.append(
                     f'<img src="{html.escape(str(source), quote=True)}" alt="">'
                 )
+            if body:
+                html_parts.append(f"<p>{_escaped_text(body)}</p>")
             html_parts.extend(
                 f'<p class="image-footnote">{_escaped_text(note)}</p>'
                 for note in footnotes
@@ -243,6 +248,13 @@ def build_result_projections(
             block.get("text") or block.get("code_body") or block.get("content") or ""
         )
         if not text:
+            source = block.get("img_path")
+            if source:
+                if include_markdown:
+                    markdown_parts.append(f"![]({source})")
+                html_parts.append(
+                    f'<img src="{html.escape(str(source), quote=True)}" alt="">'
+                )
             continue
         escaped = _escaped_text(text)
         if block_type == "title":
@@ -255,10 +267,13 @@ def build_result_projections(
             footnotes = _text_items(block.get("code_footnote"))
             if include_markdown:
                 markdown_parts.extend(map(_markdown_text, captions))
-                markdown_parts.append(f"```\n{text}\n```")
+                fence = "`" * max(
+                    3, 1 + max(map(len, re.findall(r"`+", text)), default=0)
+                )
+                markdown_parts.append(f"{fence}\n{text}\n{fence}")
                 markdown_parts.extend(map(_markdown_text, footnotes))
             html_parts.extend(f"<p>{_escaped_text(value)}</p>" for value in captions)
-            html_parts.append(f"<pre><code>{escaped}</code></pre>")
+            html_parts.append(f"<pre><code>{html.escape(text)}</code></pre>")
             html_parts.extend(f"<p>{_escaped_text(value)}</p>" for value in footnotes)
         elif block_type in {
             "equation",
@@ -327,6 +342,7 @@ def _raw_parts_from_content(
         elif block_type in {"image", "figure", "chart", "seal"}:
             text = "\n".join(
                 _text_items(block.get("image_caption") or block.get("chart_caption"))
+                + _text_items(block.get("image_body") or block.get("chart_body"))
                 + _text_items(
                     block.get("image_footnote") or block.get("chart_footnote")
                 )

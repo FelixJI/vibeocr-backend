@@ -22,6 +22,7 @@ from vibeocr.backend.tables.blocks import (
 )
 from vibeocr.backend.tables.projections import table_model_to_plain_text
 from vibeocr.backend.tables.reducer import rebuild_result_projections
+from vibeocr.backend.utils.markdown_converter import extract_plain_text
 from vibeocr.runtime_contracts.contracts.tables import TableProvenanceV1
 
 from .mineru_api import MineruApiError, MineruDocument, object_value, string_value
@@ -236,13 +237,24 @@ def project_document(document: MineruDocument) -> OCRResult:
                         f"{block_id}:structured-table-unsupported"
                     ]
             elif kind in ("image", "chart"):
+                body = next(
+                    child
+                    for child in source_block["content"]
+                    if child.get("type") == f"{kind}_body"
+                )
+                body_text = _plain_content(body.get("content"))
+                if re.search(r"</?[A-Za-z][^>]*>", body_text):
+                    body_text = extract_plain_text(body_text)
+                block[f"{kind}_body"] = body_text
                 block["text"] = "\n".join(
-                    [
-                        content,
+                    value
+                    for value in [
                         *block.get(f"{kind}_caption", []),
+                        body_text,
                         *block.get(f"{kind}_footnote", []),
                     ]
-                ).strip()
+                    if value
+                )
             elif kind == "code":
                 source_content = source_block.get("content")
                 bodies = (

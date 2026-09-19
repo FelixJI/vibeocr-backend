@@ -5,7 +5,7 @@
       "blocks": [
         {
           "type": "image",
-          "content": "",
+          "content": "image body *literal*",
           "captions": [
             {
               "content": "image caption \\*literal\\*"
@@ -19,7 +19,7 @@
         },
         {
           "type": "chart",
-          "content": "",
+          "content": "| Revenue | 42 |\n| --- | --- |",
           "captions": [
             {
               "content": "chart caption \\*literal\\*"
@@ -44,6 +44,18 @@
               "content": "table note &lt;b&gt;literal&lt;/b&gt;"
             }
           ]
+        },
+        {
+          "type": "equation",
+          "content": "",
+          "image_source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII="
+        },
+        {
+          "type": "code",
+          "sub_type": "code",
+          "content": "````markdown\nfirst\n```\n# literal heading\nlast\n````",
+          "captions": [],
+          "footnotes": []
         }
       ]
     }

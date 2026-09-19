@@ -79,7 +79,8 @@ Backend 的 MinerU 依赖固定为正式 4.0.2，使用 `mineru.parser.api_serve
 
 结果正文从原生 middle 语义节点提取，不把 structured Markdown 当纯文本再包装；代码说明和脚注保留。
 现有 VibeOCR block 模型将行内字体样式、链接和嵌套列表层级扁平化为可读文本；
-原生 structured block 保存在 source 中，表格仍走既有结构化表格合同，不宣称原样保留全部 Office 排版。
+图片/图表识别正文（含其中的 HTML 表格）同样投影为可读文本，保留内容但不提供嵌入表格编辑；
+原生 structured block 保存在 source 中，独立表格仍走既有结构化表格合同，不宣称原样保留全部 Office 排版。
 
 新配置保存于 `MINERU_HOME/config.yaml`，也支持显式 `MINERU_CONFIG`；安装器为新版本提供独立
 MinerU home，不覆盖旧 `mineru.json` 或旧模型。默认 `model.small_backend: onnx`、

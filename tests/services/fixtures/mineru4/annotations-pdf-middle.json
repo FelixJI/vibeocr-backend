@@ -20,7 +20,7 @@
             {
               "type": "image_body",
               "index": 0,
-              "content": ""
+              "content": "image body *literal*"
             },
             {
               "type": "image_caption",
@@ -57,7 +57,7 @@
             {
               "type": "chart_body",
               "index": 3,
-              "content": ""
+              "content": "<table><tr><td>Revenue</td><td>42</td></tr></table>"
             },
             {
               "type": "chart_caption",
@@ -115,6 +115,37 @@
                   "content": "table note <b>literal</b>"
                 }
               ]
+            }
+          ],
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "equation",
+          "index": 9,
+          "content": "",
+          "image_base64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "code",
+          "index": 10,
+          "sub_type": "code",
+          "guess_lang": "markdown",
+          "content": [
+            {
+              "type": "code_body",
+              "index": 10,
+              "content": "first\n```\n# literal heading\nlast"
             }
           ],
           "bbox": [

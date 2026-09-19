@@ -11,7 +11,7 @@
             0.8,
             0.8
           ],
-          "content": "",
+          "content": "image body *literal*",
           "captions": [
             {
               "content": "image caption \\*literal\\*"
@@ -31,7 +31,7 @@
             0.8,
             0.8
           ],
-          "content": "",
+          "content": "| Revenue | 42 |\n| --- | --- |",
           "captions": [
             {
               "content": "chart caption \\*literal\\*"
@@ -62,6 +62,30 @@
               "content": "table note &lt;b&gt;literal&lt;/b&gt;"
             }
           ]
+        },
+        {
+          "type": "equation",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "",
+          "image_source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII="
+        },
+        {
+          "type": "code",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "sub_type": "code",
+          "content": "````markdown\nfirst\n```\n# literal heading\nlast\n````",
+          "captions": [],
+          "footnotes": []
         }
       ]
     }
