@@ -1,0 +1,96 @@
+{
+  "schema": "docvortex.middle",
+  "schema_version": "2.0",
+  "metadata": {
+    "file_suffix": "docx",
+    "producer": {
+      "name": "vibeocr-regression-fixture",
+      "version": "1"
+    }
+  },
+  "is_full_document": true,
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "index": 0,
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "A * B < C",
+              "styles": [
+                "bold"
+              ]
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "type": "list",
+          "content": [
+            {
+              "index": 1,
+              "type": "text",
+              "content": [
+                {
+                  "type": "text",
+                  "content": "first"
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "type": "text",
+              "content": [
+                {
+                  "type": "text",
+                  "content": "second"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "type": "equation",
+          "content": "x=1"
+        },
+        {
+          "index": 4,
+          "type": "code",
+          "sub_type": "code",
+          "guess_lang": "python",
+          "content": [
+            {
+              "index": 4,
+              "type": "code_body",
+              "content": "print(1)"
+            },
+            {
+              "index": 5,
+              "type": "code_caption",
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Example code"
+                }
+              ]
+            },
+            {
+              "index": 6,
+              "type": "code_footnote",
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Code note"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -83,6 +83,11 @@ class _NullExecutor:
 
 def _paddle_adapter_factory() -> Any:
     """惰性构建 Paddle adapter：导入 OCRService 延迟到首次使用。"""
+    from .inference.paddle_process_adapter import PaddleProcessAdapter, paddle_python
+
+    python = paddle_python()
+    if python is not None:
+        return PaddleProcessAdapter(python)
     from vibeocr.backend.services.ocr_service import OCRService
 
     from .inference.paddle_adapter import PaddlePipelineAdapter
@@ -110,7 +115,13 @@ def _build_ocr_engine_registry(
 
     def paddle_descriptor() -> Any:
         from .inference.paddle_adapter import PaddlePipelineAdapter
+        from .inference.paddle_process_adapter import (
+            PaddleProcessAdapter,
+            paddle_python,
+        )
 
+        if paddle_python() is not None:
+            return PaddleProcessAdapter.probe_descriptor()
         return PaddlePipelineAdapter._probe_descriptor()
 
     return OcrEngineRegistry(
@@ -147,6 +158,10 @@ def _build_paddle_executor(
     from .inference.paddle_executor import PaddleExecutor
 
     def clear_cache() -> None:
+        from .inference.paddle_process_adapter import paddle_python
+
+        if paddle_python() is not None:
+            return  # The isolated worker clears its own allocator on failure.
         try:
             import paddle
 
@@ -175,6 +190,14 @@ def _build_paddle_executor(
 
 def _paddle_available() -> bool:
     """Return True if a real Paddle backend is importable in this environment."""
+    from .inference.ocr_engines import EngineAvailability
+    from .inference.paddle_process_adapter import PaddleProcessAdapter, paddle_python
+
+    if paddle_python() is not None:
+        return (
+            PaddleProcessAdapter.probe_descriptor().availability
+            is EngineAvailability.READY
+        )
     try:
         __import__("paddle")
     except Exception:
@@ -214,13 +237,13 @@ class _MinerUServiceLifecycle:
     def start(self) -> None:
         from vibeocr.backend.services.mineru_service import MinerUService
 
-        MinerUService.instance()  # blocks until API up
+        MinerUService()  # blocks until API up
 
     def stop(self) -> None:
         from vibeocr.backend.services.mineru_service import MinerUService
 
         try:
-            MinerUService.instance().shutdown()
+            MinerUService().shutdown()
         except Exception:  # pragma: no cover - defensive
             pass
 
@@ -229,7 +252,7 @@ def _build_mineru_executor(*, scheduler: Any = None) -> Executor:
     """Construct a real MinerUExecutor owning the MinerU API subprocess.
 
     The ``client_factory`` returns the singleton ``MinerUService``, whose
-    ``file_parse`` issues one budgeted multi-file ``/file_parse`` request and
+    ``file_parse`` issues one budgeted multi-file MinerU 4 job and
     returns ``{stem: payload}``. The lifecycle wrapper starts/stops the
     mineru-api subprocess; the heavy model download happens on first parse.
     """
@@ -240,7 +263,7 @@ def _build_mineru_executor(*, scheduler: Any = None) -> Executor:
         from vibeocr.backend.services.mineru_service import MinerUService
 
         return MinerUProcessAdapter(
-            client_factory=lambda: MinerUService.instance(),
+            client_factory=lambda: MinerUService(),
             lifecycle=_MinerUServiceLifecycle(),
         )
 

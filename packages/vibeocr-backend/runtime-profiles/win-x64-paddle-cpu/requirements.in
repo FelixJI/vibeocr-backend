@@ -1,0 +1,24 @@
+# Source-neutral Windows/Python 3.13 lock regeneration (uv):
+# uv pip compile packages/vibeocr-backend/runtime-profiles/win-x64-paddle-cpu/requirements.in --no-config --no-sources --default-index https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/ --python-version 3.13 --python-platform windows --generate-hashes --output-file packages/vibeocr-backend/runtime-profiles/win-x64-paddle-cpu/requirements-win-x64-paddle-cpu.lock
+# Separate Paddle site-packages: never install RapidOCR/MinerU here.
+pillow>=12.3.0
+numpy>=2.3.5
+httpx>=0.28.1
+jsonschema>=4.25.0
+pymupdf>=1.28.0
+pydantic>=2.13.4
+fastapi>=0.139.0
+uvicorn>=0.51.0
+fonttools>=4.63.0
+markdown>=3.10.2
+python-docx>=1.2.0
+openpyxl>=3.1.5
+qrcode[pil]>=8.2
+python-barcode>=0.16.1
+pyzbar>=0.1.9
+pynvml>=11.5.0
+packaging>=26.0
+python-multipart>=0.0.32
+
+paddleocr[doc-parser]>=3.7.0
+paddlepaddle>=3.3.1

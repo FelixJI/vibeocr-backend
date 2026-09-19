@@ -195,6 +195,11 @@ class AdapterExecutor:
                 detail={"succeeded": total_succeeded, "failed": total_failed},
             )
 
+    def _recognize_many(
+        self, record: Any, items: list[InputItem], options: Any
+    ) -> list[dict[str, Any]]:
+        return self.adapter.recognize_many(items, options=options)
+
     def _execute_with_recovery(
         self,
         record: Any,
@@ -207,7 +212,7 @@ class AdapterExecutor:
         if not items or record.cancel_requested_at is not None:
             return
         try:
-            payloads = self.adapter.recognize_many(items, options=options)
+            payloads = self._recognize_many(record, items, options)
         except OcrEngineError as exc:
             # 引擎选择失败是确定性错误：直接按协议错误码标记本批 item，
             # 不进入 bisect/backoff 恢复路径，也不切换引擎。
@@ -327,11 +332,14 @@ class AdapterExecutor:
                     error="adapter returned an empty or non-object payload",
                 )
                 continue
-            record.commit_item_success(
-                input_item.item_id,
-                payload_type=payload_type,
-                payload=payload,
-            )
+            self._commit_payload(record, input_item, payload_type, payload)
+
+    def _commit_payload(
+        self, record: Any, item: InputItem, payload_type: str, payload: dict
+    ) -> None:
+        record.commit_item_success(
+            item.item_id, payload_type=payload_type, payload=payload
+        )
 
     @staticmethod
     def _fail_items(

@@ -104,6 +104,8 @@
       "requirements-win-x64-cpu.lock",
       "requirements-win-x64-cu126.lock",
       "requirements-win-x64-cu126-gpu.lock",
+      "requirements-win-x64-paddle-cpu.lock",
+      "requirements-win-x64-paddle-cu126.lock",
       "vibeocr_backend-*.whl",
       "vibeocr_runtime_contracts-2.*.whl",
       "vibeocr-runtime-installer-v*-win-x64.zip",

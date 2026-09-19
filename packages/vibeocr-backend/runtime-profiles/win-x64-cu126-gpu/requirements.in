@@ -6,6 +6,5 @@
 # Reuse the complete offline base; exclude PaddleOCR/MinerU/document parsing.
 -r ../win-x64-base/requirements.in
 
-paddlepaddle-gpu @ https://paddle-whl.bj.bcebos.com/stable/cu126/paddlepaddle-gpu/paddlepaddle_gpu-3.3.1-cp313-cp313-win_amd64.whl
 torch @ https://download.pytorch.org/whl/cu126/torch-2.12.1%2Bcu126-cp313-cp313-win_amd64.whl
 torchvision @ https://download.pytorch.org/whl/cu126/torchvision-0.27.1%2Bcu126-cp313-cp313-win_amd64.whl

@@ -578,9 +578,7 @@ def test_build_mineru_executor_wires_adapter_factory(
     sentinel_service = object()
 
     fake_mineru_module = types.ModuleType("vibeocr.backend.services.mineru_service")
-    fake_mineru_module.MinerUService = type(
-        "MinerUService", (), {"instance": staticmethod(lambda: sentinel_service)}
-    )
+    fake_mineru_module.MinerUService = lambda: sentinel_service
     monkeypatch.setitem(
         sys.modules, "vibeocr.backend.services.mineru_service", fake_mineru_module
     )
@@ -658,17 +656,13 @@ def test_mineru_lifecycle_start_invokes_singleton(
     calls: list[str] = []
 
     fake_module = types.ModuleType("vibeocr.backend.services.mineru_service")
-    fake_module.MinerUService = type(
-        "MinerUService",
-        (),
-        {"instance": staticmethod(lambda: calls.append("instance") or object())},
-    )
+    fake_module.MinerUService = lambda: calls.append("constructor") or object()
     monkeypatch.setitem(
         sys.modules, "vibeocr.backend.services.mineru_service", fake_module
     )
 
     _MinerUServiceLifecycle().start()
-    assert calls == ["instance"]
+    assert calls == ["constructor"]
 
 
 def test_mineru_lifecycle_stop_invokes_shutdown(
@@ -681,9 +675,7 @@ def test_mineru_lifecycle_stop_invokes_shutdown(
             calls.append("shutdown")
 
     fake_module = types.ModuleType("vibeocr.backend.services.mineru_service")
-    fake_module.MinerUService = type(
-        "MinerUService", (), {"instance": staticmethod(lambda: _Svc())}
-    )
+    fake_module.MinerUService = _Svc
     monkeypatch.setitem(
         sys.modules, "vibeocr.backend.services.mineru_service", fake_module
     )
@@ -700,9 +692,7 @@ def test_mineru_lifecycle_stop_swallows_shutdown_error(
             raise RuntimeError("wedged")
 
     fake_module = types.ModuleType("vibeocr.backend.services.mineru_service")
-    fake_module.MinerUService = type(
-        "MinerUService", (), {"instance": staticmethod(lambda: _BrokenSvc())}
-    )
+    fake_module.MinerUService = _BrokenSvc
     monkeypatch.setitem(
         sys.modules, "vibeocr.backend.services.mineru_service", fake_module
     )

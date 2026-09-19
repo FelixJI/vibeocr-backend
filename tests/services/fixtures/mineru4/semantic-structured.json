@@ -1,0 +1,45 @@
+{
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "text",
+          "content": "**A \\* B < C**"
+        },
+        {
+          "type": "list",
+          "content": "first\nsecond"
+        },
+        {
+          "type": "equation",
+          "content": "x=1"
+        },
+        {
+          "type": "code",
+          "sub_type": "code",
+          "content": "```python\nprint(1)\n```",
+          "captions": [
+            {
+              "content": "Example code"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "Code note"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "file_suffix": "docx",
+    "producer": {
+      "name": "vibeocr-regression-fixture",
+      "version": "1"
+    }
+  },
+  "is_full_document": true,
+  "extensions": {}
+}

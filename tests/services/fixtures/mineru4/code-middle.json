@@ -1,0 +1,32 @@
+{
+  "metadata": {
+    "file_suffix": "docx",
+    "producer": {
+      "name": "vibeocr-regression-fixture",
+      "version": "1"
+    }
+  },
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "index": 0,
+          "type": "code",
+          "sub_type": "code",
+          "guess_lang": "python",
+          "content": [
+            {
+              "index": 0,
+              "type": "code_body",
+              "content": "print(1)"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "is_full_document": true,
+  "schema": "docvortex.middle",
+  "schema_version": "2.0"
+}

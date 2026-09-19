@@ -1,28 +1,7 @@
 # Resolved for CPython 3.13 / Windows x64 by scripts/build_runtime_manifest.py.
 # Source-neutral lock command (uv 0.12.5; trusted TUNA index):
 # uv pip compile packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements.in --no-config --no-sources --default-index https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/ --python-version 3.13 --python-platform windows --generate-hashes --output-file packages/vibeocr-backend/runtime-profiles/win-x64-cpu/requirements-win-x64-cpu.lock
-# Full Runtime 仍必须携带并验证 Base Runtime（RapidOCR + Windows adapter）。
+# Host includes Base and MinerU; Paddle has a separate interpreter.
 -r ../win-x64-base/requirements.in
-
-pillow>=12.3.0
-numpy>=2.3.5
-httpx>=0.28.1
-jsonschema>=4.25.0
-pymupdf>=1.28.0
-pydantic>=2.13.4
-fastapi>=0.139.0
-uvicorn>=0.51.0
-fonttools>=4.63.0
-markdown>=3.10.2
-python-docx>=1.2.0
-openpyxl>=3.1.5
-qrcode[pil]>=8.2
-python-barcode>=0.16.1
-opencv-contrib-python>=4.10.0.84
-pyzbar>=0.1.9
-pynvml>=11.5.0
-paddlepaddle>=3.3.1
-paddleocr[doc-parser]>=3.7.0
-# MinerU's ``core`` extra hard-pins cu126 Torch/TorchVision.  The CPU profile
-# intentionally carries only the remote/document client surface.
-mineru>=3.4.3
+mineru==4.0.2
+opencv-python>=4.11

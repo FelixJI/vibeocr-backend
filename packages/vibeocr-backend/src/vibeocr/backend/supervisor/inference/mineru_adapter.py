@@ -3,7 +3,7 @@
 Plan §4 Phase 5 goals addressed by this seam:
 
 * Supervisor owns the MinerU API subprocess lifecycle (start/health/stop).
-* ``recognize_many`` issues ONE budgeted multi-file ``/file_parse`` request
+* ``recognize_many`` issues ONE budgeted multi-file native parse job
   with unique internal stems; results map back to stable input order.
 * Default backend does NOT promise cross-document compute batching — the
   capability reports ``real_batch=False`` so metrics can distinguish HTTP
@@ -45,7 +45,7 @@ def unique_stem(original: str, index: int) -> str:
     """Build a unique, filesystem-safe stem for one input in a batch.
 
     Duplicate stems are disambiguated by an index + short random token so a
-    single multi-file ``/file_parse`` request cannot collide on result keys.
+    single multi-file native parse job cannot collide on result keys.
     """
     p = Path(original or "")
     name = p.stem
@@ -190,23 +190,23 @@ class MinerUProcessAdapter:
         """
         if not isinstance(options, PipelineSelection):
             return options
-        from vibeocr.backend.models.ocr_options import OCROptions
+        from vibeocr.backend.services.mineru_config import resolve_mineru_config
 
-        return OCROptions.from_dict(
-            {"pipeline": options.pipeline_id, **options.options}
-        )
+        return resolve_mineru_config(options)
 
     def recognize_many(
         self,
         items: list[InputItem],
         *,
         options: Any | None = None,
+        cancelled: Callable[[], bool] = lambda: False,
     ) -> list[dict[str, Any]]:
         if not items:
             return []
         started = time.perf_counter()
         lease_acquired = False
         try:
+            service_options = self._service_options(options)
             self.ensure_started()
             with self._process_lock:
                 self._active_leases += 1
@@ -224,8 +224,8 @@ class MinerUProcessAdapter:
                 display = getattr(item, "display_name", None) or f"input-{idx}"
                 stem = unique_stem(display, idx)
                 stem_to_index[stem] = idx
+                stem_to_index[Path(stem).stem] = idx
                 files.append((stem, bytes(raw)))
-            service_options = self._service_options(options)
             # A request-provided backend (user-selected pipeline option) wins
             # over the adapter default: file_parse's ``backend`` kwarg would
             # override options.backend, so pass None when the request already
@@ -237,6 +237,7 @@ class MinerUProcessAdapter:
                 files,
                 options=service_options,
                 backend=backend_override,
+                cancelled=cancelled,
             )
             payloads = self._map_results_back(raw_results, stem_to_index, len(items))
         except Exception:
@@ -296,6 +297,16 @@ class MinerUProcessAdapter:
         started = time.perf_counter()
         try:
             self.ensure_started()
+            with self._process_lock:
+                self._active_leases += 1
+            try:
+                prepare = getattr(self.client_factory(), "prepare", None)
+                if prepare is not None:
+                    prepare()
+            finally:
+                with self._process_lock:
+                    self._active_leases -= 1
+                    self._last_used = time.monotonic()
             status = self.residency_status()
         except Exception:
             logger.exception(

@@ -58,6 +58,46 @@ Supervisor 是进程与协议边界；application/services 负责用例编排；
 
 这也是初学者最值得先读的纵向链，详见 [源码阅读指南](docs/source-reading-guide.md)。
 
+## MinerU 4 配置与运行时边界
+
+Backend 的 MinerU 依赖固定为正式 4.0.2，使用 `mineru.parser.api_server` 的
+`/v1/health`、uploads → parse/jobs → files；取消任务使用 `DELETE /v1/parse/jobs/{id}`。
+成功文件与失败文件分别交付，partial 不伪装为全批成功。输出下载并转换后清理本次创建的文件；
+未确认取消终态时保留输入，交由上游过期机制处理。服务重启或资源不足不会切换 tier。
+
+| 旧设置 | 新行为 |
+| --- | --- |
+| 缺省、hybrid-engine / medium | basic，保持产品默认 |
+| hybrid-engine / high | standard |
+| pipeline、vlm-engine、xhigh、关闭公式/表格、多语言 | 返回迁移错误，要求重新选择 |
+| 0-based 起止页 | 转为 1-based 页范围；缺省全页，不截取前 10 页 |
+| typed mineru 配置 | 保留 flash/basic/standard/advanced、ocr_mode、page_range 和单 language |
+
+非 PDF 仅接受全文件，向上游省略 page_range。language 属服务级设置，不作为逐 job 参数；
+不同语言的任务在服务重启、解析和下载期间串行隔离。原生 Office 文档可能由上游使用无模型提取，
+不能据此宣称扫描 OCR 或 GPU 加速已验证。
+
+结果正文从原生 middle 语义节点提取，不把 structured Markdown 当纯文本再包装；代码说明和脚注保留。
+现有 VibeOCR block 模型将行内字体样式、链接和嵌套列表层级扁平化为可读文本；
+图片/图表识别正文（含其中的 HTML 表格）同样投影为可读文本，保留内容但不提供嵌入表格编辑；
+原生 structured block 保存在 source 中，独立表格仍走既有结构化表格合同，不宣称原样保留全部 Office 排版。
+Word/Excel 导出保留上述回退正文与附属文字；Word 嵌入可用图片，Excel 沿用文本汇总中的图片占位说明。
+
+新配置保存于 `MINERU_HOME/config.yaml`，也支持显式 `MINERU_CONFIG`；安装器为新版本提供独立
+MinerU home，不覆盖旧 `mineru.json` 或旧模型。默认 `model.small_backend: onnx`、
+`model.vlm.engine: llama-cpp`；cu126 profile 额外安装 `[torch]`，只有显式选择
+`small_backend: torch` 才使用该小模型路径。默认不安装 `[full]` / LMDeploy。
+模型继续由 MinerU 原生机制和已选模型源管理，不关闭 TLS 校验。
+
+`ocr.mineru-config.v1` 目录分别报告 tier 的准备状态。包已安装、HTTP health 成功均不足以标记 ready；
+当前进程必须实际完成该 tier 的准备解析。准备结果不跨 Supervisor 重启保留；失败不降为 flash。
+客户端须先按正式 Protocol 公布的生命周期能力完成准备，再重新读取目录、构造 typed 请求。
+
+Paddle 与 Base/RapidOCR/MinerU 使用不同解释器及 site-packages：Paddle 位于 runtime 的
+`engines/paddle`，独立锁固定其 OpenCV contrib 和框架，主环境使用 OpenCV Python。
+两个环境在同一未激活安装候选中构建并分别执行 `pip check`，任一失败不替换原有效 runtime；
+Paddle 推理经私有子进程调用，主进程不导入 Paddle。完整独立组件选择和安装预览属于后续安装策略。
+
 ## 仓库地图
 
 ```text

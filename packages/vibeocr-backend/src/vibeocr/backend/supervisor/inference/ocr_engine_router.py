@@ -107,7 +107,9 @@ class OcrEngineRoutingAdapter:
     def preload(self, pipelines: tuple[str, ...]) -> ResidencyStatus:
         """拆分预加载：OCR 走默认引擎，其余 Paddle 管道走 fallback。"""
         wants_ocr = OCR_PIPELINE_ID in pipelines
-        others = tuple(name for name in pipelines if name != OCR_PIPELINE_ID)
+        others = tuple(
+            name for name in pipelines if name not in {OCR_PIPELINE_ID, "MinerU"}
+        )
         if others:
             self.fallback.preload(others)
         if wants_ocr:

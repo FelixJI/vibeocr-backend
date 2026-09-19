@@ -105,12 +105,12 @@ def test_every_pipeline_has_short_name() -> None:
         assert short, f"{pipeline.name} short_name 为空"
 
 
-def test_preloadable_pipelines_exclude_document_parsing() -> None:
-    """generic preload 排除 MinerU 与 routed OCR；OCR 由 Paddle mode 定位。"""
+def test_preloadable_pipelines_include_document_preparation() -> None:
+    """generic preload 包含 MinerU；routed OCR 仍由 Paddle mode 定位。"""
     preloadable = set(get_preloadable_pipelines())
-    assert OCRPipeline.DOCUMENT_PARSING not in preloadable
+    assert OCRPipeline.DOCUMENT_PARSING in preloadable
     assert OCRPipeline.OCR not in preloadable
-    assert preloadable == set(get_paddle_pipelines())
+    assert preloadable == set(get_paddle_pipelines()) | {OCRPipeline.DOCUMENT_PARSING}
 
 
 def test_is_option_supported_reports_membership() -> None:

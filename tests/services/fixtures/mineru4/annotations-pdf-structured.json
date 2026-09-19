@@ -1,0 +1,184 @@
+{
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "image",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "image body *literal*",
+          "captions": [
+            {
+              "content": "image caption \\*literal\\*"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "image note &lt;b&gt;literal&lt;/b&gt;"
+            }
+          ]
+        },
+        {
+          "type": "chart",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "| Revenue | 42 |\n| --- | --- |",
+          "captions": [
+            {
+              "content": "chart caption \\*literal\\*"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "chart note &lt;b&gt;literal&lt;/b&gt;"
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "| Cell |\n| --- |",
+          "captions": [
+            {
+              "content": "table caption \\*literal\\*"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "table note &lt;b&gt;literal&lt;/b&gt;"
+            }
+          ]
+        },
+        {
+          "type": "equation",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "",
+          "image_source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII="
+        },
+        {
+          "type": "code",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "sub_type": "code",
+          "content": "````markdown\nfirst\n```\n# literal heading\nlast\n````",
+          "captions": [],
+          "footnotes": []
+        },
+        {
+          "type": "table",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "```\nItem  Count\nApple  12\n```",
+          "captions": [
+            {
+              "content": "Fallback caption"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "Fallback note"
+            }
+          ]
+        },
+        {
+          "type": "index",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "- Chapter A ... 1\n- Chapter B ... 2"
+        },
+        {
+          "type": "table",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "",
+          "captions": [
+            {
+              "content": "Image fallback caption"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "Image fallback note"
+            }
+          ],
+          "image_source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII="
+        },
+        {
+          "type": "code",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "sub_type": "code",
+          "content": "```text\n\n```",
+          "captions": [
+            {
+              "content": "Empty code caption"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "Empty code note"
+            }
+          ]
+        },
+        {
+          "type": "ref_text",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "Reference Alpha 2026"
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "file_suffix": "pdf",
+    "producer": {
+      "name": "vibeocr-regression-fixture",
+      "version": "1"
+    }
+  },
+  "is_full_document": true,
+  "extensions": {}
+}

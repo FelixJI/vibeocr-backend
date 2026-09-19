@@ -1,0 +1,60 @@
+{
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "doc_title",
+          "level": 1,
+          "content": "Annual inventory"
+        },
+        {
+          "type": "text",
+          "content": "Inventory records with a table and a product illustration."
+        },
+        {
+          "type": "table",
+          "content": "| Product | Count |\n| --- | --- |\n| Apples | 12 |\n| Pears | 18 |",
+          "captions": [],
+          "footnotes": []
+        },
+        {
+          "type": "image",
+          "content": "",
+          "captions": [
+            {
+              "content": "Figure: blue product sample"
+            }
+          ],
+          "footnotes": [],
+          "image_source": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCADIAUADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3+iiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiqOsaxYaBpU2p6nP5FnBt8yTYzbdzBRwoJ6kdqqMZTkoxV2wL1FcP/AMLh8B/9B3/yUn/+Io/4XD4D/wCg7/5KT/8AxFdn9l47/nzP/wABf+RPPHudxRXD/wDC4fAf/Qd/8lJ//iKP+Fw+A/8AoO/+Sk//AMRR/ZeO/wCfM/8AwF/5Bzx7ncUVw/8AwuHwH/0Hf/JSf/4ij/hcPgP/AKDv/kpP/wDEUf2Xjv8AnzP/AMBf+Qc8e53FFcP/AMLh8B/9B3/yUn/+Io/4XD4D/wCg7/5KT/8AxFH9l47/AJ8z/wDAX/kHPHudxRXD/wDC4fAf/Qd/8lJ//iKP+Fw+A/8AoO/+Sk//AMRR/ZeO/wCfM/8AwF/5Bzx7ncUVw/8AwuHwH/0Hf/JSf/4ij/hcPgP/AKDv/kpP/wDEUf2Xjv8AnzP/AMBf+Qc8e53FFcP/AMLh8B/9B3/yUn/+Io/4XD4D/wCg7/5KT/8AxFH9l47/AJ8z/wDAX/kHPHudxRXD/wDC4fAf/Qd/8lJ//iKP+Fw+A/8AoO/+Sk//AMRR/ZeO/wCfM/8AwF/5Bzx7ncUVw/8AwuHwH/0Hf/JSf/4ij/hcPgP/AKDv/kpP/wDEUf2Xjv8AnzP/AMBf+Qc8e53FFcP/AMLh8B/9B3/yUn/+Io/4XD4D/wCg7/5KT/8AxFH9l47/AJ8z/wDAX/kHPHudxRXD/wDC4fAf/Qd/8lJ//iKP+Fw+A/8AoO/+Sk//AMRR/ZeO/wCfM/8AwF/5Bzx7ncUVw/8AwuHwH/0Hf/JSf/4ij/hcPgP/AKDv/kpP/wDEUf2Xjv8AnzP/AMBf+Qc8e53FFcP/AMLh8B/9B3/yUn/+Io/4XD4D/wCg7/5KT/8AxFH9l47/AJ8z/wDAX/kHPHudxRXD/wDC4fAf/Qd/8lJ//iKP+Fw+A/8AoO/+Sk//AMRR/ZeO/wCfM/8AwF/5Bzx7ncUVw/8AwuHwH/0Hf/JSf/4ij/hcPgP/AKDv/kpP/wDEUf2Xjv8AnzP/AMBf+Qc8e53FFcP/AMLh8B/9B3/yUn/+IrsbK8g1Gwt761k8y2uYlmifBG5GAIODyOCOtY1sJiKCTrQcb901+Y1JPZk9FFFc4wooooAKKKKACuH+MP8AySvWf+2H/o+Ou4rh/jD/AMkr1n/th/6Pjruyv/fqP+OP5omfws+VaKKK/YzzgooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACvsbwX/yInh7/ALBlt/6KWvjmvsbwX/yInh7/ALBlt/6KWvjeMf4FL1f5HRh92blFFFfAHWFFFFABRRRQAVw/xh/5JXrP/bD/ANHx13FcP8Yf+SV6z/2w/wDR8dd2V/79R/xx/NEz+FnyrRRRX7GecFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAV9jeC/8AkRPD3/YMtv8A0UtfHNfY3gv/AJETw9/2DLb/ANFLXxvGP8Cl6v8AI6MPuzcooor4A6wooooAKKKKACuH+MP/ACSvWf8Ath/6PjruK4f4w/8AJK9Z/wC2H/o+Ou7K/wDfqP8Ajj+aJn8LPlWiiiv2M84KKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAr7G8F/8iJ4e/7Blt/6KWvjmvsbwX/yInh7/sGW3/opa+N4x/gUvV/kdGH3ZuUUUV8AdYUUUUAFFFFABXD/ABh/5JXrP/bD/wBHx13FcP8AGH/kles/9sP/AEfHXdlf+/Uf8cfzRM/hZ8q0UUV+xnnBRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFfY3gv/kRPD3/YMtv/AEUtfHNfY3gv/kRPD3/YMtv/AEUtfG8Y/wACl6v8jow+7NyiiivgDrCiiigAooooAK4f4w/8kr1n/th/6PjruK4f4w/8kr1n/th/6Pjruyv/AH6j/jj+aJn8LPlWiiiv2M84KKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAr7G8F/wDIieHv+wZbf+ilr45r7G8F/wDIieHv+wZbf+ilr43jH+BS9X+R0Yfdm5RRRXwB1hRRRQAUUUUAFcP8Yf8Akles/wDbD/0fHXcVw/xh/wCSV6z/ANsP/R8dd2V/79R/xx/NEz+FnyrRRRX7GecFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAV9jeC/+RE8Pf8AYMtv/RS18c19jeC/+RE8Pf8AYMtv/RS18bxj/Aper/I6MPuzcooor4A6wooooAKKKKACuH+MP/JK9Z/7Yf8Ao+Ou4rh/jD/ySvWf+2H/AKPjruyv/fqP+OP5omfws+VaKKK/YzzgooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACvsbwX/wAiJ4e/7Blt/wCilr45r7G8F/8AIieHv+wZbf8Aopa+N4x/gUvV/kdGH3ZuUUUV8AdYUUUUAFFFFABXD/GH/kles/8AbD/0fHXcVw/xh/5JXrP/AGw/9Hx13ZX/AL9R/wAcfzRM/hZ8q0UUV+xnnBRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFfY3gv8A5ETw9/2DLb/0UtfHNfY3gv8A5ETw9/2DLb/0UtfG8Y/wKXq/yOjD7s3KKKK+AOsKKKKACiiigArh/jD/AMkr1n/th/6PjruKyvEnh+08UaBdaNfSTR21zs3tAwDjawYYJBHVR2rqwVWNHFU6s9oyTfoncmSvFo+MqK+jf+FA+Ff+ghrP/f6L/wCN0f8ACgfCv/QQ1n/v9F/8br9E/wBasu7v7jk9hM+cqK+jf+FA+Ff+ghrP/f6L/wCN0f8ACgfCv/QQ1n/v9F/8bo/1qy7u/uD2Ez5yor6N/wCFA+Ff+ghrP/f6L/43R/woHwr/ANBDWf8Av9F/8bo/1qy7u/uD2Ez5yor6N/4UD4V/6CGs/wDf6L/43R/woHwr/wBBDWf+/wBF/wDG6P8AWrLu7+4PYTPnKivo3/hQPhX/AKCGs/8Af6L/AON0f8KB8K/9BDWf+/0X/wAbo/1qy7u/uD2Ez5yor6N/4UD4V/6CGs/9/ov/AI3R/wAKB8K/9BDWf+/0X/xuj/WrLu7+4PYTPnKivo3/AIUD4V/6CGs/9/ov/jdH/CgfCv8A0ENZ/wC/0X/xuj/WrLu7+4PYTPnKivo3/hQPhX/oIaz/AN/ov/jdH/CgfCv/AEENZ/7/AEX/AMbo/wBasu7v7g9hM+cqK+jf+FA+Ff8AoIaz/wB/ov8A43R/woHwr/0ENZ/7/Rf/ABuj/WrLu7+4PYTPnKivo3/hQPhX/oIaz/3+i/8AjdH/AAoHwr/0ENZ/7/Rf/G6P9asu7v7g9hM+cqK+jf8AhQPhX/oIaz/3+i/+N0f8KB8K/wDQQ1n/AL/Rf/G6P9asu7v7g9hM+cqK+jf+FA+Ff+ghrP8A3+i/+N0f8KB8K/8AQQ1n/v8ARf8Axuj/AFqy7u/uD2Ez5yor6N/4UD4V/wCghrP/AH+i/wDjdH/CgfCv/QQ1n/v9F/8AG6P9asu7v7g9hM+cqK+jf+FA+Ff+ghrP/f6L/wCN0f8ACgfCv/QQ1n/v9F/8bo/1qy7u/uD2Ez5yor6N/wCFA+Ff+ghrP/f6L/43R/woHwr/ANBDWf8Av9F/8bo/1qy7u/uD2Ez5yr7G8F/8iJ4e/wCwZbf+ilrhv+FA+Ff+ghrP/f6L/wCN16VpenxaTpNnpsDO0NpAkEbSEFiqKFBOABnA9K+d4izfDY+lCNBu6fVWNqNOUW7luiiivkzcKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigD/2Q=="
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "file_suffix": "docx",
+    "producer": {
+      "name": "mineru",
+      "version": "4.0.2"
+    },
+    "document": {
+      "authors": [
+        "python-docx"
+      ],
+      "description": "generated by python-docx",
+      "created_at": "2013-12-23T23:15:00Z",
+      "modified_at": "2013-12-23T23:15:00Z",
+      "creator_application": "Microsoft Macintosh Word",
+      "page_count": 1,
+      "page_count_kind": "declared"
+    }
+  },
+  "extensions": {
+    "mineru": {
+      "tier": "flash",
+      "parse_mode": "txt"
+    }
+  },
+  "is_full_document": true
+}

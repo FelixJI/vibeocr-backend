@@ -126,10 +126,6 @@ def test_gpu_scope_input_is_source_neutral_and_excludes_document_parsing() -> No
     assert requirements == [
         "-r ../win-x64-base/requirements.in",
         (
-            "paddlepaddle-gpu @ https://paddle-whl.bj.bcebos.com/stable/cu126/"
-            "paddlepaddle-gpu/paddlepaddle_gpu-3.3.1-cp313-cp313-win_amd64.whl"
-        ),
-        (
             "torch @ https://download.pytorch.org/whl/cu126/"
             "torch-2.12.1%2Bcu126-cp313-cp313-win_amd64.whl"
         ),
@@ -147,6 +143,8 @@ def test_gpu_scope_input_is_source_neutral_and_excludes_document_parsing() -> No
         ("win-x64-cpu", "win-x64-cpu"),
         ("win-x64-cu126", "win-x64-cu126"),
         ("win-x64-cu126-gpu", "win-x64-cu126"),
+        ("win-x64-paddle-cpu", "win-x64-paddle-cpu"),
+        ("win-x64-paddle-cu126", "win-x64-paddle-cu126"),
     ],
 )
 def test_committed_runtime_locks_are_source_neutral(
@@ -159,7 +157,12 @@ def test_committed_runtime_locks_are_source_neutral(
         / f"requirements-{directory}.lock"
     )
 
-    validate_requirements_lock(lock, profile=profile)
+    validate_requirements_lock(
+        lock,
+        profile=profile,
+        paddle_isolated=directory
+        in ("win-x64-cpu", "win-x64-cu126", "win-x64-cu126-gpu"),
+    )
 
 
 def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
@@ -188,6 +191,7 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
         "task.progress.v1",
         "ocr.engine-selection.v1",
         "ocr.recognition-modes.v1",
+        "ocr.mineru-config.v1",
         "runtime.download-sources.v1",
         "runtime.component-selection.v1",
     }
@@ -515,3 +519,51 @@ def test_loader_rejects_install_scope_lock_sha_mismatch(tmp_path: Path) -> None:
 
     with pytest.raises(ManifestError, match="lock SHA-256 mismatch"):
         load_runtime_manifest(manifest_path)
+
+
+def test_isolated_paddle_locks_are_release_bound_and_keep_versions(tmp_path):
+    inputs = _inputs(tmp_path / "inputs")
+    profiles = Path(__file__).parents[2] / "packages/vibeocr-backend/runtime-profiles"
+    inputs["cu126_gpu_lock"].write_bytes(
+        (
+            profiles / "win-x64-cu126-gpu/requirements-win-x64-cu126-gpu.lock"
+        ).read_bytes()
+    )
+    paddle_locks = {}
+    for variant in ("cpu", "cu126"):
+        inputs[f"{variant}_lock"].write_bytes(
+            (
+                profiles / f"win-x64-{variant}/requirements-win-x64-{variant}.lock"
+            ).read_bytes()
+        )
+        paddle_locks[f"win-x64-{variant}"] = (
+            profiles
+            / f"win-x64-paddle-{variant}/requirements-win-x64-paddle-{variant}.lock"
+        )
+    path = build_runtime_manifest(
+        **inputs,
+        paddle_locks=paddle_locks,
+        backend_version="0.7.0",
+        python_version="3.13.15",
+        python_source_url=(
+            "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/"
+            "cpython-3.13.15+20260807-x86_64-pc-windows-msvc-install_only.tar.gz"
+        ),
+        source_commit="a" * 40,
+        build_workflow="tests",
+        output_dir=tmp_path / "output",
+    )
+    manifest = load_runtime_manifest(path)
+    profile = manifest.profiles["win-x64-cpu"]
+    paddle = profile.scopes[0].paddle_environment
+    assert paddle is not None
+    assert paddle.lock_path.parent == path.parent
+    assert (
+        next(c.version for c in profile.components if c.component_id == "paddleocr-cpu")
+        == "3.7.0"
+    )
+    assert "opencv-python==" not in paddle.lock_path.read_text()
+    assert "opencv-contrib-python==" not in profile.lock_path.read_text()
+    paddle.lock_path.write_text("changed")
+    with pytest.raises(ManifestError, match="Paddle environment lock SHA-256"):
+        load_runtime_manifest(path)

@@ -281,29 +281,60 @@ class _RecordingClient:
 
 
 def test_recognize_many_forwards_pipeline_selection_options() -> None:
-    from vibeocr.backend.models.ocr_options import OCROptions
+    from vibeocr.runtime_contracts import MineruConfig, MineruTier, PipelineSelection
+
+    fake = _RecordingClient()
+    adapter = MinerUProcessAdapter(client_factory=lambda: fake)
+    config = MineruConfig(tier=MineruTier.STANDARD, language="ch_server")
+    selection = PipelineSelection(pipeline_id="MinerU", mineru=config)
+
+    def cancelled():
+        return False
+
+    results = adapter.recognize_many(
+        [_raw_item("it-0", "a.pdf", b"a")], options=selection, cancelled=cancelled
+    )
+    assert results[0]["markdown"] == "md"
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["options"] is config
+    assert fake.calls[0]["cancelled"] is cancelled
+    adapter.close()
+
+
+def test_legacy_pipeline_rejected_before_starting_service() -> None:
+    from vibeocr.backend.services.mineru_config import MineruConfigError
     from vibeocr.runtime_contracts import PipelineSelection
 
     fake = _RecordingClient()
     adapter = MinerUProcessAdapter(client_factory=lambda: fake)
-    selection = PipelineSelection(
-        pipeline_id="MinerU",
-        options={"lang_list": ["ch_server"], "backend": "pipeline"},
-    )
+    with pytest.raises(MineruConfigError):
+        adapter.recognize_many(
+            [_raw_item("it-0", "a.pdf", b"a")],
+            options=PipelineSelection("MinerU", options={"backend": "pipeline"}),
+        )
+    assert not adapter._process_started
+    assert fake.calls == []
 
+
+def test_native_stems_map_back_in_order() -> None:
+    from pathlib import Path
+
+    class NativeClient:
+        def file_parse(self, files, **kwargs):
+            return {
+                Path(name).stem: {"markdown": data.decode()}
+                for name, data in reversed(files)
+            }
+
+    adapter = MinerUProcessAdapter(client_factory=NativeClient)
     results = adapter.recognize_many(
-        [_raw_item("it-0", "a.pdf", b"a")], options=selection
+        [
+            _raw_item("it-0", "copy.pdf", b"first"),
+            _raw_item("it-1", "copy.pdf", b"second"),
+        ]
     )
-
-    assert results[0]["markdown"] == "md"
-    assert len(fake.calls) == 1
-    forwarded = fake.calls[0]["options"]
-    assert isinstance(forwarded, OCROptions)
-    assert forwarded.lang_list == ["ch_server"]
-    assert forwarded.backend == "pipeline"
-    # A request-provided backend must not be overridden by the adapter
-    # default (file_parse's backend kwarg would clobber options.backend).
-    assert fake.calls[0]["backend"] is None
+    assert [item["markdown"] for item in results] == ["first", "second"]
+    adapter.close()
 
 
 def test_recognize_many_keeps_adapter_backend_without_options() -> None:

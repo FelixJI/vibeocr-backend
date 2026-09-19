@@ -10,7 +10,6 @@ import pytest
 # mineru_service 依赖 httpx；缺该依赖时整文件跳过而非 collection error
 pytest.importorskip("httpx", reason="httpx not installed")
 
-from vibeocr.backend.models.ocr_result import OCRResult
 from vibeocr.backend.services.mineru_service import MinerUService
 
 
@@ -56,221 +55,6 @@ class TestMinerUService:
         mock_guard.close.assert_called_once()
         assert MinerUService._job_guard is None
 
-    def test_parse_returns_ocr_result(self):
-        """调用 parse 应返回 OCRResult"""
-        service = MinerUService.__new__(MinerUService)
-        service._api_url = "http://127.0.0.1:9999"
-        service._api_process = None
-
-        api_response = _make_api_response(
-            md_content="# Test\nHello world",
-            content_list=[{"type": "text", "text": "Hello world"}],
-        )
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = api_response
-        mock_resp.raise_for_status = MagicMock()
-
-        with (
-            patch.object(service, "_ensure_api_running"),
-            patch("vibeocr.backend.services.mineru_service.httpx") as mock_httpx,
-        ):
-            mock_httpx.post.return_value = mock_resp
-            result = service.parse(b"fake_pdf_data", "application/pdf")
-
-        assert isinstance(result, OCRResult)
-        assert "Hello world" in result.raw_text
-        assert result.pipeline_type == "MinerU"
-
-    def test_parse_with_images(self):
-        """解析包含图片的响应"""
-        img_bytes = b"\x89PNG\r\n\x1a\nfake"
-        b64_img = base64.b64encode(img_bytes).decode()
-
-        service = MinerUService.__new__(MinerUService)
-        service._api_url = "http://127.0.0.1:9999"
-        service._api_process = None
-
-        api_response = _make_api_response(
-            md_content="# Test",
-            images={"img_0.png": f"data:image/png;base64,{b64_img}"},
-        )
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = api_response
-        mock_resp.raise_for_status = MagicMock()
-
-        with (
-            patch.object(service, "_ensure_api_running"),
-            patch("vibeocr.backend.services.mineru_service.httpx") as mock_httpx,
-        ):
-            mock_httpx.post.return_value = mock_resp
-            result = service.parse(b"fake_pdf_data", "application/pdf")
-
-        assert "img_0.png" in result.images
-        assert result.images["img_0.png"] == img_bytes
-
-    def test_parse_sends_correct_params(self):
-        """parse 应发送正确的 API 参数"""
-        service = MinerUService.__new__(MinerUService)
-        service._api_url = "http://127.0.0.1:9999"
-        service._api_process = None
-
-        api_response = _make_api_response(md_content="# Result")
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = api_response
-        mock_resp.raise_for_status = MagicMock()
-
-        with (
-            patch.object(service, "_ensure_api_running"),
-            patch("vibeocr.backend.services.mineru_service.httpx") as mock_httpx,
-        ):
-            mock_httpx.post.return_value = mock_resp
-            service.parse(b"fake_image_data", "image/png")
-
-        call_args = mock_httpx.post.call_args
-        assert call_args.kwargs["files"]["files"][0] == "input.png"
-        assert call_args.kwargs["data"]["return_md"] == "true"
-        assert call_args.kwargs["data"]["return_content_list"] == "true"
-        assert call_args.kwargs["data"]["return_images"] == "true"
-
-    def test_parse_sends_lang_list(self):
-        """parse 应发送 lang_list 参数"""
-        service = MinerUService.__new__(MinerUService)
-        service._api_url = "http://127.0.0.1:9999"
-        service._api_process = None
-
-        api_response = _make_api_response(md_content="# R")
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = api_response
-
-        from vibeocr.backend.core.pipelines import OCRPipeline
-        from vibeocr.backend.models.ocr_options import OCROptions
-
-        options = OCROptions(
-            pipeline=OCRPipeline.DOCUMENT_PARSING,
-            lang_list=["zh", "en"],
-            start_page_id=2,
-            end_page_id=10,
-        )
-
-        with (
-            patch.object(service, "_ensure_api_running"),
-            patch("vibeocr.backend.services.mineru_service.httpx") as mock_httpx,
-        ):
-            mock_httpx.post.return_value = mock_resp
-            service.parse(b"data", "application/pdf", options)
-
-        data = mock_httpx.post.call_args.kwargs["data"]
-        assert data["lang_list"] == "zh,en"
-        assert data["start_page_id"] == "2"
-        assert data["end_page_id"] == "10"
-
-    def test_parse_empty_lang_list_not_sent(self):
-        """空 lang_list 不应发送 lang_list 参数（让 mineru-api 用默认 ["ch"]）。
-
-        回归 bug：旧实现发 ``lang_list=""``，FastAPI 表单解析把空串解析成 ``[""]``
-        （含一个空字符串的列表），过不了 ``validate_public_ocr_lang``，报
-        ``Language  not supported``（注意报错里两个空格 = 空字符串）。正确做法是
-        **完全不传该字段**，让 mineru-api 用默认值 ``["ch"]``。
-        """
-        service = MinerUService.__new__(MinerUService)
-        service._api_url = "http://127.0.0.1:9999"
-        service._api_process = None
-
-        api_response = _make_api_response(md_content="# R")
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = api_response
-
-        from vibeocr.backend.models.ocr_options import OCROptions
-
-        options = OCROptions(lang_list=[])
-
-        with (
-            patch.object(service, "_ensure_api_running"),
-            patch("vibeocr.backend.services.mineru_service.httpx") as mock_httpx,
-        ):
-            mock_httpx.post.return_value = mock_resp
-            service.parse(b"data", "application/pdf", options)
-
-        data = mock_httpx.post.call_args.kwargs["data"]
-        # 关键：lang_list 字段必须不存在（而非空串），让 mineru-api 走默认 ["ch"]
-        assert "lang_list" not in data, (
-            "空 lang_list 时不应发送该字段：发 lang_list='' 会被 mineru-api "
-            "解析成 [''] 并报 Language not supported"
-        )
-
-    def test_parse_checks_response_status(self):
-        """非 completed 状态应抛异常"""
-        service = MinerUService.__new__(MinerUService)
-        service._api_url = "http://127.0.0.1:9999"
-        service._api_process = None
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"status": "failed", "results": {}}
-
-        with (
-            patch.object(service, "_ensure_api_running"),
-            patch("vibeocr.backend.services.mineru_service.httpx") as mock_httpx,
-        ):
-            mock_httpx.post.return_value = mock_resp
-            with pytest.raises(RuntimeError, match="failed"):
-                service.parse(b"data", "application/pdf")
-
-    def test_default_backend_is_hybrid(self):
-        """默认后端应为 hybrid-engine"""
-        service = MinerUService.__new__(MinerUService)
-        service._api_url = "http://127.0.0.1:9999"
-        service._api_process = None
-
-        api_response = _make_api_response(md_content="# R")
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = api_response
-
-        with (
-            patch.object(service, "_ensure_api_running"),
-            patch("vibeocr.backend.services.mineru_service.httpx") as mock_httpx,
-        ):
-            mock_httpx.post.return_value = mock_resp
-            service.parse(b"data", "application/pdf")
-
-        data = mock_httpx.post.call_args.kwargs["data"]
-        assert data["backend"] == "hybrid-engine"
-        assert data["effort"] == "medium"
-
-    def test_fallback_chain_starts_from_hybrid(self):
-        """回退链应从 hybrid-engine 开始"""
-        service = MinerUService.__new__(MinerUService)
-        service._api_url = "http://127.0.0.1:9999"
-        service._api_process = None
-
-        error_resp = MagicMock()
-        error_resp.status_code = 500
-        error_resp.json.return_value = {"message": "fail"}
-        error_resp.text = '{"message": "fail"}'
-
-        ok_resp = MagicMock()
-        ok_resp.status_code = 200
-        ok_resp.json.return_value = _make_api_response(md_content="# OK")
-
-        with (
-            patch.object(service, "_ensure_api_running"),
-            patch("vibeocr.backend.services.mineru_service.httpx") as mock_httpx,
-        ):
-            mock_httpx.post.side_effect = [error_resp, ok_resp]
-            service.parse(b"data", "application/pdf")
-
-        calls = mock_httpx.post.call_args_list
-        assert calls[0].kwargs["data"]["backend"] == "hybrid-engine"
-        assert calls[1].kwargs["data"]["backend"] == "vlm-engine"
-
     def test_ensure_api_running_starts_process(self):
         """_ensure_api_running 应在 API 未运行时启动进程"""
         MinerUService._api_url = ""
@@ -285,6 +69,7 @@ class TestMinerUService:
 
         mock_health_resp = MagicMock()
         mock_health_resp.status_code = 200
+        mock_health_resp.json.return_value = {"version": "4.0.2"}
 
         with (
             patch.object(
@@ -328,6 +113,7 @@ class TestMinerUService:
 
         mock_health_resp = MagicMock()
         mock_health_resp.status_code = 200
+        mock_health_resp.json.return_value = {"version": "4.0.2"}
 
         with (
             patch.object(
@@ -350,7 +136,7 @@ class TestMinerUService:
 
         cmd = mock_popen.call_args[0][0]
         assert "-m" in cmd
-        assert "mineru.cli.fast_api" in cmd
+        assert "mineru.parser.api_server" in cmd
         assert "--host" in cmd
         assert "--port" in cmd
 

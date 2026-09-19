@@ -1,44 +1,44 @@
 {
   "artifacts": {
     "SBOM.spdx.json": {
-      "sha256": "54cbd74c934e68ce3a64ce9b32b5438041cae21cf8b9d2936b3acc16bbc5f3a2",
+      "sha256": "fbac9ec68b433b524e73722aaaf7c98b82e0e258dac33081bf44c8946dad4a33",
       "size": 5823
     },
-    "VibeOCR.Runtime.Client.2.8.0.nupkg": {
-      "sha256": "50f583d8b633175f38c60f50dac648b23a3da29f1e1536e89bb9e69f5ff66d52",
-      "size": 19444
+    "VibeOCR.Runtime.Client.2.8.2.nupkg": {
+      "sha256": "04c551b718dadf9095a183f040f52f2498993d0591faafb86e2f5f58ffa9541c",
+      "size": 26157
     },
-    "VibeOCR.Runtime.Contracts.2.8.0.nupkg": {
-      "sha256": "18a64638cfbb872ce0c3643fb6fb8f7a3abe6fec0181b9f759017094aa1260a9",
-      "size": 178393
+    "VibeOCR.Runtime.Contracts.2.8.2.nupkg": {
+      "sha256": "1b75605f7086d95b75eea21e7342937aeb7d69b437f0097b8da575a39b9c0dae",
+      "size": 188593
     },
     "build-identity.json": {
-      "sha256": "f93fa26bfccb81586db1e064e134baee27bd7ad93f64549b77329f4ed032cf8a",
+      "sha256": "26d219194162db93a634c5700944c3db42d7ad38eec307b74e1cafe8895a1c3c",
       "size": 645
     },
-    "vibeocr-runtime-golden-2.8.0.zip": {
-      "sha256": "8679d00ad5be1460a752d9086f2396357a75c0aacd535543c9347e013545c90a",
-      "size": 3879
+    "vibeocr-runtime-golden-2.8.2.zip": {
+      "sha256": "ecae7002d5d9c0d1cf3ab6c46f32fe793ee24115b2b2dd41afbe8dbf8d9e7f0c",
+      "size": 4208
     },
-    "vibeocr-runtime-openapi-2.8.0.yaml": {
-      "sha256": "2738baf474fe27941098ee43211f6e997bb98a96598ac22d2c0da2afe051c782",
-      "size": 141847
+    "vibeocr-runtime-openapi-2.8.2.yaml": {
+      "sha256": "cb1396009de14eeeb55295e4474d252ef4fc6b42ce2153a35ec6e8fdf113d041",
+      "size": 150189
     },
-    "vibeocr-runtime-schemas-2.8.0.zip": {
-      "sha256": "6624bd38bcab7c5c65caf3c9ec3831a4556bddebb461915104d8e99b201b472b",
-      "size": 12539
+    "vibeocr-runtime-schemas-2.8.2.zip": {
+      "sha256": "16bd591aefd3d16bc9d7fc3560372872ad04b1ca0d846ea92d6ceeebb45bee3a",
+      "size": 13179
     },
-    "vibeocr_runtime_client-2.8.0-py3-none-any.whl": {
-      "sha256": "be5c4ba381434579e8f7b0031323ed9307891b247cff54868f9f3489dfe19c41",
-      "size": 27140
+    "vibeocr_runtime_client-2.8.2-py3-none-any.whl": {
+      "sha256": "5a1ee3f0b9c46655dfe6a4b3f82738bdb218091ba014ae4313f5d777cb399283",
+      "size": 32454
     },
-    "vibeocr_runtime_contracts-2.8.0-py3-none-any.whl": {
-      "sha256": "794ec34bd3e2fac71ded25d55c18207529f61566c4dafb272915925c221e3937",
-      "size": 155924
+    "vibeocr_runtime_contracts-2.8.2-py3-none-any.whl": {
+      "sha256": "1e57a7b1b459b72c64d52e78567c190e14df6a1001a4e984a917ff0473aa9d30",
+      "size": 167633
     }
   },
-  "manifest_sha256": "912d810adf00af74f56b991f7ac7c8a29c82472591abed5d7484edf3342dc489",
+  "manifest_sha256": "1ebca73ca8df258ef8de4bdf75d5176a100465039fabbd6be59a4320f1153db9",
   "repository": "FelixJI/vibeocr-protocol",
   "schema_version": 1,
-  "version": "2.8.0"
+  "version": "2.8.2"
 }

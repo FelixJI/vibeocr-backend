@@ -456,8 +456,8 @@ async def test_preload_and_release_enforce_recognition_mode_lifecycle(
 
     assert paddle.status_code == 426, paddle.text
     assert paddle.json()["code"] == "RECOGNITION_MODE_UNAVAILABLE"
-    assert mineru.status_code == 400
-    assert mineru.json()["code"] == "RECOGNITION_MODE_LIFECYCLE_UNSUPPORTED"
+    assert mineru.status_code == 426
+    assert mineru.json()["code"] == "RECOGNITION_MODE_UNAVAILABLE"
     assert rapid_release.status_code == 400
     assert rapid_release.json()["code"] == ("RECOGNITION_MODE_LIFECYCLE_UNSUPPORTED")
     del executor
@@ -482,3 +482,95 @@ async def test_residency_response_keeps_protocol_resource_identity(
     assert entry["recognition_mode"] == "mineru_document"
     assert entry["resource_kind"] == "process"
     assert entry["resource_id"] == "mineru-api"
+
+
+@pytest.mark.parametrize("fail_prepare", [False, True])
+async def test_mineru_prepare_refresh_and_typed_submit(
+    tmp_path, monkeypatch, fail_prepare
+):
+    from vibeocr.backend.services import mineru_readiness as readiness
+    from vibeocr.backend.supervisor.inference.recognition_modes import (
+        ModeAvailability,
+        RecognitionModeRegistry,
+    )
+    from vibeocr.runtime_contracts import MineruTier
+
+    monkeypatch.setattr(readiness.metadata, "version", lambda _: "4.0.2")
+    monkeypatch.setattr(readiness, "_ready", set())
+    module, executor = _module(tmp_path, None)
+    module.recognition_mode_registry = RecognitionModeRegistry(
+        availability_probe=lambda definition: ModeAvailability("ready")
+    )
+    calls = []
+
+    def prepare(pipelines):
+        calls.append(pipelines)
+        readiness.mark_executed(MineruTier.FLASH)
+        if fail_prepare:
+            readiness.mark_failed(MineruTier.BASIC)
+            raise RuntimeError("basic preparation failed")
+        readiness.mark_executed(MineruTier.BASIC)
+        return executor.residency_status()
+
+    monkeypatch.setattr(executor, "preload", prepare)
+    manifest = json.loads(_manifest(pipeline="MinerU"))
+    manifest["kind"] = "mineru_parse"
+    manifest["pipeline"]["mineru"] = {"tier": "basic"}
+    token = generate_session_token()
+    async with _client(create_app(module, token), token) as http:
+        before = await _submit(http, json.dumps(manifest))
+        assert before.status_code == 428, before.text
+        assert before.json()["code"] == "MINERU_TIER_PREPARATION_REQUIRED"
+        prepared = await http.post(
+            "/v2/runtime/preload",
+            json={"pipelines": ["MinerU"], "recognition_modes": ["mineru_document"]},
+        )
+        assert prepared.status_code == (500 if fail_prepare else 200), prepared.text
+        health = await http.get("/v2/health")
+        descriptor = next(
+            item
+            for item in health.json()["capability_descriptors"]
+            if item["name"] == "ocr.mineru-config.v1"
+        )
+        tiers = {
+            item["id"]: item["availability"]
+            for item in descriptor["mineru_config_catalog"]["tiers"]
+        }
+        assert tiers["flash"] == "ready"
+        assert tiers["basic"] == ("preparation_required" if fail_prepare else "ready")
+        assert tiers["advanced"] == "preparation_required"
+        after = await _submit(http, json.dumps(manifest))
+        assert after.status_code == (428 if fail_prepare else 200), after.text
+    assert calls == [("MinerU",)]
+    if not fail_prepare:
+        assert after.json()["job_id"]
+
+
+async def test_mineru_only_composition_preloads_real_service_interface(
+    tmp_path, monkeypatch
+):
+    from vibeocr.backend.services.mineru_service import MinerUService
+
+    calls = []
+    monkeypatch.setattr(MinerUService, "_ensure_api_running", lambda self: None)
+    monkeypatch.setattr(MinerUService, "prepare", lambda self: calls.append("prepare"))
+    monkeypatch.setattr(MinerUService, "shutdown", lambda self: None)
+    module, handle = build_supervisor(
+        stager_root=tmp_path / "staging",
+        use_real_paddle=False,
+        use_mineru=True,
+        engine_registry=OcrEngineRegistry([]),
+    )
+    try:
+        async with _client(create_app(module, handle.token), handle.token) as http:
+            response = await http.post(
+                "/v2/runtime/preload",
+                json={
+                    "pipelines": ["MinerU"],
+                    "recognition_modes": ["mineru_document"],
+                },
+            )
+        assert response.status_code == 200, response.text
+        assert calls == ["prepare"]
+    finally:
+        module.shutdown_now()

@@ -170,13 +170,66 @@ class ExportService:
         return True
 
     @staticmethod
+    def _office_blocks(result: OCRResult) -> list[dict]:
+        """把扩展结果块映射到两种 Office 写入器共同支持的正文与图片。"""
+        blocks: list[dict] = []
+        for block in getattr(result, "content_list", []) or []:
+            kind = block.get("type", "text")
+            if kind == "index":
+                blocks.append({**block, "type": "text"})
+            elif (
+                kind in {"chart", "table_unparsed"}
+                or (
+                    kind == "image"
+                    and ("image_body" in block or "image_footnote" in block)
+                )
+                or (
+                    kind == "code"
+                    and ("code_caption" in block or "code_footnote" in block)
+                )
+            ):
+                prefix = "table" if kind == "table_unparsed" else kind
+                for caption in block.get(f"{prefix}_caption") or []:
+                    if caption:
+                        blocks.append({"type": "text", "text": caption})
+                if block.get("img_path"):
+                    blocks.append(
+                        {
+                            "type": "image",
+                            "img_path": block["img_path"],
+                            "text": "表格图片" if prefix == "table" else "图片",
+                        }
+                    )
+                body = (
+                    block.get("text", "")
+                    if kind == "table_unparsed"
+                    else block.get(f"{kind}_body", "")
+                )
+                if body:
+                    blocks.append(
+                        {"type": "code", "code_body": body}
+                        if kind == "code"
+                        else {"type": "text", "text": body}
+                    )
+                for footnote in block.get(f"{prefix}_footnote") or []:
+                    if footnote:
+                        blocks.append({"type": "text", "text": footnote})
+            elif kind == "equation" and not block.get("text") and block.get("img_path"):
+                blocks.append(
+                    {"type": "image", "img_path": block["img_path"], "text": "公式图片"}
+                )
+            else:
+                blocks.append(block)
+        return blocks
+
+    @staticmethod
     def _export_docx(result: OCRResult, output_path: Path) -> bool:
         """导出为 Word 文档"""
         from docx import Document  # type: ignore[import-untyped]
         from docx.shared import Inches, Pt  # type: ignore[import-untyped]
 
         doc = Document()
-        content_list = getattr(result, "content_list", [])
+        content_list = ExportService._office_blocks(result)
         table_written = False
         written_table_htmls: set[str] = set()
 
@@ -324,7 +377,7 @@ class ExportService:
         ws_text = wb.active
         if ws_text is None:
             ws_text = wb.create_sheet("Sheet")
-        content_list = getattr(result, "content_list", [])
+        content_list = ExportService._office_blocks(result)
 
         table_count = 0
         has_text = False

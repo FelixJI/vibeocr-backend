@@ -470,7 +470,7 @@ def test_ensure_is_atomic_and_idempotent(tmp_path: Path) -> None:
     )
     assert first.environment["PIP_CONFIG_FILE"] == os.devnull
     assert first.environment["PYTHONNOUSERSITE"] == "1"
-    assert Path(first.environment["MINERU_TOOLS_CONFIG_JSON"]).parent.is_dir()
+    assert Path(first.environment["MINERU_HOME"]).is_dir()
     assert first.environment["VIBEOCR_RUNTIME_ACCELERATOR"] == "cpu"
     assert first.environment["VIBEOCR_USE_GPU"] == "false"
 
@@ -2489,8 +2489,8 @@ def test_document_parsing_ensure_passes_selected_model_source_to_native_clients(
     assert launch.environment["PIP_INDEX_URL"] == (
         "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
     )
-    mineru_config = Path(launch.environment["MINERU_TOOLS_CONFIG_JSON"])
-    assert mineru_config == state_root / "config" / "mineru.json"
+    mineru_config = Path(launch.environment["MINERU_HOME"]) / "config.yaml"
+    assert mineru_config == state_root / "mineru4" / "config.yaml"
     assert mineru_config.parent.is_dir()
     assert not mineru_config.exists()
     assert {
@@ -2662,3 +2662,49 @@ class TestOnlineArtifactDownload:
             reporter,
         )
         assert reporter.calls == [("items", 0, 1), ("items", 1, 1)]
+
+
+def test_paddle_environment_installs_in_separate_interpreter_and_shared_cache(
+    tmp_path, monkeypatch
+):
+    from dataclasses import replace
+
+    from vibeocr.backend import runtime_installer as installer
+    from vibeocr.backend.runtime_manifest import PaddleEnvironment
+
+    manifest_path, _ = _release(tmp_path / "release", with_base_pack=False)
+    manifest = load_runtime_manifest(manifest_path)
+    paddle_lock = tmp_path / "paddle.lock"
+    paddle_lock.write_text("paddlepaddle==3.3.1")
+    scope = replace(
+        manifest.profiles["win-x64-cpu"].scopes[0],
+        paddle_environment=PaddleEnvironment(paddle_lock, "a" * 64),
+    )
+    root = tmp_path / "candidate"
+    calls = []
+    caches = []
+
+    def extract(_archive, destination, **kwargs):
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "python.exe").write_bytes(b"python")
+
+    def run(command, **kwargs):
+        calls.append(command)
+
+    def prepare(python, lock, endpoint, cache, reporter, env):
+        caches.append(cache)
+        return tmp_path
+
+    monkeypatch.setattr(installer, "_extract_python_archive", extract)
+    monkeypatch.setattr(installer, "_run_install_command", run)
+    monkeypatch.setattr(installer, "_prepare_online_artifacts", prepare)
+    installer._default_install_runner(root, manifest, scope, _pypi_source())
+    checks = [c for c in calls if c[1:] == ["-m", "pip", "check"]]
+    assert [c[0] for c in checks] == [
+        str(root / "python.exe"),
+        str(root / "engines/paddle/python.exe"),
+    ]
+    assert caches[0] == caches[1]
+    paddle_install = next(c for c in calls if str(paddle_lock) in c)
+    assert paddle_install[0] == str(root / "engines/paddle/python.exe")
+    assert str(scope.lock_path) not in paddle_install

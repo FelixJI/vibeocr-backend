@@ -820,6 +820,18 @@ def probe_runtime_components(
     *,
     profile_id: str = "win-x64-cpu",
 ) -> dict[str, bool]:
+    paddle_root = runtime_root / "engines" / "paddle"
+    paddle_ids = tuple(x for x in component_ids if x.startswith("paddleocr-"))
+    if paddle_ids and paddle_root.is_dir():
+        host_ids = tuple(x for x in component_ids if x not in paddle_ids)
+        return {
+            **(
+                probe_runtime_components(runtime_root, host_ids, profile_id=profile_id)
+                if host_ids
+                else {}
+            ),
+            **probe_runtime_components(paddle_root, paddle_ids, profile_id=profile_id),
+        }
     python = next(
         (
             candidate
@@ -998,6 +1010,11 @@ def _component_statuses(
         marker, manifest=manifest, accelerator=descriptor.accelerator
     )
     versions = _distribution_versions(runtime_root) if runtime_root is not None else {}
+    paddle_versions = (
+        _distribution_versions(runtime_root / "engines" / "paddle")
+        if runtime_root is not None and (runtime_root / "engines" / "paddle").is_dir()
+        else versions
+    )
     statuses: list[dict[str, Any]] = []
     for component in descriptor.components:
         if required_ids is not None and component.component_id not in required_ids:
@@ -1030,7 +1047,14 @@ def _component_statuses(
             distribution = runtime_component_binding(
                 descriptor.profile_id, component.component_id
             ).distribution
-            actual_version = versions.get(re.sub(r"[-_.]+", "-", distribution).lower())
+            environment_versions = (
+                paddle_versions
+                if component.component_id.startswith("paddleocr-")
+                else versions
+            )
+            actual_version = environment_versions.get(
+                re.sub(r"[-_.]+", "-", distribution).lower()
+            )
             if actual_version is None:
                 actual_state = "missing"
                 drift_reason = "missing"

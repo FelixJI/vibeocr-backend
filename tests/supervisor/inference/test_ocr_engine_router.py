@@ -226,7 +226,7 @@ class TestLifecycle:
         router, _ = _router([rapid], fallback)
         router.preload(("MinerU",))
         assert rapid.preload_calls == []
-        assert fallback.preload_calls == [("MinerU",)]
+        assert fallback.preload_calls == []
 
     def test_residency_and_settings_delegate_to_fallback(self) -> None:
         from vibeocr.runtime_contracts import ResidencyStatus, SettingsSnapshot
