@@ -1,0 +1,130 @@
+{
+  "schema": "docvortex.middle",
+  "schema_version": "2.0",
+  "metadata": {
+    "file_suffix": "pdf",
+    "producer": {
+      "name": "vibeocr-regression-fixture",
+      "version": "1"
+    }
+  },
+  "is_full_document": true,
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "image",
+          "index": 0,
+          "content": [
+            {
+              "type": "image_body",
+              "index": 0,
+              "content": ""
+            },
+            {
+              "type": "image_caption",
+              "index": 1,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "image caption *literal*"
+                }
+              ]
+            },
+            {
+              "type": "image_footnote",
+              "index": 2,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "image note <b>literal</b>"
+                }
+              ]
+            }
+          ],
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "chart",
+          "index": 3,
+          "content": [
+            {
+              "type": "chart_body",
+              "index": 3,
+              "content": ""
+            },
+            {
+              "type": "chart_caption",
+              "index": 4,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "chart caption *literal*"
+                }
+              ]
+            },
+            {
+              "type": "chart_footnote",
+              "index": 5,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "chart note <b>literal</b>"
+                }
+              ]
+            }
+          ],
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "table",
+          "index": 6,
+          "content": [
+            {
+              "type": "table_body",
+              "index": 6,
+              "content": "<table><tr><td>Cell</td></tr></table>"
+            },
+            {
+              "type": "table_caption",
+              "index": 7,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "table caption *literal*"
+                }
+              ]
+            },
+            {
+              "type": "table_footnote",
+              "index": 8,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "table note <b>literal</b>"
+                }
+              ]
+            }
+          ],
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ]
+        }
+      ]
+    }
+  ]
+}

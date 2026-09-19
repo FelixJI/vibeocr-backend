@@ -1,0 +1,60 @@
+{
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "image",
+          "content": "",
+          "captions": [
+            {
+              "content": "image caption \\*literal\\*"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "image note &lt;b&gt;literal&lt;/b&gt;"
+            }
+          ]
+        },
+        {
+          "type": "chart",
+          "content": "",
+          "captions": [
+            {
+              "content": "chart caption \\*literal\\*"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "chart note &lt;b&gt;literal&lt;/b&gt;"
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "content": "| Cell |\n| --- |",
+          "captions": [
+            {
+              "content": "table caption \\*literal\\*"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "table note &lt;b&gt;literal&lt;/b&gt;"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "file_suffix": "docx",
+    "producer": {
+      "name": "vibeocr-regression-fixture",
+      "version": "1"
+    }
+  },
+  "is_full_document": true,
+  "extensions": {}
+}

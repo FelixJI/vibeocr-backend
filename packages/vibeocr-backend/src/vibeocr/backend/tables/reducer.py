@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import re
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -176,10 +177,14 @@ def build_result_projections(
             table = table_model_from_block(block)
             if include_markdown:
                 markdown_projection = table_model_to_markdown(table)
-                markdown_parts.extend(_text_items(block.get("table_caption")))
+                markdown_parts.extend(
+                    map(_markdown_text, _text_items(block.get("table_caption")))
+                )
                 if markdown_projection.text:
                     markdown_parts.append(markdown_projection.text)
-                markdown_parts.extend(_text_items(block.get("table_footnote")))
+                markdown_parts.extend(
+                    map(_markdown_text, _text_items(block.get("table_footnote")))
+                )
             html_parts.extend(
                 f'<p class="table-caption">{_escaped_text(caption)}</p>'
                 for caption in _text_items(block.get("table_caption"))
@@ -194,15 +199,19 @@ def build_result_projections(
             captions = _text_items(
                 block.get("image_caption") or block.get("chart_caption")
             )
+            footnotes = _text_items(
+                block.get("image_footnote") or block.get("chart_footnote")
+            )
             source = (
                 block.get("img_path") or block.get("image_path") or block.get("src")
             )
             if include_markdown:
-                caption_text = " ".join(captions)
+                caption_text = _markdown_text(" ".join(captions))
                 if source:
                     markdown_parts.append(f"![{caption_text}]({source})")
                 else:
-                    markdown_parts.extend(captions)
+                    markdown_parts.extend(map(_markdown_text, captions))
+                markdown_parts.extend(map(_markdown_text, footnotes))
             html_parts.extend(
                 f'<p class="image-caption">{_escaped_text(caption)}</p>'
                 for caption in captions
@@ -211,12 +220,18 @@ def build_result_projections(
                 html_parts.append(
                     f'<img src="{html.escape(str(source), quote=True)}" alt="">'
                 )
+            html_parts.extend(
+                f'<p class="image-footnote">{_escaped_text(note)}</p>'
+                for note in footnotes
+            )
             continue
         if block_type == "list":
             items = _text_items(block.get("list_items"))
             if items:
                 if include_markdown:
-                    markdown_parts.append("\n".join(f"- {item}" for item in items))
+                    markdown_parts.append(
+                        "\n".join(f"- {_markdown_text(item)}" for item in items)
+                    )
                 html_parts.append(
                     "<ul>"
                     + "".join(f"<li>{_escaped_text(item)}</li>" for item in items)
@@ -233,15 +248,15 @@ def build_result_projections(
         if block_type == "title":
             level = _heading_level(block.get("level", block.get("text_level")))
             if include_markdown:
-                markdown_parts.append(f"{'#' * level} {text}")
+                markdown_parts.append(f"{'#' * level} {_markdown_text(text)}")
             html_parts.append(f"<h{level}>{escaped}</h{level}>")
         elif block_type == "code":
             captions = _text_items(block.get("code_caption"))
             footnotes = _text_items(block.get("code_footnote"))
             if include_markdown:
-                markdown_parts.extend(captions)
+                markdown_parts.extend(map(_markdown_text, captions))
                 markdown_parts.append(f"```\n{text}\n```")
-                markdown_parts.extend(footnotes)
+                markdown_parts.extend(map(_markdown_text, footnotes))
             html_parts.extend(f"<p>{_escaped_text(value)}</p>" for value in captions)
             html_parts.append(f"<pre><code>{escaped}</code></pre>")
             html_parts.extend(f"<p>{_escaped_text(value)}</p>" for value in footnotes)
@@ -256,7 +271,7 @@ def build_result_projections(
             html_parts.append(f'<div class="equation">{escaped}</div>')
         else:
             if include_markdown:
-                markdown_parts.append(text)
+                markdown_parts.append(_markdown_text(text))
             html_parts.append(f"<p>{escaped}</p>")
     return raw_text, "\n\n".join(markdown_parts), "\n".join(html_parts)
 
@@ -312,6 +327,9 @@ def _raw_parts_from_content(
         elif block_type in {"image", "figure", "chart", "seal"}:
             text = "\n".join(
                 _text_items(block.get("image_caption") or block.get("chart_caption"))
+                + _text_items(
+                    block.get("image_footnote") or block.get("chart_footnote")
+                )
             )
         else:
             text = str(
@@ -320,12 +338,12 @@ def _raw_parts_from_content(
                 or block.get("content")
                 or ""
             )
-        if block_type == "code":
-            raw_parts.extend(_text_items(block.get("code_caption")))
+        if block_type in {"code", "table"}:
+            raw_parts.extend(_text_items(block.get(f"{block_type}_caption")))
         if text:
             raw_parts.append(text)
-        if block_type == "code":
-            raw_parts.extend(_text_items(block.get("code_footnote")))
+        if block_type in {"code", "table"}:
+            raw_parts.extend(_text_items(block.get(f"{block_type}_footnote")))
 
     for text_index, text_block in enumerate(text_blocks):
         if text_index in used_text_indices:
@@ -353,6 +371,13 @@ def _text_items(value: Any) -> list[str]:
     if not isinstance(value, (list, tuple)):
         return []
     return [str(item) for item in value if str(item)]
+
+
+def _markdown_text(value: str) -> str:
+    """Escape semantic prose before adding Markdown structural syntax."""
+    return re.sub(
+        r"([\\`*_{}\[\]()#+\-.!|~])", r"\\\1", html.escape(value, quote=False)
+    )
 
 
 def _escaped_text(value: str) -> str:

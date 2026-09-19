@@ -378,6 +378,30 @@ def test_native_semantic_text_lists_equations_and_code_annotations():
     assert "- - " not in result.markdown_text
     assert "$$x=1$$" in result.markdown_text
     assert "Example code\n\n```\nprint(1)\n```\n\nCode note" in result.markdown_text
+    assert "A \\* B &lt; C" in result.markdown_text
     assert "<p>A * B &lt; C</p>" in result.html_text
     assert "<li>first</li><li>second</li>" in result.html_text
     assert "Example code" in result.html_text and "Code note" in result.html_text
+
+
+@pytest.mark.parametrize("suffix", ["docx", "pdf"])
+def test_native_visual_annotations_survive_all_projections(suffix):
+    # Validated/rendered by docvortex 0.4.14; synthetic schema fixture, not OCR.
+    middle = json.loads(
+        (FIXTURES / f"annotations-{suffix}-middle.json").read_text(encoding="utf-8")
+    )
+    structured = json.loads(
+        (FIXTURES / f"annotations-{suffix}-structured.json").read_text(encoding="utf-8")
+    )
+    result = project_document(MineruDocument("", structured, middle, b""))
+    for kind in ("image", "chart", "table"):
+        caption = f"{kind} caption *literal*"
+        footnote = f"{kind} note <b>literal</b>"
+        assert result.raw_text.count(caption) == 1
+        assert result.raw_text.count(footnote) == 1
+        assert result.raw_text.index(caption) < result.raw_text.index(footnote)
+        assert f"{kind} caption \\*literal\\*" in result.markdown_text
+        assert f"{kind} note &lt;b&gt;literal&lt;/b&gt;" in result.markdown_text
+        assert caption in result.html_text
+        assert f"{kind} note &lt;b&gt;literal&lt;/b&gt;" in result.html_text
+    assert result.raw_text.count("Cell") == 1
