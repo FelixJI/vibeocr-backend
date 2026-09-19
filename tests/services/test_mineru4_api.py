@@ -460,3 +460,19 @@ def test_native_table_fallback_and_index_keep_semantic_content(suffix):
     for projection in (result.raw_text, result.markdown_text, result.html_text):
         assert projection.count("Image fallback caption") == 1
         assert projection.count("Image fallback note") == 1
+
+
+@pytest.mark.parametrize("suffix", ["docx", "pdf"])
+def test_native_empty_code_keeps_annotations(suffix):
+    middle = json.loads(
+        (FIXTURES / f"annotations-{suffix}-middle.json").read_text(encoding="utf-8")
+    )
+    structured = json.loads(
+        (FIXTURES / f"annotations-{suffix}-structured.json").read_text(encoding="utf-8")
+    )
+    result = project_document(MineruDocument("", structured, middle, b""))
+    for projection in (result.raw_text, result.markdown_text, result.html_text):
+        assert projection.count("Empty code caption") == 1
+        assert projection.count("Empty code note") == 1
+    assert "Empty code caption\n\nEmpty code note" in result.markdown_text
+    assert "<p>Empty code caption</p>\n<p>Empty code note</p>" in result.html_text

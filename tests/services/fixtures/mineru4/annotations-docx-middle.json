@@ -213,6 +213,39 @@
               ]
             }
           ]
+        },
+        {
+          "type": "code",
+          "index": 19,
+          "sub_type": "code",
+          "guess_lang": "text",
+          "content": [
+            {
+              "type": "code_body",
+              "index": 19,
+              "content": ""
+            },
+            {
+              "type": "code_caption",
+              "index": 20,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Empty code caption"
+                }
+              ]
+            },
+            {
+              "type": "code_footnote",
+              "index": 21,
+              "content": [
+                {
+                  "type": "text",
+                  "content": "Empty code note"
+                }
+              ]
+            }
+          ]
         }
       ]
     }

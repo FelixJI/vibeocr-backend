@@ -255,7 +255,7 @@ def build_result_projections(
         text = str(
             block.get("text") or block.get("code_body") or block.get("content") or ""
         )
-        if not text:
+        if not text and block_type != "code":
             source = block.get("img_path")
             if source:
                 if include_markdown:
@@ -275,13 +275,15 @@ def build_result_projections(
             footnotes = _text_items(block.get("code_footnote"))
             if include_markdown:
                 markdown_parts.extend(map(_markdown_text, captions))
-                fence = "`" * max(
-                    3, 1 + max(map(len, re.findall(r"`+", text)), default=0)
-                )
-                markdown_parts.append(f"{fence}\n{text}\n{fence}")
+                if text:
+                    fence = "`" * max(
+                        3, 1 + max(map(len, re.findall(r"`+", text)), default=0)
+                    )
+                    markdown_parts.append(f"{fence}\n{text}\n{fence}")
                 markdown_parts.extend(map(_markdown_text, footnotes))
             html_parts.extend(f"<p>{_escaped_text(value)}</p>" for value in captions)
-            html_parts.append(f"<pre><code>{html.escape(text)}</code></pre>")
+            if text:
+                html_parts.append(f"<pre><code>{html.escape(text)}</code></pre>")
             html_parts.extend(f"<p>{_escaped_text(value)}</p>" for value in footnotes)
         elif block_type in {
             "equation",

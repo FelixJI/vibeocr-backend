@@ -137,6 +137,27 @@
             }
           ],
           "image_source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII="
+        },
+        {
+          "type": "code",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "sub_type": "code",
+          "content": "```text\n\n```",
+          "captions": [
+            {
+              "content": "Empty code caption"
+            }
+          ],
+          "footnotes": [
+            {
+              "content": "Empty code note"
+            }
+          ]
         }
       ]
     }
