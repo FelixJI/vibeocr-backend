@@ -476,3 +476,55 @@ def test_native_empty_code_keeps_annotations(suffix):
         assert projection.count("Empty code note") == 1
     assert "Empty code caption\n\nEmpty code note" in result.markdown_text
     assert "<p>Empty code caption</p>\n<p>Empty code note</p>" in result.html_text
+
+
+@pytest.mark.parametrize("suffix", ["docx", "pdf"])
+@pytest.mark.parametrize("fmt", ["docx", "xlsx"])
+def test_native_projection_survives_office_export(suffix, fmt, tmp_path):
+    from vibeocr.backend.services.export_service import ExportService
+
+    middle = json.loads(
+        (FIXTURES / f"annotations-{suffix}-middle.json").read_text(encoding="utf-8")
+    )
+    structured = json.loads(
+        (FIXTURES / f"annotations-{suffix}-structured.json").read_text(encoding="utf-8")
+    )
+    result = project_document(MineruDocument("", structured, middle, b""))
+    path = tmp_path / f"result.{fmt}"
+    assert ExportService.export(result, path, fmt)
+    if fmt == "docx":
+        from docx import Document
+
+        document = Document(path)
+        text = "\n".join(p.text for p in document.paragraphs)
+        assert len(document.inline_shapes) == 2
+    else:
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(path)
+        text = "\n".join(
+            str(value)
+            for sheet in workbook
+            for row in sheet.values
+            for value in row
+            if value is not None
+        )
+        workbook.close()
+    for value in (
+        "Fallback caption",
+        "Apple  12",
+        "Fallback note",
+        "Image fallback caption",
+        "Image fallback note",
+        "Empty code caption",
+        "Empty code note",
+        "image caption *literal*",
+        "image body *literal*",
+        "image note <b>literal</b>",
+        "chart caption *literal*",
+        "Revenue",
+        "42",
+        "chart note <b>literal</b>",
+        "Chapter A ... 1\nChapter B ... 2",
+    ):
+        assert text.count(value) == 1
