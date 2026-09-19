@@ -346,3 +346,17 @@ def test_confirmed_native_cancel_deletes_owned_inputs(monkeypatch):
         )
     assert ("DELETE", "/v1/parse/jobs/job-1") in server.calls
     assert ("DELETE", "/v1/files/input-1") in server.calls
+
+
+def test_native_code_body_is_not_rendered_markdown():
+    # Validated docvortex.middle/2.0 and rendered by locked docvortex 0.4.12.
+    middle = json.loads((FIXTURES / "code-middle.json").read_text(encoding="utf-8"))
+    structured = json.loads(
+        (FIXTURES / "code-structured.json").read_text(encoding="utf-8")
+    )
+    assert structured["pages"][0]["blocks"][0]["content"] == "```python\nprint(1)\n```"
+    result = project_document(MineruDocument("", structured, middle, b""))
+    assert result.raw_text == "print(1)"
+    assert result.content_list[0]["code_body"] == "print(1)"
+    assert result.markdown_text == "```\nprint(1)\n```"
+    assert "<pre><code>print(1)</code></pre>" in result.html_text

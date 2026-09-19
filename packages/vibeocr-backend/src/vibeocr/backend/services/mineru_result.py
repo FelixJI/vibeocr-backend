@@ -29,6 +29,18 @@ from .mineru_api import MineruApiError, MineruDocument, object_value, string_val
 _TYPE_MAP = {"doc_title": "title", "paragraph_title": "title", "paragraph": "text"}
 
 
+def _plain_content(value: object) -> str:
+    """Read semantic body/span content, never rendered Markdown wrappers."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(
+            _plain_content(object_value(span, "inline span").get("content"))
+            for span in value
+        )
+    raise MineruApiError("Invalid MinerU semantic content")
+
+
 def _image_paths(value: object) -> set[str]:
     paths: set[str] = set()
     if isinstance(value, dict):
@@ -221,7 +233,22 @@ def project_document(document: MineruDocument) -> OCRResult:
                     ]
                 ).strip()
             elif kind == "code":
-                block["code_body"] = content
+                source_content = source_block.get("content")
+                bodies = (
+                    [
+                        body.get("content")
+                        for body in source_content
+                        if isinstance(body, dict)
+                        and body.get("type") in {"code_body", "algorithm_body"}
+                    ]
+                    if isinstance(source_content, list)
+                    else []
+                )
+                if len(bodies) != 1:
+                    raise MineruApiError(
+                        "MinerU code block must have one semantic body"
+                    )
+                block["text"] = block["code_body"] = _plain_content(bodies[0])
             elif kind == "list":
                 block["list_items"] = content.splitlines()
             blocks.append(block)
