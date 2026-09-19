@@ -104,6 +104,10 @@
               "content": "Empty code note"
             }
           ]
+        },
+        {
+          "type": "ref_text",
+          "content": "Reference Alpha 2026"
         }
       ]
     }

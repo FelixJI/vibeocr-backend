@@ -158,6 +158,16 @@
               "content": "Empty code note"
             }
           ]
+        },
+        {
+          "type": "ref_text",
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ],
+          "content": "Reference Alpha 2026"
         }
       ]
     }

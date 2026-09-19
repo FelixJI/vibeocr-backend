@@ -300,6 +300,22 @@
             0.8,
             0.8
           ]
+        },
+        {
+          "type": "ref_text",
+          "index": 22,
+          "content": [
+            {
+              "type": "text",
+              "content": "Reference Alpha 2026"
+            }
+          ],
+          "bbox": [
+            0.1,
+            0.1,
+            0.8,
+            0.8
+          ]
         }
       ]
     }

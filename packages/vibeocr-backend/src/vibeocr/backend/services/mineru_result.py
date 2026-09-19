@@ -27,7 +27,12 @@ from vibeocr.runtime_contracts.contracts.tables import TableProvenanceV1
 
 from .mineru_api import MineruApiError, MineruDocument, object_value, string_value
 
-_TYPE_MAP = {"doc_title": "title", "paragraph_title": "title", "paragraph": "text"}
+_TYPE_MAP = {
+    "doc_title": "title",
+    "paragraph_title": "title",
+    "paragraph": "text",
+    "ref_text": "text",
+}
 
 
 def _plain_content(value: object) -> str:

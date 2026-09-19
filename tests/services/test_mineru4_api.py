@@ -526,5 +526,6 @@ def test_native_projection_survives_office_export(suffix, fmt, tmp_path):
         "42",
         "chart note <b>literal</b>",
         "Chapter A ... 1\nChapter B ... 2",
+        "Reference Alpha 2026",
     ):
         assert text.count(value) == 1
