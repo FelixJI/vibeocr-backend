@@ -199,3 +199,27 @@ Paddle。CUDA MinerU 才依赖 Torch `gpu_runtime`。省略组件选择的重启
 
 pip 的 `--dry-run --report` 也可能传输 wheel；本地受控 HTTP 回归已经证明这一点，但不能据此推断用户现场发生了重复下载。
 未取得现场完整版本与日志时，应保留“当前实现可复现、原现场原因待确认”的边界。
+
+## 维护下载进度与恢复
+
+`maintenance.v2` 的事件沿用正式 Protocol 2.8.3 字段。阻塞解析、HEAD 和下载前发布步骤；
+`message_args.step` / `package` 标识当前下载工作，`elapsed_seconds` 是操作经过时间，
+`last_activity_seconds` 是距最后有效活动的时间。心跳不增加字节或重置有效活动计时。
+
+下载 `progress.unit=bytes` 仅统计当前下载批次新收到的 artifact 字节，不包含已验证缓存，
+也不是整个安装或 pip resolver 的总网络流量。只有可信长度已知时提供 `total`；未知长度、
+HEAD/GET 长度不一致时省略总量，不伪造百分比或 ETA。收到全部字节后还须通过锁中既有摘要
+验证，才发送 `runtime.download_verified`；此时安装、组件验证和激活仍可能未完成。
+
+`runtime.download_cache_hit` 的 `cache_bytes` 是复用量，不计网络量；损坏缓存和版本不匹配
+重新下载，共享缓存允许 Paddle/MinerU 两种安装顺序复用已验证 artifact。`runtime.already_satisfied`
+表示目标运行环境已满足。维护成功的 `model_readiness=not_checked` 明确安装器未准备或验证模型；
+模型状态继续由既有模型 API 表达，不能由缓存命中或服务 ready 推断。
+
+失败/取消事件保留 `reason_code`、`next_action`、操作/阶段/来源及有界脱敏诊断，重启后通过
+operation observe/replay 查询；普通 inspect 不覆盖之前的维护结果。已识别的原因包括
+`network_timeout`、`network_error`、`http_error`、`hash_mismatch`、`disk_full`、`permission_denied`、
+`total_timeout`、`idle_timeout`、`process_exit_nonzero` 和 `component_verification_failed`。
+无法可靠归因的约束、ABI、驱动等错误保留诊断并标为 `unknown` 或对应失败步骤，不猜具体根因。
+取消关闭本次 HTTP 连接和子进程，清理本次 `.part`，保留有效缓存和旧运行环境；重试重新下载未完成
+artifact，不承诺 HTTP 断点续传。已有 operation 幂等、单 writer、终态不可回退规则保持有效。

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib.metadata
 import json
@@ -66,6 +67,46 @@ class RuntimeCapabilityError(RuntimeOperationError):
 
 class RuntimeInstallFailure(RuntimeOperationError):
     """Runtime installation failed after the request was accepted."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str = "unknown",
+        next_action: str = "inspect_diagnostics",
+    ) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.next_action = next_action
+
+
+def safe_runtime_detail(text: str) -> str:
+    """Bound public diagnostics and remove locations and credential values."""
+    text = re.sub(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s<>\"']+", "[url]", text)
+    text = re.sub(r"(?i)(?:[a-z]:[\\/]|\\\\)[^\r\n\"']+", "[path]", text)
+    text = re.sub(r"(?<![\w])/(?:[^\s/]+/)*[^\s,;)]+", "[path]", text)
+    text = re.sub(
+        r"(?i)\b(token|password|secret|authorization|api[_-]?key)\s*[:=]\s*(?:Bearer\s+)?[^\s,;]+",
+        r"\1=[redacted]",
+        text,
+    )
+    text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [redacted]", text)
+    return text[-4000:]
+
+
+def failure_guidance(error: Exception) -> dict[str, str]:
+    if isinstance(error, RuntimeInstallFailure):
+        return {"reason_code": error.reason_code, "next_action": error.next_action}
+    if isinstance(error, OSError):
+        if error.errno == errno.ENOSPC:
+            return {"reason_code": "disk_full", "next_action": "free_disk_space"}
+        if isinstance(error, PermissionError):
+            return {
+                "reason_code": "permission_denied",
+                "next_action": "check_directory_permissions",
+            }
+        return {"reason_code": "io_error", "next_action": "inspect_diagnostics"}
+    return {"reason_code": "unknown", "next_action": "inspect_diagnostics"}
 
 
 class RuntimeCommandConflict(RuntimeOperationError):
@@ -173,8 +214,10 @@ def _command_error(exc: Exception) -> dict[str, Any]:
     return {
         "type": type(exc).__name__,
         "taxonomy": taxonomy,
-        "message": str(exc),
-        "detail": detail,
+        "message": safe_runtime_detail(str(exc)),
+        "detail": {**detail, **failure_guidance(exc)}
+        if taxonomy == "install"
+        else detail,
     }
 
 
@@ -188,6 +231,13 @@ def _raise_command_error(value: dict[str, Any]) -> None:
         "identity": RuntimeSourceIdentityMismatch,
         "install": RuntimeInstallFailure,
     }
+    if taxonomy == "install":
+        detail = value.get("detail") or {}
+        raise RuntimeInstallFailure(
+            message,
+            reason_code=detail.get("reason_code", "unknown"),
+            next_action=detail.get("next_action", "inspect_diagnostics"),
+        )
     if isinstance(taxonomy, str) and taxonomy in taxonomy_types:
         raise taxonomy_types[taxonomy](message)
     error_type = value.get("type")
@@ -351,7 +401,7 @@ class RuntimeOperationStore:
         operations_root = self._state_root / OPERATIONS_DIRECTORY
         if not operations_root.exists():
             return None
-        latest: tuple[bool, str, str, str, dict[str, Any]] | None = None
+        latest: tuple[bool, bool, str, str, str, dict[str, Any]] | None = None
         with self._lock:
             for metadata_path in operations_root.glob("*/metadata.json"):
                 metadata = self._read(metadata_path)
@@ -378,17 +428,18 @@ class RuntimeOperationStore:
                         "Runtime operation status projection is invalid"
                     )
                 candidate = (
+                    snapshot.get("operation") != "inspect",
                     snapshot.get("operation_state") in {"queued", "running"},
                     updated_at,
                     created_at,
                     operation_id,
                     metadata,
                 )
-                if latest is None or candidate[:4] > latest[:4]:
+                if latest is None or candidate[:5] > latest[:5]:
                     latest = candidate
         if latest is None:
             return None
-        metadata = latest[4]
+        metadata = latest[5]
         projection = dict(metadata["snapshot"])
         message_code = metadata.get("message_code")
         if isinstance(message_code, str):
@@ -1222,6 +1273,9 @@ class RuntimeMaintenanceReporter:
         self._snapshot: dict[str, Any] | None = None
         self._message_code: str | None = None
         self._cancellation_detail: str | None = None
+        self._started_at = time.monotonic()
+        self._last_activity_at = self._started_at
+        self._event_args: dict[str, str] = {}
         # requested None = 请求省略（wire 上省略该字段）；() = 显式空集
         # （ensure base-only），两者在 intent 与回显上都不同。
         self._requested_component_ids: tuple[str, ...] | None = None
@@ -1261,6 +1315,9 @@ class RuntimeMaintenanceReporter:
         plan_id: str | None = None,
         product_binding: dict[str, str | None] | None = None,
     ) -> bool:
+        self._started_at = time.monotonic()
+        self._last_activity_at = self._started_at
+        self._event_args = {}
         self._operation = operation
         self._operation_id = operation_id or str(uuid4())
         self._requested_component_ids = component_ids
@@ -1390,6 +1447,10 @@ class RuntimeMaintenanceReporter:
             component_id=component_id,
         )
 
+    def record_activity(self) -> None:
+        """Record actual I/O without generating another progress event."""
+        self._last_activity_at = time.monotonic()
+
     def heartbeat(
         self, *, message_code: str, fallback_message: str | None = None
     ) -> None:
@@ -1404,6 +1465,7 @@ class RuntimeMaintenanceReporter:
             message_code=message_code,
             component_id=self._snapshot.get("component_id"),
             fallback_message=fallback_message,
+            message_args=self._event_args,
         )
 
     def child_status_detail(self, *, message_code: str, fallback_message: str) -> None:
@@ -1451,6 +1513,7 @@ class RuntimeMaintenanceReporter:
                 phase=phase,
                 progress={"unit": "steps", "current": current, "total": total},
                 message_code=message_code,
+                message_args={"model_readiness": "not_checked"},
             )
         except _CommittedEventProjectionError:
             # The authoritative success event is already durable. Do not turn
@@ -1478,6 +1541,8 @@ class RuntimeMaintenanceReporter:
             message_code=message_code,
             component_id=component_id,
             failure=_command_error(error),
+            fallback_message=safe_runtime_detail(str(error)),
+            message_args={**self._event_args, **failure_guidance(error)},
         )
 
     def advance_measured(
@@ -1486,25 +1551,28 @@ class RuntimeMaintenanceReporter:
         phase: str,
         unit: str,
         current: int,
-        total: int,
+        total: int | None,
         message_code: str,
         component_id: str | None = None,
         estimated_remaining_seconds: int | None = None,
+        message_args: dict[str, str] | None = None,
     ) -> None:
-        """Publish determinate progress only for a real items/bytes total."""
+        """Publish measured progress, omitting the total when it is unknown."""
         if unit not in {"items", "bytes"}:
             raise ValueError("measured Runtime progress unit must be items or bytes")
-        if total <= 0 or current < 0 or current > total:
+        if current < 0 or (total is not None and (total <= 0 or current > total)):
             raise ValueError(
                 "measured Runtime progress must have a positive real total"
             )
-        if estimated_remaining_seconds is not None and estimated_remaining_seconds < 0:
+        if estimated_remaining_seconds is not None and (
+            total is None or estimated_remaining_seconds < 0
+        ):
             raise ValueError("estimated_remaining_seconds must be non-negative")
         self._abort_if_cancel_requested()
         progress: dict[str, Any] = {
             "unit": unit,
             "current": current,
-            "total": total,
+            **({"total": total} if total is not None else {}),
         }
         if estimated_remaining_seconds is not None:
             progress["estimated_remaining_seconds"] = estimated_remaining_seconds
@@ -1515,6 +1583,7 @@ class RuntimeMaintenanceReporter:
             progress=progress,
             message_code=message_code,
             component_id=component_id,
+            message_args=message_args,
         )
 
     def cancel(self, *, message_code: str = "runtime.operation_cancelled") -> None:
@@ -1534,6 +1603,11 @@ class RuntimeMaintenanceReporter:
             message_code=message_code,
             component_id=self._snapshot.get("component_id"),
             fallback_message=self._cancellation_detail,
+            message_args={
+                **self._event_args,
+                "reason_code": "cancelled",
+                "next_action": "retry_operation",
+            },
         )
 
     def _abort_if_cancel_requested(self) -> None:
@@ -1568,6 +1642,7 @@ class RuntimeMaintenanceReporter:
         component_id: str | None = None,
         failure: dict[str, Any] | None = None,
         fallback_message: str | None = None,
+        message_args: dict[str, str] | None = None,
     ) -> None:
         if self._operation is None or self._operation_id is None:
             raise RuntimeError("maintenance operation has not started")
@@ -1608,6 +1683,18 @@ class RuntimeMaintenanceReporter:
             snapshot["plan_id"] = self._plan_id
         if self._source is not None:
             snapshot["source"] = dict(self._source)
+        now = time.monotonic()
+        last_activity_at = now if event_type == "progress" else self._last_activity_at
+        args = {
+            key: safe_runtime_detail(value)
+            for key, value in (message_args or {}).items()
+        }
+        event_args = args
+        args = {
+            **args,
+            "elapsed_seconds": f"{now - self._started_at:.3f}",
+            "last_activity_seconds": f"{now - last_activity_at:.3f}",
+        }
         projection_error = None
         try:
             event = self._store.append(
@@ -1616,7 +1703,10 @@ class RuntimeMaintenanceReporter:
                 snapshot=snapshot,
                 message_code=message_code,
                 failure=failure,
-                fallback_message=fallback_message,
+                fallback_message=safe_runtime_detail(fallback_message)
+                if fallback_message
+                else None,
+                message_args=args,
             )
         except _CommittedEventProjectionError as exc:
             event = exc.event
@@ -1632,6 +1722,8 @@ class RuntimeMaintenanceReporter:
                 self.cancel()
                 raise RuntimeOperationCancelled(self._operation_id) from None
             raise
+        self._last_activity_at = last_activity_at
+        self._event_args = event_args
         self._sequence = sequence
         self._snapshot = snapshot
         self._message_code = message_code
