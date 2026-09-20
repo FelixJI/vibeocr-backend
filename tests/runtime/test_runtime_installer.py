@@ -2903,7 +2903,8 @@ def test_paddle_only_cuda_status_uses_base_host_lock(tmp_path: Path) -> None:
         required_capabilities=("runtime.install-plan.v1",),
         install_runner=install,
     )
-    preview = replacement.preview_install_plan()
+    with RuntimeStoreLock(replacement.paths.locks_root / "runtime-store.lock"):
+        preview = replacement._preview_install_plan_locked()
     host_change = next(
         item for item in preview["components"] if item["component_id"] == "runtime_host"
     )

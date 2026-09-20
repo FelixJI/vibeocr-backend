@@ -15,7 +15,7 @@ from vibeocr.backend.runtime_installer import (
     RuntimeLaunch,
     RuntimeState,
 )
-from vibeocr.backend.runtime_lock import RuntimeLockTimeout
+from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_maintenance import (
     RuntimeOperationCancelled,
     RuntimeOperationConflict,
@@ -54,6 +54,7 @@ class RuntimeControl:
         self._installer_factory: Callable[..., RuntimeInstaller] | None = None
         self._active_snapshot: dict[str, Any] | None = None
         probe = self._installer()
+        self._locks_root = probe.paths.locks_root
         self._state_root = probe.paths.state_root
         self._store = RuntimeOperationStore(self._state_root)
 
@@ -71,6 +72,7 @@ class RuntimeControl:
         control._installer_factory = installer_factory
         control._active_snapshot = None
         probe = control._installer()
+        control._locks_root = probe.paths.locks_root
         control._state_root = probe.paths.state_root
         control._store = RuntimeOperationStore(control._state_root)
         return control
@@ -168,27 +170,29 @@ class RuntimeControl:
         required_capabilities: tuple[str, ...] = (),
         additional_blockers: tuple[dict[str, str], ...] = (),
     ) -> dict[str, Any]:
-        installer = self._installer(
-            accelerator=accelerator,
-            install_component_ids=install_component_ids,
-            download_source_ids=(
-                download_source_ids
-                if download_source_ids is not None
-                else default_download_source_ids
-            ),
-            required_capabilities=required_capabilities,
-        )
-        return {
-            "schema_version": 2,
-            "plan": installer.preview_install_plan(
-                additional_blockers=additional_blockers,
-                inherit_download_sources=(
-                    download_source_ids is None
-                    and default_download_source_ids is not None
+        # Resolve inherited intent and capture its baseline in one writer epoch.
+        with RuntimeStoreLock(self._locks_root / "runtime-store.lock", timeout=0):
+            installer = self._installer(
+                accelerator=accelerator,
+                install_component_ids=install_component_ids,
+                download_source_ids=(
+                    download_source_ids
+                    if download_source_ids is not None
+                    else default_download_source_ids
                 ),
-            ),
-            "negotiated_capabilities": list(required_capabilities),
-        }
+                required_capabilities=required_capabilities,
+            )
+            return {
+                "schema_version": 2,
+                "plan": installer._preview_install_plan_locked(
+                    additional_blockers=additional_blockers,
+                    inherit_download_sources=(
+                        download_source_ids is None
+                        and default_download_source_ids is not None
+                    ),
+                ),
+                "negotiated_capabilities": list(required_capabilities),
+            }
 
     def execute(
         self,

@@ -737,3 +737,47 @@ async def test_http_preview_distinguishes_inherited_and_explicit_download_source
             snapshot = receipt.json()["snapshot"]
             assert snapshot.get("requested_download_source_ids") is None
             assert snapshot["effective_download_source_ids"] == ["pypi"]
+
+
+def test_preview_holds_writer_lock_while_resolving_inherited_selection(tmp_path):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
+
+    control, factory, calls, _, _ = _control(tmp_path)
+    factory(install_component_ids=("paddleocr-cpu",)).ensure()
+    entered, release = threading.Event(), threading.Event()
+
+    def delayed_factory(**kwargs):
+        installer = factory(**kwargs)
+        if CAPABILITY in kwargs.get("required_capabilities", ()):
+            entered.set()
+            assert release.wait(10)
+        return installer
+
+    preview_control = RuntimeControl.from_installer_factory(delayed_factory)
+    with ThreadPoolExecutor() as pool:
+        pending = pool.submit(
+            preview_control.preview_install_plan, required_capabilities=(CAPABILITY,)
+        )
+        assert entered.wait(5)
+        try:
+            with pytest.raises(RuntimeLockTimeout):
+                with RuntimeStoreLock(
+                    factory().paths.locks_root / "runtime-store.lock", timeout=0
+                ):
+                    pass
+        finally:
+            release.set()
+        plan = pending.result()["plan"]
+    assert "paddleocr-cpu" in plan["effective_component_ids"]
+    factory(install_component_ids=("mineru-cpu",)).ensure()
+    with pytest.raises(RuntimeInstallPlanStale):
+        control.execute(
+            operation="ensure",
+            operation_id="old-preview",
+            plan_id=plan["plan_id"],
+            required_capabilities=(CAPABILITY,),
+        )
+    assert len(calls) == 2
