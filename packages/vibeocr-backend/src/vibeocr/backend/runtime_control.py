@@ -15,7 +15,7 @@ from vibeocr.backend.runtime_installer import (
     RuntimeLaunch,
     RuntimeState,
 )
-from vibeocr.backend.runtime_lock import RuntimeLockTimeout
+from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_maintenance import (
     RuntimeOperationCancelled,
     RuntimeOperationConflict,
@@ -46,14 +46,20 @@ class RuntimeControl:
         component_lock: str | Path,
         runtime_manifest: str | Path,
         accelerator: str | None = None,
+        layout_manifest: str | Path | None = None,
+        product_id: str | None = None,
     ) -> None:
         self._product_root = Path(product_root)
         self._component_lock = Path(component_lock)
         self._runtime_manifest = Path(runtime_manifest)
         self._accelerator = accelerator
+        self._layout_manifest = layout_manifest
+        self._product_id = product_id
         self._installer_factory: Callable[..., RuntimeInstaller] | None = None
         self._active_snapshot: dict[str, Any] | None = None
         probe = self._installer()
+        self._product_binding = probe.product_binding
+        self._locks_root = probe.paths.locks_root
         self._state_root = probe.paths.state_root
         self._store = RuntimeOperationStore(self._state_root)
 
@@ -71,6 +77,8 @@ class RuntimeControl:
         control._installer_factory = installer_factory
         control._active_snapshot = None
         probe = control._installer()
+        control._product_binding = probe.product_binding
+        control._locks_root = probe.paths.locks_root
         control._state_root = probe.paths.state_root
         control._store = RuntimeOperationStore(control._state_root)
         return control
@@ -84,12 +92,26 @@ class RuntimeControl:
         }
         if any(not value for value in required.values()):
             raise RuntimeError("Runtime control environment is incomplete")
-        return cls(
+        control = cls(
             product_root=str(required["product_root"]),
             component_lock=str(required["component_lock"]),
             runtime_manifest=str(required["runtime_manifest"]),
-            accelerator=os.environ.get("VIBEOCR_RUNTIME_ACCELERATOR"),
+            layout_manifest=os.environ.get("VIBEOCR_LAYOUT_MANIFEST") or None,
+            product_id=os.environ.get("VIBEOCR_PRODUCT_ID") or None,
+            # A running Supervisor may still carry the pre-switch launch device.
+            # New maintenance intents follow the persisted choice/product default.
         )
+
+        for variable, actual in (
+            ("VIBEOCR_RUNTIME_ROOT", control._state_root.parent / "runtime"),
+            ("VIBEOCR_RUNTIME_STATE_ROOT", control._state_root),
+        ):
+            declared = os.environ.get(variable)
+            if declared and Path(declared).resolve() != actual.resolve():
+                raise RuntimeIdentityMismatch(
+                    "Runtime control store differs from the launch environment"
+                )
+        return control
 
     @property
     def state_root(self) -> Path:
@@ -110,7 +132,14 @@ class RuntimeControl:
         required_capabilities: tuple[str, ...] = (),
         install_component_ids: tuple[str, ...] | None = None,
         download_source_ids: tuple[str, ...] | None = None,
+        plan_id: str | None = None,
+        accelerator: str | None = None,
     ) -> RuntimeInstaller:
+        extras: dict[str, Any] = {}
+        if plan_id is not None:
+            extras["plan_id"] = plan_id
+        if accelerator is not None:
+            extras["accelerator"] = accelerator
         if self._installer_factory is not None:
             return self._installer_factory(
                 operation_id=operation_id,
@@ -119,18 +148,22 @@ class RuntimeControl:
                 required_capabilities=required_capabilities,
                 install_component_ids=install_component_ids,
                 download_source_ids=download_source_ids,
+                **extras,
             )
         return RuntimeInstaller(
             product_root=self._product_root,
+            layout_manifest=self._layout_manifest,
+            product_id=self._product_id,
             component_lock=self._component_lock,
             runtime_manifest=self._runtime_manifest,
-            accelerator=self._accelerator,
+            accelerator=accelerator if accelerator is not None else self._accelerator,
             operation_id=operation_id,
             source_operation_id=source_operation_id,
             component_ids=component_ids,
             required_capabilities=required_capabilities,
             install_component_ids=install_component_ids,
             download_source_ids=download_source_ids,
+            plan_id=plan_id,
         )
 
     @staticmethod
@@ -148,6 +181,40 @@ class RuntimeControl:
             "negotiated_capabilities": list(negotiated_capabilities),
         }
 
+    def preview_install_plan(
+        self,
+        *,
+        accelerator: str | None = None,
+        install_component_ids: tuple[str, ...] | None = None,
+        download_source_ids: tuple[str, ...] | None = None,
+        default_download_source_ids: tuple[str, ...] | None = None,
+        required_capabilities: tuple[str, ...] = (),
+        additional_blockers: tuple[dict[str, str], ...] = (),
+    ) -> dict[str, Any]:
+        # Resolve inherited intent and capture its baseline in one writer epoch.
+        with RuntimeStoreLock(self._locks_root / "runtime-store.lock", timeout=0):
+            installer = self._installer(
+                accelerator=accelerator,
+                install_component_ids=install_component_ids,
+                download_source_ids=(
+                    download_source_ids
+                    if download_source_ids is not None
+                    else default_download_source_ids
+                ),
+                required_capabilities=required_capabilities,
+            )
+            return {
+                "schema_version": 2,
+                "plan": installer._preview_install_plan_locked(
+                    additional_blockers=additional_blockers,
+                    inherit_download_sources=(
+                        download_source_ids is None
+                        and default_download_source_ids is not None
+                    ),
+                ),
+                "negotiated_capabilities": list(required_capabilities),
+            }
+
     def execute(
         self,
         *,
@@ -159,6 +226,11 @@ class RuntimeControl:
         profile_id: str | None = None,
         install_component_ids: tuple[str, ...] | None = None,
         download_source_ids: tuple[str, ...] | None = None,
+        plan_id: str | None = None,
+        run_maintenance: Callable[
+            [Callable[[], RuntimeLaunch | None]], RuntimeLaunch | None
+        ]
+        | None = None,
     ) -> dict[str, Any]:
         if operation not in {"inspect", "ensure", "repair"}:
             raise ValueError("invalid Runtime maintenance operation")
@@ -171,6 +243,8 @@ class RuntimeControl:
             profile_id=profile_id,
             install_component_ids=install_component_ids,
             download_source_ids=download_source_ids,
+            plan_id=plan_id,
+            run_maintenance=run_maintenance,
         )
         return result.receipt
 
@@ -185,6 +259,11 @@ class RuntimeControl:
         profile_id: str | None = None,
         install_component_ids: tuple[str, ...] | None = None,
         download_source_ids: tuple[str, ...] | None = None,
+        plan_id: str | None = None,
+        run_maintenance: Callable[
+            [Callable[[], RuntimeLaunch | None]], RuntimeLaunch | None
+        ]
+        | None = None,
     ) -> RuntimeControlResult:
         """Execute once while exposing adapter-only launch projection."""
         if operation not in {"inspect", "ensure", "repair"}:
@@ -197,6 +276,44 @@ class RuntimeControl:
             raise ValueError(
                 "Runtime selection fields are only valid for operation ensure"
             )
+        if plan_id is not None and (
+            operation != "ensure" or component_ids or profile_id is not None
+        ):
+            raise ValueError("plan confirmation requires ensure without overrides")
+
+        def replay_plan() -> RuntimeControlResult | None:
+            if plan_id is None or operation_id is None:
+                return None
+            try:
+                previous = self._store.snapshot(operation_id)
+            except RuntimeOperationNotFound:
+                previous = None
+            if previous is not None:
+                intent = self._store.intent(operation_id)
+                if (
+                    intent.get("plan_id") != plan_id
+                    or intent.get("product") != self._product_binding
+                    or intent.get("operation") != operation
+                    or intent.get("required_capabilities")
+                    != list(required_capabilities)
+                    or intent.get("source_operation_id") != source_operation_id
+                    or install_component_ids is not None
+                    or download_source_ids is not None
+                ):
+                    raise RuntimeOperationConflict(operation_id)
+                return self.project_receipt(
+                    {
+                        "schema_version": 2,
+                        "operation_id": operation_id,
+                        "snapshot": previous,
+                        "negotiated_capabilities": list(required_capabilities),
+                    },
+                    include_launch=False,
+                )
+            return None
+
+        if (replayed := replay_plan()) is not None:
+            return replayed
         installer = self._installer(
             operation_id=operation_id,
             source_operation_id=source_operation_id,
@@ -204,6 +321,7 @@ class RuntimeControl:
             required_capabilities=required_capabilities,
             install_component_ids=install_component_ids,
             download_source_ids=download_source_ids,
+            plan_id=plan_id,
         )
         if profile_id is not None and profile_id != installer.plan:
             raise ValueError("requested Runtime profile is unavailable")
@@ -214,7 +332,13 @@ class RuntimeControl:
                 inspection = installer.inspect_snapshot()
                 launch = None
             else:
-                launch = getattr(installer, operation)()
+                action = getattr(installer, operation)
+                launch = run_maintenance(action) if run_maintenance else action()
+        except RuntimeLockTimeout:
+            # Another confirmation may have been accepted after our initial read.
+            if (replayed := replay_plan()) is not None:
+                return replayed
+            raise
         finally:
             self._active_snapshot = installer.maintenance_snapshot()
         receipt = self._receipt(installer, required_capabilities)
@@ -273,6 +397,12 @@ class RuntimeControl:
         expected_sequence: int | None = None,
         install_component_ids: tuple[str, ...] | None = None,
         download_source_ids: tuple[str, ...] | None = None,
+        plan_id: str | None = None,
+        required_capabilities: tuple[str, ...] = (),
+        run_maintenance: Callable[
+            [Callable[[], RuntimeLaunch | None]], RuntimeLaunch | None
+        ]
+        | None = None,
     ) -> dict[str, Any]:
         # 选择字段只对 retry 合法；cancel 不接受 selection（计划 §4.3）。
         if command != "retry" and (
@@ -281,12 +411,22 @@ class RuntimeControl:
             raise ValueError(
                 "Runtime selection fields are only valid for command retry"
             )
+        if plan_id is not None and (
+            command != "retry"
+            or install_component_ids is not None
+            or download_source_ids is not None
+        ):
+            raise ValueError("plan retry cannot override selection")
         payload = {
             "command": command,
             "target_operation_id": target_operation_id,
             "new_operation_id": new_operation_id,
             "expected_sequence": expected_sequence,
         }
+        if plan_id is not None:
+            payload["plan_id"] = plan_id
+            payload["product"] = self._product_binding
+            payload["required_capabilities"] = list(required_capabilities)
         payload.update(
             normalized_selection_fields(
                 install_component_ids=install_component_ids,
@@ -319,6 +459,21 @@ class RuntimeControl:
             if target["operation_state"] not in {"failed", "cancelled"}:
                 raise RuntimeOperationNotRetryable(target_operation_id)
             intent = self._store.intent(target_operation_id)
+            if plan_id is not None:
+                if target["operation"] != "ensure":
+                    raise ValueError("plan retry requires an ensure operation")
+                return self.execute(
+                    operation="ensure",
+                    operation_id=new_operation_id,
+                    source_operation_id=target_operation_id,
+                    plan_id=plan_id,
+                    required_capabilities=required_capabilities,
+                    run_maintenance=run_maintenance,
+                )
+            if "plan_id" in intent:
+                raise ValueError(
+                    "retry of a planned operation requires a fresh preview"
+                )
             # retry 省略选择字段时复用 source operation 的 normalized intent；
             # 显式给出时重新按当前 catalog 验证（installer 构造时 fail closed）。
             retry_install = (
@@ -398,6 +553,7 @@ class RuntimeControl:
                 profile_id=str(intent["profile_id"]),
                 install_component_ids=retry_install,
                 download_source_ids=retry_sources,
+                run_maintenance=run_maintenance,
             )
 
         return self._store.apply_command(command_id, payload, apply)

@@ -129,6 +129,29 @@ def _release(
             "runtime_pack": None,
         }
     ]
+    base_ids = ["rapidocr-base", "runtime_host"]
+    for profile, suffix in [("win-x64-cpu", "cpu"), ("win-x64-cu126", "cuda")]:
+        for engine in ["paddleocr", "mineru"]:
+            host = (
+                profiles["win-x64-base"] if engine == "paddleocr" else profiles[profile]
+            )
+            profiles[profile].setdefault("install_scopes", []).append(
+                {
+                    "scope_id": engine,
+                    "component_ids": [
+                        *base_ids,
+                        f"{engine}-{suffix}",
+                        *(
+                            ["gpu_runtime"]
+                            if engine == "mineru" and suffix == "cuda"
+                            else []
+                        ),
+                    ],
+                    "lock": host["lock"],
+                    "sha256": host["sha256"],
+                    "runtime_pack": None,
+                }
+            )
     if with_base_pack:
         pack = root / "vibeocr-runtime-pack-win-x64-base-0.7.0.zip"
         with zipfile.ZipFile(pack, mode="w") as archive:
@@ -2100,7 +2123,7 @@ def test_repair_fails_closed_when_installed_marker_is_untrusted(
         repair.repair()
 
 
-def test_ensure_with_optional_components_reports_full_profile_closure(
+def test_ensure_with_optional_components_reports_independent_closure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2121,14 +2144,15 @@ def test_ensure_with_optional_components_reports_full_profile_closure(
     )
     installer.ensure()
 
-    # per-profile lock 粒度：选择任一可选组件即安装目标档位完整闭包，
-    # effective 诚实回显闭包而非请求子集。
+    # 独立 MinerU scope 不再因为旧 full lock 强装 Paddle。
     assert seen_profiles == ["win-x64-cpu"]
     snapshot = installer.maintenance_snapshot()
     assert snapshot["requested_component_ids"] == ["mineru-cpu"]
-    assert snapshot["effective_component_ids"] == list(
-        installer._profile_component_ids()
-    )
+    assert snapshot["effective_component_ids"] == [
+        "rapidocr-base",
+        "mineru-cpu",
+        "runtime_host",
+    ]
 
 
 def test_ensure_reinstalls_when_scope_changes(
@@ -2158,6 +2182,7 @@ def test_ensure_reinstalls_when_scope_changes(
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=install,
+        install_component_ids=("paddleocr-cpu", "mineru-cpu"),
     )
     default_scope.ensure()
     assert len(calls) == 2
@@ -2708,3 +2733,218 @@ def test_paddle_environment_installs_in_separate_interpreter_and_shared_cache(
     paddle_install = next(c for c in calls if str(paddle_lock) in c)
     assert paddle_install[0] == str(root / "engines/paddle/python.exe")
     assert str(scope.lock_path) not in paddle_install
+
+
+def test_different_scope_locks_reuse_verified_download_without_second_request(
+    tmp_path, monkeypatch
+):
+    from vibeocr.backend import runtime_installer as installer
+
+    payload = b"same-artifact-used-by-both-environments"
+    digest = hashlib.sha256(payload).hexdigest()
+    artifact = installer._ResolvedArtifact(
+        "shared",
+        "https://example.invalid/shared.whl",
+        digest,
+        "shared-1.0-py3-none-any.whl",
+    )
+    locks = [tmp_path / "paddle.lock", tmp_path / "mineru.lock"]
+    for lock in locks:
+        lock.write_text(f"shared==1.0 --hash=sha256:{digest}\n")
+    monkeypatch.setattr(
+        installer, "_resolve_online_report", lambda *args: tmp_path / "report.json"
+    )
+    monkeypatch.setattr(installer, "_parse_resolve_report", lambda *args: (artifact,))
+    monkeypatch.setattr(installer, "_remote_content_length", lambda url: len(payload))
+    requests = []
+
+    def download(request, timeout):
+        requests.append(request.full_url)
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr(installer.urllib.request, "urlopen", download)
+    roots = [
+        installer._prepare_online_artifacts(
+            Path("python"),
+            lock,
+            "https://example.invalid",
+            tmp_path / "cache",
+            None,
+            {},
+        )
+        for lock in locks
+    ]
+    assert roots[0] == roots[1]
+    assert len(requests) == 1
+    (roots[0] / artifact.filename).write_bytes(b"corrupt")
+    installer._prepare_online_artifacts(
+        Path("python"),
+        locks[1],
+        "https://example.invalid",
+        tmp_path / "cache",
+        None,
+        {},
+    )
+    assert len(requests) == 2
+
+
+def test_resolve_report_accepts_only_files_in_bound_download_cache(tmp_path):
+    from vibeocr.backend import runtime_installer as installer
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    wheel = cache / "shared-1-py3-none-any.whl"
+    wheel.write_bytes(b"artifact")
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "install": [
+                    {
+                        "metadata": {"name": "shared"},
+                        "download_info": {"url": wheel.as_uri()},
+                    }
+                ]
+            }
+        )
+    )
+    assert installer._parse_resolve_report(report, cache)[0].filename == wheel.name
+    with pytest.raises(RuntimeInstallError, match="outside download cache"):
+        installer._parse_resolve_report(report, tmp_path / "other")
+    with pytest.raises(RuntimeInstallError, match="outside download cache"):
+        installer._parse_resolve_report(report)
+
+
+@pytest.mark.parametrize("component", ["paddleocr-cuda", "gpu_runtime", "mineru-cuda"])
+def test_gpu_probe_fails_when_import_works_but_device_is_unavailable(
+    tmp_path, monkeypatch, component
+):
+    import contextlib
+    import importlib
+    import io
+    import sys
+    from types import SimpleNamespace
+
+    module = SimpleNamespace(
+        device=SimpleNamespace(is_compiled_with_cuda=lambda: False),
+        cuda=SimpleNamespace(is_available=lambda: False),
+    )
+
+    def run(command, **kwargs):
+        output = io.StringIO()
+        with monkeypatch.context() as patch, contextlib.redirect_stdout(output):
+            patch.setattr(importlib, "import_module", lambda name: module)
+            patch.setattr(sys, "argv", ["-c", command[-1]])
+            exec(command[-2], {})
+        return subprocess.CompletedProcess(
+            command, 0, stdout=output.getvalue(), stderr=""
+        )
+
+    monkeypatch.setattr(runtime_maintenance.subprocess, "run", run)
+    assert probe_runtime_components(
+        tmp_path, (component,), profile_id="win-x64-cu126"
+    ) == {component: False}
+
+
+def test_paddle_only_cuda_status_uses_base_host_lock(tmp_path: Path) -> None:
+    manifest_path, component_lock = _release(tmp_path / "release")
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["capabilities"].append("runtime.install-plan.v1")
+    payload["profiles"]["win-x64-cu126"]["components"] = [
+        {
+            **item.to_payload(),
+            **({"version": "0.141.0"} if item.component_id == "runtime_host" else {}),
+        }
+        for item in load_runtime_manifest(manifest_path)
+        .profiles["win-x64-cu126"]
+        .components
+    ]
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    binding = json.loads(component_lock.read_text(encoding="utf-8"))
+    binding["backend"]["runtime_manifest_sha256"] = _sha(manifest_path.read_bytes())
+    component_lock.write_text(json.dumps(binding), encoding="utf-8")
+
+    def install(partial, manifest, profile):
+        python = _fake_install(partial, manifest, profile)
+        metadata = partial / "Lib/site-packages/fastapi-1.0.0.dist-info"
+        metadata.mkdir(parents=True)
+        (metadata / "METADATA").write_text(
+            "Name: fastapi\nVersion: 1.0.0\n", encoding="utf-8"
+        )
+        return python
+
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component_lock,
+        runtime_manifest=manifest_path,
+        accelerator="nvidia_cuda",
+        install_component_ids=("paddleocr-cuda",),
+        install_runner=install,
+    )
+    installer.ensure()
+    host = next(
+        item
+        for item in installer.profile_payload()["components"]
+        if item["component_id"] == "runtime_host"
+    )
+    assert host["desired_version"] == "1.0.0"
+    assert host["actual_state"] == "ready"
+    metadata = (
+        installer.paths.runtime_root
+        / "Lib/site-packages/fastapi-1.0.0.dist-info/METADATA"
+    )
+    marker = installer._marker().read_bytes()
+    replacement = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component_lock,
+        runtime_manifest=manifest_path,
+        accelerator="nvidia_cuda",
+        install_component_ids=("paddleocr-cuda", "mineru-cuda"),
+        required_capabilities=("runtime.install-plan.v1",),
+        install_runner=install,
+    )
+    with RuntimeStoreLock(replacement.paths.locks_root / "runtime-store.lock"):
+        preview = replacement._preview_install_plan_locked()
+    host_change = next(
+        item for item in preview["components"] if item["component_id"] == "runtime_host"
+    )
+    assert host_change["action"] == "replace"
+    assert host_change["dependency_state"] == "pending"
+    with pytest.raises(RuntimeInstallError, match="candidate Runtime did not verify"):
+        replacement.ensure()
+    assert installer._marker().read_bytes() == marker
+    assert not (tmp_path / "product/runtime.rollback").exists()
+    metadata.write_text("Name: fastapi\nVersion: 0.141.0\n", encoding="utf-8")
+    assert installer._drifted_component_ids() == ("runtime_host",)
+
+
+@pytest.mark.parametrize("llama_available", [True, False])
+def test_mineru_cpu_probe_uses_mineru4_llama_binding(
+    tmp_path, monkeypatch, llama_available
+):
+    import contextlib
+    import importlib
+    from types import SimpleNamespace
+
+    def import_module(name):
+        if name in {"mineru", "onnxruntime"} or (
+            name == "mineru_llama_cpp" and llama_available
+        ):
+            return SimpleNamespace()
+        raise ImportError(name)
+
+    def run(command, **kwargs):
+        output = io.StringIO()
+        with monkeypatch.context() as patch, contextlib.redirect_stdout(output):
+            patch.setattr(sys, "argv", ["probe", command[-1]])
+            patch.setattr(importlib, "import_module", import_module)
+            exec(command[-2], {})
+        return subprocess.CompletedProcess(
+            command, 0, stdout=output.getvalue(), stderr=""
+        )
+
+    monkeypatch.setattr(runtime_maintenance.subprocess, "run", run)
+    assert (
+        probe_runtime_components(tmp_path, ("mineru-cpu",))["mineru-cpu"]
+        is llama_available
+    )

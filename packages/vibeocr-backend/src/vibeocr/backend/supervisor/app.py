@@ -11,7 +11,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
-from functools import cache
+from functools import cache, partial
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
 
@@ -45,6 +45,8 @@ from vibeocr.backend.runtime_maintenance import (
     RuntimeCommandConflict,
     RuntimeCursorExpired,
     RuntimeInstallFailure,
+    RuntimeInstallPlanBlocked,
+    RuntimeInstallPlanStale,
     RuntimeOperationCancelled,
     RuntimeOperationConflict,
     RuntimeOperationNotCancellable,
@@ -257,7 +259,11 @@ def _extract_engine_selection(
 def _runtime_exception_response(exc: Exception, instance_id: str) -> JSONResponse:
     detail: dict[str, Any] = {"reason": str(exc)}
     retry_after: int | None = None
-    if isinstance(exc, RuntimeCursorExpired):
+    if isinstance(exc, RuntimeInstallPlanStale):
+        code = ErrorCode.RUNTIME_INSTALL_PLAN_STALE
+    elif isinstance(exc, RuntimeInstallPlanBlocked):
+        code = ErrorCode.RUNTIME_INSTALL_PLAN_BLOCKED
+    elif isinstance(exc, RuntimeCursorExpired):
         code = ErrorCode.RUNTIME_CURSOR_EXPIRED
         detail = {
             "oldest_sequence": exc.oldest_sequence,
@@ -558,6 +564,32 @@ def create_app(
         return status_provider(instance_id, service_state)
 
     @app.post(
+        "/v2/runtime/install-plan",
+        response_model=wire.RuntimeInstallPlanResponse,
+        operation_id="previewRuntimeInstallPlan",
+    )
+    async def preview_runtime_install_plan(request: Request) -> JsonResult:
+        try:
+            body = _strict_wire_payload(
+                await request.json(), wire.RuntimeInstallPlanRequest
+            )
+            sources = body.get("download_source_ids")
+            return await asyncio.to_thread(
+                control().preview_install_plan,
+                default_download_source_ids=module.settings().download_source_ids
+                or None,
+                additional_blockers=module.runtime_maintenance_blockers(),
+                accelerator=body.get("accelerator"),
+                install_component_ids=tuple(body["install_component_ids"])
+                if "install_component_ids" in body
+                else None,
+                download_source_ids=tuple(sources) if sources is not None else None,
+                required_capabilities=tuple(body["required_capabilities"]),
+            )
+        except Exception as exc:
+            return _runtime_exception_response(exc, instance_id)
+
+    @app.post(
         "/v2/runtime/maintenance",
         response_model=wire.RuntimeMaintenanceReceipt,
         operation_id="startRuntimeMaintenance",
@@ -575,17 +607,23 @@ def create_app(
                 raise ValueError(
                     "Runtime selection fields are only valid for operation ensure"
                 )
-            if body["operation"] == "ensure" and download_source_ids is None:
+            if (
+                body["operation"] == "ensure"
+                and download_source_ids is None
+                and "plan_id" not in body
+            ):
                 # 省略时在开始瞬间快照当前 Settings（计划 §4.3）；
                 # 两者都为空时由 installer 解析 Backend 缺省源。
                 settings_sources = module.settings().download_source_ids
                 download_source_ids = (
                     list(settings_sources) if settings_sources else None
                 )
-            receipt = await asyncio.to_thread(
+            action = partial(
                 control().execute,
+                run_maintenance=module.run_runtime_maintenance,
                 operation=body["operation"],
                 operation_id=body.get("operation_id"),
+                **({"plan_id": body["plan_id"]} if "plan_id" in body else {}),
                 component_ids=tuple(body.get("component_ids", [])),
                 required_capabilities=tuple(body.get("required_capabilities", [])),
                 profile_id=body.get("profile_id"),
@@ -600,6 +638,7 @@ def create_app(
                     else None
                 ),
             )
+            receipt = await asyncio.to_thread(action)
             refresh_engine_probes(receipt)
             return receipt
         except Exception as exc:
@@ -623,13 +662,22 @@ def create_app(
                 raise ValueError(
                     "Runtime selection fields are only valid for command retry"
                 )
-            receipt = await asyncio.to_thread(
+            action = partial(
                 control().command,
+                run_maintenance=module.run_runtime_maintenance,
                 command_id=body["command_id"],
                 command=body["command"],
                 target_operation_id=body["target_operation_id"],
                 new_operation_id=body.get("new_operation_id"),
                 expected_sequence=body.get("expected_sequence"),
+                **(
+                    {
+                        "plan_id": body["plan_id"],
+                        "required_capabilities": tuple(body["required_capabilities"]),
+                    }
+                    if "plan_id" in body
+                    else {}
+                ),
                 install_component_ids=(
                     tuple(install_component_ids)
                     if install_component_ids is not None
@@ -641,6 +689,7 @@ def create_app(
                     else None
                 ),
             )
+            receipt = await asyncio.to_thread(action)
             refresh_engine_probes(receipt)
             return receipt
         except Exception as exc:
@@ -820,6 +869,8 @@ def create_app(
                 pipelines,
                 recognition_modes=recognition_modes,
             )
+        except RuntimeLockTimeout as exc:
+            return _runtime_exception_response(exc, instance_id)
         except RecognitionModeError as exc:
             return _recognition_mode_error_response(exc, instance_id)
         except OcrEngineError as exc:

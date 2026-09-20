@@ -10,6 +10,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any
+from urllib.parse import unquote
 
 PROFILE_NAMES = ("win-x64-base", "win-x64-cpu", "win-x64-cu126")
 # base：随 Portable 携带的离线必备闭包（win-x64-base）；full 闭包由
@@ -44,7 +45,6 @@ PROFILE_COMPONENTS = {
     ),
 }
 _DEFAULT_COMPONENT_DEPENDENCIES = {
-    ("win-x64-cu126", "paddleocr-cuda"): ("gpu_runtime",),
     ("win-x64-cu126", "mineru-cuda"): ("gpu_runtime",),
 }
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -360,6 +360,46 @@ def _validate_protocol_release_manifest(
     artifact = artifacts.get(protocol_wheel)
     if not isinstance(artifact, dict) or artifact.get("sha256") != protocol_sha256:
         raise ManifestError("Protocol wheel is not bound by its release manifest")
+
+
+def scoped_component_version(
+    profile: RuntimeProfile,
+    scope: RuntimeInstallScope | None,
+    component: RuntimeComponent,
+) -> str | None:
+    """Project the selected host lock without changing isolated Paddle's binding."""
+    if (
+        scope is not None
+        and scope.lock_path != profile.lock_path
+        and component.version is not None
+        and not component.component_id.startswith("paddleocr-")
+        and component.component_id in scope.component_ids
+    ):
+        distribution = runtime_component_binding(
+            profile.name, component.component_id
+        ).distribution
+        return (
+            locked_distribution_version(scope.lock_path, distribution)
+            or component.version
+        )
+    return component.version
+
+
+def locked_distribution_version(path: Path, project: str) -> str | None:
+    text = path.read_text(encoding="utf-8")
+    exact = re.search(rf"(?mi)^{re.escape(project)}==([^\s\\]+)", text)
+    if exact is not None:
+        return exact.group(1)
+    direct = re.search(rf"(?mi)^{re.escape(project)}\s+@\s+(\S+)", text)
+    if direct is None:
+        return None
+    filename = unquote(direct.group(1).rsplit("/", 1)[-1])
+    package_pattern = re.escape(project).replace(r"\-", "[-_]")
+    artifact = re.search(
+        rf"(?i)^{package_pattern}[-_](\d+(?:\.\d+)+(?:\+cu\d+)?)-",
+        filename,
+    )
+    return artifact.group(1) if artifact is not None else None
 
 
 def validate_requirements_lock(
@@ -777,7 +817,14 @@ def load_runtime_manifest(
                     raise ManifestError(f"{scope_field} lock SHA-256 mismatch")
                 validate_requirements_lock(
                     scope_lock_path,
-                    profile=name,
+                    profile=(
+                        name
+                        if "gpu_runtime" in scope_component_set
+                        or any(
+                            item.startswith("mineru-") for item in scope_component_set
+                        )
+                        else "win-x64-base"
+                    ),
                     paddle_isolated=paddle_environment is not None,
                 )
                 for pack_name, pack_sha in zip(

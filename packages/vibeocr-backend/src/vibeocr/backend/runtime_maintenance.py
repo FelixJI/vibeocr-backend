@@ -5,13 +5,14 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import logging
 import os
 import re
 import subprocess
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ from vibeocr.backend.runtime_manifest import (
     covering_profile_id,
     load_runtime_manifest,
     runtime_component_binding,
+    scoped_component_version,
 )
 from vibeocr.backend.runtime_selection import durable_selection_fields
 
@@ -44,6 +46,14 @@ _component_probe_cache: dict[
 
 class RuntimeOperationError(RuntimeError):
     """Base error for durable Runtime maintenance control."""
+
+
+class RuntimeInstallPlanStale(RuntimeOperationError):
+    pass
+
+
+class RuntimeInstallPlanBlocked(RuntimeOperationError):
+    pass
 
 
 class RuntimeOperationConflict(RuntimeOperationError):
@@ -182,6 +192,8 @@ def _raise_command_error(value: dict[str, Any]) -> None:
         raise taxonomy_types[taxonomy](message)
     error_type = value.get("type")
     error_types: dict[str, type[Exception]] = {
+        "RuntimeInstallPlanStale": RuntimeInstallPlanStale,
+        "RuntimeInstallPlanBlocked": RuntimeInstallPlanBlocked,
         "RuntimeOperationConflict": RuntimeOperationConflict,
         "RuntimeCommandConflict": RuntimeCommandConflict,
         "RuntimeOperationNotFound": RuntimeOperationNotFound,
@@ -194,6 +206,14 @@ def _raise_command_error(value: dict[str, Any]) -> None:
     }
     exception_type = error_types.get(str(error_type), RuntimeOperationError)
     raise exception_type(message)
+
+
+class _CommittedEventProjectionError(OSError):
+    """The journal event is fsynced; only its metadata projection failed."""
+
+    def __init__(self, event: dict[str, Any], error: OSError) -> None:
+        super().__init__(str(error))
+        self.event = event
 
 
 class RuntimeOperationStore:
@@ -484,6 +504,8 @@ class RuntimeOperationStore:
     ) -> dict[str, Any]:
         metadata_path = self._metadata_path(operation_id)
         metadata = self._reconcile_locked(operation_id)
+        if metadata.get("terminal"):
+            raise RuntimeOperationError("terminal Runtime snapshot is immutable")
         expected = int(metadata["through_sequence"]) + 1
         sequence = snapshot.get("sequence")
         if snapshot.get("operation_id") != operation_id or sequence != expected:
@@ -512,10 +534,23 @@ class RuntimeOperationStore:
             event["_projection"] = projection
         events_path = self._events_path(operation_id)
         events_path.parent.mkdir(parents=True, exist_ok=True)
-        with events_path.open("a", encoding="utf-8") as stream:
-            stream.write(_normalized(event) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
+        journal_offset = None
+        try:
+            with events_path.open("a", encoding="utf-8") as stream:
+                journal_offset = stream.tell()
+                stream.write(_normalized(event) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+        except OSError:
+            # A visible line is not a committed event when its append failed.
+            # Restore the previous tail under the operation lock before callers
+            # roll back activation and append their failure record.
+            if journal_offset is not None:
+                with events_path.open("r+b") as stream:
+                    stream.truncate(journal_offset)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            raise
         metadata["through_sequence"] = sequence
         metadata["snapshot"] = snapshot
         metadata["message_code"] = message_code
@@ -532,7 +567,12 @@ class RuntimeOperationStore:
             metadata["replay_expires_at"] = _timestamp(
                 self._clock() + TERMINAL_REPLAY_RETENTION
             )
-        _atomic_json(metadata_path, metadata)
+        try:
+            _atomic_json(metadata_path, metadata)
+        except OSError as exc:
+            raise _CommittedEventProjectionError(
+                self._public_event(event), exc
+            ) from exc
         return self._public_event(event)
 
     @staticmethod
@@ -855,6 +895,21 @@ def probe_runtime_components(
         "for component_id,module in modules.items():\n"
         "  try:\n"
         "    importlib.import_module(module)\n"
+        "    if component_id.startswith('paddleocr-'):\n"
+        "      paddle=importlib.import_module('paddle')\n"
+        "      if component_id.endswith('-cuda'):\n"
+        "        assert paddle.device.is_compiled_with_cuda()\n"
+        "        paddle.set_device('gpu:0')\n"
+        "      else:\n"
+        "        paddle.set_device('cpu')\n"
+        "      assert float((paddle.to_tensor([1.0])+1).cpu().numpy()[0])==2.0\n"
+        "    if component_id in ('gpu_runtime','mineru-cuda'):\n"
+        "      torch=importlib.import_module('torch')\n"
+        "      assert torch.cuda.is_available()\n"
+        "      assert (torch.ones(1,device='cuda')+1).cpu().item()==2.0\n"
+        "    if component_id=='mineru-cpu':\n"
+        "      importlib.import_module('onnxruntime')\n"
+        "      importlib.import_module('mineru_llama_cpp')\n"
         "  except BaseException:\n"
         "    result[component_id]=False\n"
         "  else:\n"
@@ -1015,8 +1070,17 @@ def _component_statuses(
         if runtime_root is not None and (runtime_root / "engines" / "paddle").is_dir()
         else versions
     )
+    profile = manifest.profiles[descriptor.profile_id]
+    installed_scope = next(
+        (scope for scope in profile.scopes if set(scope.component_ids) == required_ids),
+        None,
+    )
     statuses: list[dict[str, Any]] = []
     for component in descriptor.components:
+        component = replace(
+            component,
+            version=scoped_component_version(profile, installed_scope, component),
+        )
         if required_ids is not None and component.component_id not in required_ids:
             # base-only / 精确 scope 安装不含该可选组件：缺席是合法状态，
             # 不是 drift，也不可 repair（扩闭包属于 ensure 的选择面）。
@@ -1166,6 +1230,7 @@ class RuntimeMaintenanceReporter:
         self._effective_download_source_ids: tuple[str, ...] = ()
         self._source: dict[str, Any] | None = None
         self._source_operation_id: str | None = None
+        self._plan_id: str | None = None
 
     @property
     def profile(self) -> RuntimeProfileDescriptor:
@@ -1193,6 +1258,8 @@ class RuntimeMaintenanceReporter:
         source: dict[str, Any] | None = None,
         source_operation_id: str | None = None,
         required_capabilities: tuple[str, ...] = (),
+        plan_id: str | None = None,
+        product_binding: dict[str, str | None] | None = None,
     ) -> bool:
         self._operation = operation
         self._operation_id = operation_id or str(uuid4())
@@ -1202,6 +1269,7 @@ class RuntimeMaintenanceReporter:
         self._effective_download_source_ids = download_source_ids
         self._source = dict(source) if source is not None else None
         self._source_operation_id = source_operation_id
+        self._plan_id = plan_id
         self._sequence = 0
         self._snapshot = None
         initial_snapshot: dict[str, Any] = {
@@ -1231,6 +1299,8 @@ class RuntimeMaintenanceReporter:
             initial_snapshot["effective_download_source_ids"] = list(
                 self._effective_download_source_ids
             )
+        if self._plan_id is not None:
+            initial_snapshot["plan_id"] = self._plan_id
         if self._source is not None:
             initial_snapshot["source"] = dict(self._source)
         intent: dict[str, Any] = {
@@ -1241,6 +1311,9 @@ class RuntimeMaintenanceReporter:
             "source_identity": dict(source or {}),
             "source_operation_id": source_operation_id,
         }
+        if plan_id is not None:
+            intent["plan_id"] = plan_id
+            intent["product"] = product_binding
         # normalized selection 与 command identity 使用同一投影，避免 retry
         # 手工重建字段形状后发生漂移。
         intent.update(
@@ -1250,26 +1323,44 @@ class RuntimeMaintenanceReporter:
                 effective_download_source_ids=download_source_ids,
             )
         )
-        started = self._store.start(
-            self._operation_id,
-            intent,
-            source_operation_id=source_operation_id,
-            initial_snapshot=initial_snapshot,
-            initial_message_code="runtime.validate_binding",
-        )
+        projection_error = None
+        try:
+            started = self._store.start(
+                self._operation_id,
+                intent,
+                source_operation_id=source_operation_id,
+                initial_snapshot=initial_snapshot,
+                initial_message_code="runtime.validate_binding",
+            )
+        except _CommittedEventProjectionError as exc:
+            # The operation was accepted even though its projection failed.
+            # Adopt its durable identity before recording the startup failure.
+            started = RuntimeOperationStart(
+                created=True,
+                snapshot=dict(exc.event["snapshot"]),
+                event=exc.event,
+            )
+            projection_error = exc
         self._snapshot = started.snapshot
         self._sequence = (
             int(started.snapshot["sequence"]) if started.snapshot is not None else 0
         )
         self._message_code = "runtime.validate_binding"
-        if (
-            started.created
-            and started.event is not None
-            and self._event_sink is not None
-        ):
-            self._event_sink(started.event)
+        try:
+            if projection_error is not None:
+                raise projection_error
+            if (
+                started.created
+                and started.event is not None
+                and self._event_sink is not None
+            ):
+                self._event_sink(started.event)
+        except Exception as exc:
+            self.fail(exc)
+            raise
         if (
             not started.created
+            and plan_id is None
             and started.snapshot is not None
             and started.snapshot.get("operation_state") == "failed"
         ):
@@ -1353,13 +1444,20 @@ class RuntimeMaintenanceReporter:
         message_code: str,
     ) -> None:
         self._abort_if_cancel_requested()
-        self._publish(
-            event_type="snapshot",
-            operation_state="succeeded",
-            phase=phase,
-            progress={"unit": "steps", "current": current, "total": total},
-            message_code=message_code,
-        )
+        try:
+            self._publish(
+                event_type="snapshot",
+                operation_state="succeeded",
+                phase=phase,
+                progress={"unit": "steps", "current": current, "total": total},
+                message_code=message_code,
+            )
+        except _CommittedEventProjectionError:
+            # The authoritative success event is already durable. Do not turn
+            # a failed projection into a failed installation or roll it back.
+            logging.getLogger(__name__).warning(
+                "Runtime success committed; metadata projection awaits recovery"
+            )
 
     def fail(
         self,
@@ -1479,11 +1577,11 @@ class RuntimeMaintenanceReporter:
             "cancelled",
         }:
             raise RuntimeOperationError("terminal Runtime snapshot is immutable")
-        self._sequence += 1
+        sequence = self._sequence + 1
         snapshot: dict[str, Any] = {
             "operation_id": self._operation_id,
             "source_operation_id": self._source_operation_id,
-            "sequence": self._sequence,
+            "sequence": sequence,
             "operation": self._operation,
             "operation_state": operation_state,
             "phase": phase,
@@ -1506,8 +1604,11 @@ class RuntimeMaintenanceReporter:
             snapshot["effective_download_source_ids"] = list(
                 self._effective_download_source_ids
             )
+        if self._plan_id is not None:
+            snapshot["plan_id"] = self._plan_id
         if self._source is not None:
             snapshot["source"] = dict(self._source)
+        projection_error = None
         try:
             event = self._store.append(
                 self._operation_id,
@@ -1517,6 +1618,9 @@ class RuntimeMaintenanceReporter:
                 failure=failure,
                 fallback_message=fallback_message,
             )
+        except _CommittedEventProjectionError as exc:
+            event = exc.event
+            projection_error = exc
         except RuntimeOperationError:
             if operation_state != "cancelled" and self._store.cancel_requested(
                 self._operation_id
@@ -1528,10 +1632,20 @@ class RuntimeMaintenanceReporter:
                 self.cancel()
                 raise RuntimeOperationCancelled(self._operation_id) from None
             raise
+        self._sequence = sequence
         self._snapshot = snapshot
         self._message_code = message_code
+        if projection_error is not None:
+            raise projection_error
         if self._event_sink is not None:
-            self._event_sink(event)
+            try:
+                self._event_sink(event)
+            except Exception:
+                if operation_state != "succeeded":
+                    raise
+                logging.getLogger(__name__).warning(
+                    "Runtime success committed; event delivery failed"
+                )
 
 
 def runtime_status_from_environment(

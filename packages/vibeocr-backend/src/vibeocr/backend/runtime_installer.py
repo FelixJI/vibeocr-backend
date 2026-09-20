@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import queue
 import re
 import shutil
@@ -29,7 +30,15 @@ from dataclasses import asdict, dataclass, replace
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, TextIO
+from uuid import uuid4
 
+from vibeocr.backend.runtime_install_plan import (
+    CAPABILITY,
+    bind_plan,
+    create_plan,
+    read_plan,
+    validate_plan,
+)
 from vibeocr.backend.runtime_layout import resolve_runtime_store
 from vibeocr.backend.runtime_lock import RuntimeLockTimeout, RuntimeStoreLock
 from vibeocr.backend.runtime_maintenance import (
@@ -38,6 +47,8 @@ from vibeocr.backend.runtime_maintenance import (
     RuntimeCommandConflict,
     RuntimeCursorExpired,
     RuntimeInstallFailure,
+    RuntimeInstallPlanBlocked,
+    RuntimeInstallPlanStale,
     RuntimeMaintenanceReporter,
     RuntimeOperationCancelled,
     RuntimeOperationConflict,
@@ -45,6 +56,7 @@ from vibeocr.backend.runtime_maintenance import (
     RuntimeOperationNotCancellable,
     RuntimeOperationNotFound,
     RuntimeOperationNotRetryable,
+    RuntimeOperationStore,
     RuntimeSourceIdentityMismatch,
     declared_installed_closure,
     probe_runtime_components,
@@ -59,6 +71,7 @@ from vibeocr.backend.runtime_manifest import (
     RuntimeManifest,
     covering_profile_id,
     load_runtime_manifest,
+    migrate_legacy_component_ids,
 )
 from vibeocr.backend.runtime_selection import (
     BASE_PROFILE,
@@ -508,7 +521,9 @@ def _lock_allowed_hashes(lock_path: Path) -> dict[str, set[str]]:
     return allowed
 
 
-def _parse_resolve_report(report_path: Path) -> tuple[_ResolvedArtifact, ...]:
+def _parse_resolve_report(
+    report_path: Path, download_root: Path | None = None
+) -> tuple[_ResolvedArtifact, ...]:
     try:
         document = json.loads(report_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -531,10 +546,19 @@ def _parse_resolve_report(report_path: Path) -> tuple[_ResolvedArtifact, ...]:
             not isinstance(name, str)
             or not name
             or not isinstance(url, str)
-            or not url.startswith(("http://", "https://"))
+            or not url.startswith(("http://", "https://", "file://"))
             or (sha256 is not None and not isinstance(sha256, str))
         ):
             raise RuntimeInstallError("pip resolve report artifact is invalid")
+        if url.startswith("file://"):
+            parsed = urllib.parse.urlsplit(url)
+            local = Path(urllib.request.url2pathname(parsed.path)).resolve()
+            if (
+                download_root is None
+                or parsed.netloc not in {"", "localhost"}
+                or local.parent != download_root.resolve()
+            ):
+                raise RuntimeInstallError("resolve artifact is outside download cache")
         filename = urllib.parse.unquote(url.rsplit("/", 1)[-1])
         if (
             not filename
@@ -677,6 +701,26 @@ def _resolve_online_report(
     """
     report_path = cache / "resolve" / f"{lock.stem}-report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
+    inputs_path = report_path.with_suffix(".inputs.json")
+    inputs = {"lock": lock.read_text(encoding="utf-8"), "endpoint": endpoint}
+    try:
+        if json.loads(inputs_path.read_text(encoding="utf-8")) == inputs:
+            artifacts = _parse_resolve_report(
+                report_path, cache / "downloads/artifacts"
+            )
+            allowed = _lock_allowed_hashes(lock)
+            for artifact in artifacts:
+                if artifact.url.startswith("file://"):
+                    local = cache / "downloads/artifacts" / artifact.filename
+                    if not local.is_file() or _file_sha256(local) not in allowed.get(
+                        _normalize_dist_name(artifact.name), set()
+                    ):
+                        local.unlink(missing_ok=True)
+                        break
+            else:
+                return report_path
+    except (OSError, ValueError, RuntimeInstallError):
+        pass
     _run_install_command(
         [
             str(python),
@@ -696,6 +740,8 @@ def _resolve_online_report(
             str(_RESOLVE_NETWORK_RETRIES),
             "--report",
             str(report_path),
+            "--find-links",
+            str(cache / "downloads" / "artifacts"),
             "--index-url",
             endpoint,
             "--require-hashes",
@@ -711,6 +757,8 @@ def _resolve_online_report(
         reporter=reporter,
         heartbeat_code="runtime.resolve_packages",
     )
+    _parse_resolve_report(report_path, cache / "downloads/artifacts")
+    inputs_path.write_text(json.dumps(inputs, sort_keys=True), encoding="utf-8")
     return report_path
 
 
@@ -723,12 +771,26 @@ def _prepare_online_artifacts(
     env: dict[str, str],
 ) -> Path:
     """Resolve and download the online lock closure; return the artifact dir."""
+    allowed = _lock_allowed_hashes(lock)
+    downloads = cache / "downloads" / "artifacts"
+    downloads.mkdir(parents=True, exist_ok=True)
+    # Reuse only original wheels whose bytes the target lock already accepts.
+    # Wheels built from sdists remain bound to their original offline pack.
+    for wheel in (cache / "runtime-packs").glob("*/*.whl"):
+        name = _normalize_dist_name(wheel.name.split("-", 1)[0])
+        if (
+            name in allowed
+            and not (downloads / wheel.name).exists()
+            and _file_sha256(wheel) in allowed[name]
+        ):
+            shutil.copyfile(wheel, downloads / wheel.name)
     return _download_resolved_artifacts(
         _parse_resolve_report(
-            _resolve_online_report(python, lock, endpoint, cache, reporter, env)
+            _resolve_online_report(python, lock, endpoint, cache, reporter, env),
+            downloads,
         ),
-        _lock_allowed_hashes(lock),
-        cache / "downloads" / lock.stem,
+        allowed,
+        downloads,
         reporter,
     )
 
@@ -1102,8 +1164,13 @@ class RuntimeInstaller:
         required_capabilities: tuple[str, ...] = (),
         install_component_ids: tuple[str, ...] | None = None,
         download_source_ids: tuple[str, ...] | None = None,
+        plan_id: str | None = None,
     ) -> None:
         self.product_root = Path(product_root).resolve()
+        self._product_id = product_id
+        self._layout_manifest = (
+            Path(layout_manifest).resolve() if layout_manifest is not None else None
+        )
         self.component_lock_path = Path(component_lock).resolve()
         self.manifest = load_runtime_manifest(runtime_manifest)
         self.component_lock = _load_component_lock(self.component_lock_path)
@@ -1113,8 +1180,55 @@ class RuntimeInstaller:
             layout_manifest=layout_manifest,
             product_id=product_id,
         )
+        self._plan_id = plan_id
+        self._plan_record = (
+            read_plan(self.paths.state_root, plan_id) if plan_id else None
+        )
+        if self._plan_record is not None:
+            if not operation_id or CAPABILITY not in required_capabilities:
+                raise RuntimeInstallError(
+                    "plan confirmation requires operation_id and capability"
+                )
+            if install_component_ids is not None or download_source_ids is not None:
+                raise RuntimeInstallError("plan confirmation cannot override selection")
+            frozen = self._plan_record["plan"]
+            accelerator = frozen["accelerator"]
+            base_ids = {
+                item.component_id
+                for item in self.manifest.profiles[BASE_PROFILE].components
+            }
+            install_component_ids = tuple(
+                item
+                for item in frozen["effective_component_ids"]
+                if item not in base_ids
+            )
+            download_source_ids = tuple(frozen["effective_download_source_ids"])
         self.accelerator = self._select_accelerator(accelerator)
         self.plan = ACCELERATOR_TO_PLAN[self.accelerator]
+        requested_components = install_component_ids
+        marker = self._marker_value()
+        if install_component_ids is None and marker is not None:
+            known_ids = {
+                item.component_id
+                for item in self.manifest.profiles[self.plan].components
+            }
+            base_ids = {
+                item.component_id
+                for item in self.manifest.profiles[BASE_PROFILE].components
+            }
+            suffix = "cuda" if self.accelerator == "nvidia_cuda" else "cpu"
+            previous_ids = migrate_legacy_component_ids(
+                ACCELERATOR_TO_PLAN.get(marker.get("accelerator"), self.plan),
+                tuple(marker.get("component_ids", [])),
+            )
+            mapped = [
+                re.sub(r"-(cpu|cuda)$", f"-{suffix}", item)
+                for item in previous_ids
+                if isinstance(item, str)
+            ]
+            install_component_ids = tuple(
+                item for item in mapped if item in known_ids - base_ids
+            )
         self._selection = RuntimeSelectionPolicy.from_manifest(
             self.manifest
         ).plan_start(
@@ -1122,6 +1236,19 @@ class RuntimeInstaller:
             install_component_ids=install_component_ids,
             download_source_ids=download_source_ids,
         )
+        if self._plan_record is not None:
+            frozen = self._plan_record["plan"]
+            self._selection = replace(
+                self._selection,
+                requested_component_ids=None
+                if frozen["requested_component_ids"] is None
+                else tuple(frozen["requested_component_ids"]),
+                requested_download_source_ids=None
+                if frozen["requested_download_source_ids"] is None
+                else tuple(frozen["requested_download_source_ids"]),
+            )
+        elif requested_components is None:
+            self._selection = replace(self._selection, requested_component_ids=None)
         self._install_scope = self._selection.requested_component_ids
         self._requested_download_source_ids = (
             self._selection.requested_download_source_ids
@@ -1182,6 +1309,13 @@ class RuntimeInstaller:
             event_sink=event_sink,
         )
 
+    @property
+    def product_binding(self) -> dict[str, str | None]:
+        return {
+            "root": os.path.normcase(str(self.product_root)),
+            "id": self._product_id,
+        }
+
     def _preference_path(self) -> Path:
         return self.paths.state_root / "runtime-preference.json"
 
@@ -1190,6 +1324,9 @@ class RuntimeInstaller:
             if requested not in ACCELERATOR_TO_PLAN:
                 raise RuntimeInstallError(f"unsupported accelerator: {requested}")
             return requested
+        marker = self._marker_value()
+        if marker and marker.get("accelerator") in ACCELERATOR_TO_PLAN:
+            return marker["accelerator"]
         try:
             value = json.loads(self._preference_path().read_text(encoding="utf-8"))
             preferred = (
@@ -1201,17 +1338,6 @@ class RuntimeInstaller:
             preferred
             if preferred in ACCELERATOR_TO_PLAN
             else _default_accelerator(self.component_lock)
-        )
-
-    def _save_preference(self) -> None:
-        path = self._preference_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(
-                {"schema_version": 1, "accelerator": self.accelerator}, sort_keys=True
-            )
-            + "\n",
-            encoding="utf-8",
         )
 
     def _validate_binding(self) -> None:
@@ -1278,7 +1404,11 @@ class RuntimeInstaller:
             scope = self._scope_for_ids(tuple(installed))
         except RuntimeInstallError:
             return None
-        return scope.component_ids
+        return tuple(
+            item
+            for item in self._profile_component_ids()
+            if item in scope.component_ids
+        )
 
     def _installed_scope_ids(self) -> tuple[str, ...]:
         """已安装闭包由可信 marker 提供，不依赖当前运行时完整。"""
@@ -1421,6 +1551,8 @@ class RuntimeInstaller:
             source=self._source,
             source_operation_id=self._source_operation_id,
             required_capabilities=self._required_capabilities,
+            plan_id=self._plan_id if operation == "ensure" else None,
+            product_binding=self.product_binding if self._plan_id else None,
         )
 
     def inspect_snapshot(self, *, emit: bool = True) -> RuntimeInspection:
@@ -1473,6 +1605,8 @@ class RuntimeInstaller:
         state = self.paths.state_root
         environment = {
             "VIBEOCR_PRODUCT_ROOT": str(self.product_root),
+            "VIBEOCR_LAYOUT_MANIFEST": str(self._layout_manifest or ""),
+            "VIBEOCR_PRODUCT_ID": self._product_id or "",
             "VIBEOCR_RUNTIME_ROOT": str(self.paths.runtime_root),
             "VIBEOCR_RUNTIME_MANIFEST": str(self.manifest.path),
             "VIBEOCR_COMPONENT_LOCK": str(self.component_lock_path),
@@ -1511,7 +1645,183 @@ class RuntimeInstaller:
         environment.update(self._selection.model_source_environment())
         return environment
 
+    def _plan_baseline(self) -> dict[str, Any]:
+        marker = self._marker_value()
+        components = tuple((marker or {}).get("component_ids", []))
+        current_accelerator = (marker or {}).get("accelerator", self.accelerator)
+        profile = (
+            covering_profile_id(
+                self.manifest, accelerator=current_accelerator, component_ids=components
+            )
+            if components
+            else self.plan
+        )
+        probes = (
+            self._component_probe(self.paths.runtime_root, components, profile)
+            if components
+            else {}
+        )
+
+        statuses = runtime_profile_status(
+            self.manifest,
+            accelerator=current_accelerator,
+            runtime_root=self.paths.runtime_root,
+            probe_results=probes,
+            profile_id=profile,
+        )["components"]
+        probes = {
+            item["component_id"]: item["actual_state"] == "ready" for item in statuses
+        }
+        versions = {item["component_id"]: item["actual_version"] for item in statuses}
+
+        def read_state(path: Path) -> object:
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+
+        return {
+            "product": self.product_binding,
+            "marker": marker,
+            "probes": probes,
+            "versions": versions,
+            "preference": read_state(self._preference_path()),
+            "settings": read_state(
+                self.product_root / "state" / "supervisor-settings.json"
+            ),
+        }
+
+    def _installation_blockers(self) -> list[dict[str, str]]:
+        blockers: list[dict[str, str]] = []
+        if self._runner_reports_phases:
+            if os.name != "nt" or platform.machine().lower() not in {"amd64", "x86_64"}:
+                blockers.append(
+                    {"code": "platform_unsupported", "next_action": "use_windows_x64"}
+                )
+            if (
+                self.accelerator == "nvidia_cuda"
+                and self._desired_scope_ids()
+                != self.manifest.profiles[BASE_PROFILE].scopes[0].component_ids
+            ):
+                try:
+                    result = subprocess.run(
+                        [
+                            "nvidia-smi",
+                            "--query-gpu=driver_version",
+                            "--format=csv,noheader",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    # CUDA 12.x Windows minor compatibility has a 528.33 floor:
+                    # docs.nvidia.com/cuda/archive/12.6.0/cuda-toolkit-release-notes/
+                    versions = [
+                        tuple(int(part) for part in line.strip().split("."))
+                        for line in result.stdout.splitlines()
+                        if re.fullmatch(r"[0-9]+\.[0-9]+", line.strip())
+                    ]
+                    driver_available = result.returncode == 0 and bool(versions)
+                    driver_compatible = driver_available and all(
+                        version >= (528, 33) for version in versions
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    driver_available = False
+                    driver_compatible = False
+                if not driver_compatible:
+                    blockers.append(
+                        {
+                            "code": "nvidia_driver_incompatible"
+                            if driver_available
+                            else "nvidia_driver_unavailable",
+                            "next_action": "install_supported_driver",
+                        }
+                    )
+            destinations = (
+                self.product_root,
+                self.paths.store_root,
+                self.paths.runtime_root,
+                self.paths.state_root,
+            )
+            existing_parents = dict.fromkeys(
+                next(path for path in (target, *target.parents) if path.exists())
+                for target in destinations
+            )
+            if any(not os.access(path, os.W_OK) for path in existing_parents):
+                blockers.append(
+                    {
+                        "code": "runtime_not_writable",
+                        "next_action": "choose_writable_location",
+                    }
+                )
+            if any(
+                shutil.disk_usage(path).free
+                < self.manifest.python.archive_path.stat().st_size
+                for path in existing_parents
+            ):
+                blockers.append(
+                    {
+                        "code": "insufficient_disk_space",
+                        "next_action": "free_disk_space",
+                    }
+                )
+        return blockers
+
+    def _preview_install_plan_locked(
+        self,
+        *,
+        additional_blockers: tuple[dict[str, str], ...] = (),
+        inherit_download_sources: bool = False,
+    ) -> dict[str, Any]:
+        if CAPABILITY not in self._required_capabilities:
+            raise RuntimeCapabilityUnavailable(
+                "preview requires runtime.install-plan.v1"
+            )
+        return create_plan(
+            self.paths.state_root,
+            replace(self._selection, requested_download_source_ids=None)
+            if inherit_download_sources
+            else self._selection,
+            self._source,
+            self._plan_baseline(),
+            [*self._installation_blockers(), *additional_blockers],
+        )
+
     def ensure(self) -> RuntimeLaunch | None:
+        with RuntimeStoreLock(
+            self.paths.locks_root / "runtime-store.lock", timeout=self._lock_timeout
+        ):
+            if self._plan_record is not None:
+                self._plan_record = read_plan(self.paths.state_root, self._plan_id)
+                bound_operation = self._plan_record.get("operation_id")
+                if (
+                    bound_operation is not None
+                    and bound_operation != self._operation_id
+                ):
+                    raise RuntimeOperationConflict(
+                        "install plan already accepted by another operation"
+                    )
+                try:
+                    existing = RuntimeOperationStore(self.paths.state_root).snapshot(
+                        self._operation_id
+                    )
+                except RuntimeOperationNotFound:
+                    existing = None
+                if existing is not None:
+                    # Recheck under the writer lock: the caller may have raced a
+                    # first confirmation before its durable receipt existed.
+                    self._start_operation("ensure")
+                    return None
+                validate_plan(self._plan_record, self._plan_baseline(), self._source)
+                if self._installation_blockers():
+                    raise RuntimeInstallPlanBlocked(
+                        "preflight changed; resolve blockers and preview again"
+                    )
+                bind_plan(self.paths.state_root, self._plan_record, self._operation_id)
+            return self._ensure_locked()
+
+    def _ensure_locked(self) -> RuntimeLaunch | None:
         # ready 额外要求已安装闭包等于期望闭包：从 base-only 扩到 full
         # （或反向）都会触发一次重装，而不是静默沿用旧范围。
         # 漂移探测要真实导入已安装组件，是启动固定成本；结果在 ready
@@ -1546,17 +1856,15 @@ class RuntimeInstaller:
                     total=7,
                     message_code="runtime.wait_for_lock",
                 )
-                lock = RuntimeStoreLock(
-                    self.paths.locks_root / "runtime-store.lock",
-                    timeout=self._lock_timeout,
-                )
-                with lock:
-                    if (
-                        not self._integrity_ok()
-                        or self._installed_scope_ids() != self._desired_scope_ids()
-                        or self._drifted_component_ids()
-                    ):
-                        self._install_locked(self._desired_scope_ids())
+                if (
+                    not self._integrity_ok()
+                    or self._installed_scope_ids() != self._desired_scope_ids()
+                    or self._drifted_component_ids()
+                ):
+                    return self._install_locked(
+                        self._desired_scope_ids(),
+                        completion_message="runtime.ensure_complete",
+                    )
             else:
                 self._reporter.advance(
                     phase="verify_runtime",
@@ -1564,7 +1872,6 @@ class RuntimeInstaller:
                     total=7,
                     message_code="runtime.verify_runtime",
                 )
-            self._save_preference()
             launch = self._launch(startup_probe if ready else None)
             self._reporter.succeed(
                 phase="commit_runtime",
@@ -1579,7 +1886,9 @@ class RuntimeInstaller:
             self._reporter.fail(exc)
             raise
 
-    def _install_locked(self, target_ids: tuple[str, ...]) -> None:
+    def _install_locked(
+        self, target_ids: tuple[str, ...], *, completion_message: str
+    ) -> RuntimeLaunch:
         profile_name = self._covering_profile(target_ids)
         self._active_install_ids = target_ids
         self._reporter.advance(
@@ -1594,7 +1903,7 @@ class RuntimeInstaller:
         rollback = final.with_name("runtime.rollback")
         if rollback.exists():
             if final.exists():
-                shutil.rmtree(rollback)
+                rollback.replace(final.with_name(f"runtime.previous-{uuid4().hex}"))
             else:
                 rollback.replace(final)
         if partial.exists():
@@ -1644,11 +1953,33 @@ class RuntimeInstaller:
                 "manifest_sha256": self.manifest.sha256,
                 "accelerator": self.accelerator,
                 "component_ids": list(target_ids),
+                "generation": uuid4().hex,
+                "requested_component_ids": None
+                if self._install_scope is None
+                else list(self._install_scope),
+                "download_source_ids": list(self._effective_download_source_ids),
             }
             (partial / ".installed.json").write_text(
                 json.dumps(marker, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+            candidate_status = runtime_profile_status(
+                self.manifest,
+                accelerator=self.accelerator,
+                runtime_root=partial,
+                probe_results=probe_results,
+                profile_id=profile_name,
+            )
+            invalid = [
+                item["component_id"]
+                for item in candidate_status["components"]
+                if item["component_id"] in target_ids
+                and item["actual_state"] != "ready"
+            ]
+            if invalid:
+                raise RuntimeInstallError(
+                    f"candidate Runtime did not verify: {invalid}"
+                )
             self._reporter.advance(
                 phase="commit_runtime",
                 current=7,
@@ -1659,11 +1990,25 @@ class RuntimeInstaller:
                 final.replace(rollback)
             try:
                 partial.replace(final)
+                launch = self._launch()
+                self._reporter.succeed(
+                    phase="commit_runtime",
+                    current=7,
+                    total=7,
+                    message_code=completion_message,
+                )
             except Exception:
-                if rollback.exists() and not final.exists():
+                # Final-path probes and launch preparation are part of activation.
+                # Put a rejected candidate back in its disposable staging slot
+                # before restoring the previous runtime and its committed choice.
+                if final.exists():
+                    final.replace(partial)
+                if rollback.exists():
                     rollback.replace(final)
                 raise
-            shutil.rmtree(rollback, ignore_errors=True)
+            # Keep the fixed recovery slot after successful final-path validation.
+            # Archive it before the next installation, not after this activation.
+            return launch
         except RuntimeOperationCancelled:
             shutil.rmtree(partial, ignore_errors=True)
             raise
@@ -1672,6 +2017,12 @@ class RuntimeInstaller:
             raise
 
     def repair(self) -> RuntimeLaunch | None:
+        with RuntimeStoreLock(
+            self.paths.locks_root / "runtime-store.lock", timeout=self._lock_timeout
+        ):
+            return self._repair_locked()
+
+    def _repair_locked(self) -> RuntimeLaunch | None:
         if self._marker().is_file() and self._trusted_installed_scope_ids() is None:
             error = RuntimeInstallError("untrusted installed marker")
             if self._start_operation("repair"):
@@ -1691,8 +2042,6 @@ class RuntimeInstaller:
             return self._launch() if globally_ready else None
         try:
             if not needs_repair:
-                if globally_ready:
-                    self._save_preference()
                 launch = self._launch() if globally_ready else None
                 self._reporter.succeed(
                     phase="commit_runtime",
@@ -1707,21 +2056,10 @@ class RuntimeInstaller:
                 total=7,
                 message_code="runtime.wait_for_lock",
             )
-            lock = RuntimeStoreLock(
-                self.paths.locks_root / "runtime-store.lock",
-                timeout=self._lock_timeout,
+            return self._install_locked(
+                self._installed_scope_ids(),
+                completion_message="runtime.repair_complete",
             )
-            with lock:
-                self._install_locked(self._installed_scope_ids())
-            self._save_preference()
-            launch = self._launch()
-            self._reporter.succeed(
-                phase="commit_runtime",
-                current=7,
-                total=7,
-                message_code="runtime.repair_complete",
-            )
-            return launch
         except RuntimeOperationCancelled:
             raise
         except Exception as exc:
@@ -1805,6 +2143,8 @@ def _request(value: object) -> dict[str, Any]:
             required
             | common_optional
             | {
+                "plan_id",
+                "required_capabilities",
                 "new_operation_id",
                 "expected_sequence",
                 "accelerator",
@@ -1814,6 +2154,15 @@ def _request(value: object) -> dict[str, Any]:
                 "download_source_ids",
             }
         )
+    elif request_kind == "install_plan":
+        required = binding_fields | {"request_kind", "required_capabilities"}
+        allowed = required | {
+            "accelerator",
+            "layout_manifest",
+            "product_id",
+            "install_component_ids",
+            "download_source_ids",
+        }
     elif request_kind == "observe":
         required = binding_fields | {"operation_id", "after_sequence"}
         allowed = (
@@ -1836,6 +2185,7 @@ def _request(value: object) -> dict[str, Any]:
                 "layout_manifest",
                 "product_id",
                 "operation_id",
+                "plan_id",
                 "component_ids",
                 "required_capabilities",
                 "install_component_ids",
@@ -1844,6 +2194,34 @@ def _request(value: object) -> dict[str, Any]:
         )
     else:
         raise RuntimeInstallError("Runtime Host request_kind is invalid")
+    if request_kind == "install_plan" or "plan_id" in value:
+        from jsonschema import Draft202012Validator
+        from jsonschema.exceptions import ValidationError
+
+        schema = json.loads(
+            files("vibeocr.runtime_contracts")
+            .joinpath("runtime-host.schema.json")
+            .read_text(encoding="utf-8")
+        )
+        definition = {
+            "install_plan": "RuntimeInstallPlanRequest",
+            "start": "RuntimeHostRequest",
+            "command": "RuntimeMaintenanceCommandRequest",
+        }[request_kind]
+        try:
+            Draft202012Validator(
+                {"$ref": f"#/$defs/{definition}", "$defs": schema["$defs"]}
+            ).validate(
+                {
+                    key: item
+                    for key, item in value.items()
+                    if not (request_kind == "start" and key == "request_kind")
+                }
+            )
+        except ValidationError as exc:
+            raise RuntimeInstallError(
+                f"invalid install plan request: {exc.message}"
+            ) from exc
     if set(value).difference(allowed):
         raise RuntimeInstallError("Runtime Host request contains unknown fields")
     if not required.issubset(value) or value["protocol_version"] != PROTOCOL_VERSION:
@@ -1928,12 +2306,17 @@ def _installer_from_request(
     required_capabilities: tuple[str, ...] | None = None,
     install_component_ids: tuple[str, ...] | None = None,
     download_source_ids: tuple[str, ...] | None = None,
+    plan_id: str | None = None,
+    accelerator: str | None = None,
 ) -> RuntimeInstaller:
     return RuntimeInstaller(
         product_root=request["product_root"],
         component_lock=request["component_lock"],
         runtime_manifest=request["runtime_manifest"],
-        accelerator=request.get("accelerator"),
+        accelerator=accelerator
+        if accelerator is not None
+        else request.get("accelerator"),
+        plan_id=plan_id,
         layout_manifest=request.get("layout_manifest"),
         product_id=request.get("product_id"),
         event_sink=event_sink,
@@ -2039,6 +2422,14 @@ def _command_envelope(
         target_operation_id=request["target_operation_id"],
         new_operation_id=request.get("new_operation_id"),
         expected_sequence=request.get("expected_sequence"),
+        **(
+            {
+                "plan_id": request["plan_id"],
+                "required_capabilities": tuple(request["required_capabilities"]),
+            }
+            if "plan_id" in request
+            else {}
+        ),
         install_component_ids=(
             tuple(request["install_component_ids"])
             if "install_component_ids" in request
@@ -2074,7 +2465,15 @@ def _failure_envelope(
     category = "backend_unavailable"
     retryable = False
     detail: dict[str, Any] = {}
-    if isinstance(exc, RuntimeLockTimeout):
+    if isinstance(exc, (RuntimeInstallPlanStale, RuntimeInstallPlanBlocked)):
+        legacy_code = "invalid_request"
+        canonical_code = (
+            "RUNTIME_INSTALL_PLAN_STALE"
+            if isinstance(exc, RuntimeInstallPlanStale)
+            else "RUNTIME_INSTALL_PLAN_BLOCKED"
+        )
+        category = "conflict"
+    elif isinstance(exc, RuntimeLockTimeout):
         legacy_code = "lock_timeout"
         canonical_code = "RUNTIME_BUSY"
         category = "transient"
@@ -2184,6 +2583,26 @@ def main(argv: list[str] | None = None) -> int:
             request,
             event_sink=event_sink,
         )
+        if request_kind == "install_plan":
+            preview = control.preview_install_plan(
+                accelerator=request.get("accelerator"),
+                install_component_ids=tuple(request["install_component_ids"])
+                if "install_component_ids" in request
+                else None,
+                download_source_ids=tuple(request["download_source_ids"])
+                if "download_source_ids" in request
+                else None,
+                required_capabilities=tuple(request["required_capabilities"]),
+            )
+            _emit(
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "response_kind": "install_plan",
+                    "plan": preview["plan"],
+                    "negotiated_capabilities": preview["negotiated_capabilities"],
+                }
+            )
+            return 0
         if request_kind == "observe":
             update = control.observe(
                 request["operation_id"],
@@ -2223,6 +2642,7 @@ def main(argv: list[str] | None = None) -> int:
                 else None
             ),
             profile_id=request.get("profile_id"),
+            **({"plan_id": request["plan_id"]} if "plan_id" in request else {}),
         )
     except (
         json.JSONDecodeError,

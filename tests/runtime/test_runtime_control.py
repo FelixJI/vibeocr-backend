@@ -139,6 +139,7 @@ def test_retry_reuses_source_intent_and_links_new_operation(
             "component_ids": ("ocr_engine",),
             "required_capabilities": ("runtime.component-repair.v1",),
             "source_operation_id": "op-1",
+            "run_maintenance": None,
             "profile_id": "win-x64-cpu",
             # retry 省略选择字段：source intent 未携带 install/source，
             # 传 None 由 installer 解析为 Backend 缺省。

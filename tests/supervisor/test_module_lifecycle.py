@@ -11,6 +11,10 @@ import time
 from typing import TYPE_CHECKING
 
 import pytest
+from vibeocr.backend.supervisor.inference.recognition_modes import (
+    ModeAvailability,
+    RecognitionModeRegistry,
+)
 from vibeocr.backend.supervisor.module import (
     ShutdownRequested,
     SupervisorModule,
@@ -388,3 +392,117 @@ def test_settings_roundtrip(module: SupervisorModule) -> None:
     out = module.update_settings(snap)
     assert out.default_ttl_seconds == 600
     assert module.settings().default_ttl_seconds == 600
+
+
+def test_maintenance_excludes_submit_retry_and_other_maintenance(module):
+    module.recognition_mode_registry = RecognitionModeRegistry(
+        availability_probe=lambda definition: ModeAvailability("ready")
+    )
+    from concurrent.futures import ThreadPoolExecutor
+
+    from vibeocr.backend.runtime_lock import RuntimeLockTimeout
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def maintain():
+        entered.set()
+        assert release.wait(5)
+        raise ValueError("failed installation")
+
+    with ThreadPoolExecutor() as pool:
+        future = pool.submit(module.run_runtime_maintenance, maintain)
+        assert entered.wait(5)
+        try:
+            with pytest.raises(ShutdownRequested):
+                module.submit(
+                    kind=JobKind.RECOGNITION,
+                    priority=JobPriority.INTERACTIVE,
+                    uploads=[("sample.png", "image/png", b"x")],
+                )
+            with pytest.raises(ShutdownRequested):
+                module.retry("not-admitted")
+            with pytest.raises(RuntimeLockTimeout):
+                module.run_runtime_maintenance(lambda: None)
+            with pytest.raises(RuntimeLockTimeout):
+                module.preload(("MinerU",))
+        finally:
+            release.set()
+        with pytest.raises(ValueError, match="failed installation"):
+            future.result()
+    assert module.run_runtime_maintenance(lambda: "released") == "released"
+
+
+def test_maintenance_cannot_pass_job_during_staging(module, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from vibeocr.backend.runtime_lock import RuntimeLockTimeout
+
+    entered = threading.Event()
+    release = threading.Event()
+    original = module.stager.stage_job_with_item_errors
+
+    def stage(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module.stager, "stage_job_with_item_errors", stage)
+    monkeypatch.setattr(module, "_dispatch", lambda *args: None)
+    with ThreadPoolExecutor() as pool:
+        job = pool.submit(
+            module.submit,
+            kind=JobKind.RECOGNITION,
+            priority=JobPriority.INTERACTIVE,
+            uploads=[("sample.png", "image/png", b"x")],
+        )
+        assert entered.wait(5)
+        maintenance = pool.submit(module.run_runtime_maintenance, lambda: None)
+        release.set()
+        job.result()
+        assert module.runtime_maintenance_blockers() == (
+            {"code": "recognition_jobs_active", "next_action": "close_tasks"},
+        )
+        with pytest.raises(RuntimeLockTimeout):
+            maintenance.result()
+
+
+def test_inflight_preload_blocks_maintenance_and_releases_on_failure(
+    module, monkeypatch
+):
+    module.recognition_mode_registry = RecognitionModeRegistry(
+        availability_probe=lambda definition: ModeAvailability("ready")
+    )
+    from concurrent.futures import ThreadPoolExecutor
+
+    from vibeocr.backend.runtime_lock import RuntimeLockTimeout
+
+    entered, release = threading.Event(), threading.Event()
+
+    def preload(pipelines):
+        entered.set()
+        assert release.wait(5)
+        raise ValueError("model preparation failed")
+
+    monkeypatch.setattr(module._executor, "preload", preload)
+    with ThreadPoolExecutor() as pool:
+        pending = pool.submit(module.preload, ("MinerU",))
+        assert entered.wait(5)
+        try:
+            assert list(module.registry) == []
+            assert module.runtime_maintenance_blockers() == (
+                {
+                    "code": "engine_preparation_active",
+                    "next_action": "wait_for_preparation",
+                },
+            )
+            with pytest.raises(RuntimeLockTimeout):
+                module.run_runtime_maintenance(
+                    lambda: pytest.fail("installation started")
+                )
+        finally:
+            release.set()
+        with pytest.raises(ValueError, match="model preparation failed"):
+            pending.result()
+    assert module.runtime_maintenance_blockers() == ()
+    assert module.run_runtime_maintenance(lambda: "released") == "released"
