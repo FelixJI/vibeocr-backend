@@ -96,7 +96,7 @@ MinerU home，不覆盖旧 `mineru.json` 或旧模型。默认 `model.small_back
 Paddle 与 Base/RapidOCR/MinerU 使用不同解释器及 site-packages：Paddle 位于 runtime 的
 `engines/paddle`，独立锁固定其 OpenCV contrib 和框架，主环境使用 OpenCV Python。
 两个环境在同一未激活安装候选中构建并分别执行 `pip check`，任一失败不替换原有效 runtime；
-Paddle 推理经私有子进程调用，主进程不导入 Paddle。完整独立组件选择和安装预览属于后续安装策略。
+Paddle 推理经私有子进程调用，主进程不导入 Paddle。独立组件选择与确认流程见下文“安装预览与独立组件”。
 
 ## 仓库地图
 
