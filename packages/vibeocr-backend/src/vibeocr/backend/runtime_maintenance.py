@@ -880,7 +880,7 @@ def probe_runtime_components(
         "      assert (torch.ones(1,device='cuda')+1).cpu().item()==2.0\n"
         "    if component_id=='mineru-cpu':\n"
         "      importlib.import_module('onnxruntime')\n"
-        "      importlib.import_module('llama_cpp')\n"
+        "      importlib.import_module('mineru_llama_cpp')\n"
         "  except BaseException:\n"
         "    result[component_id]=False\n"
         "  else:\n"

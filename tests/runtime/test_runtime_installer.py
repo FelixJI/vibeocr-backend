@@ -2915,3 +2915,35 @@ def test_paddle_only_cuda_status_uses_base_host_lock(tmp_path: Path) -> None:
     assert not (tmp_path / "product/runtime.rollback").exists()
     metadata.write_text("Name: fastapi\nVersion: 0.141.0\n", encoding="utf-8")
     assert installer._drifted_component_ids() == ("runtime_host",)
+
+
+@pytest.mark.parametrize("llama_available", [True, False])
+def test_mineru_cpu_probe_uses_mineru4_llama_binding(
+    tmp_path, monkeypatch, llama_available
+):
+    import contextlib
+    import importlib
+    from types import SimpleNamespace
+
+    def import_module(name):
+        if name in {"mineru", "onnxruntime"} or (
+            name == "mineru_llama_cpp" and llama_available
+        ):
+            return SimpleNamespace()
+        raise ImportError(name)
+
+    def run(command, **kwargs):
+        output = io.StringIO()
+        with monkeypatch.context() as patch, contextlib.redirect_stdout(output):
+            patch.setattr(sys, "argv", ["probe", command[-1]])
+            patch.setattr(importlib, "import_module", import_module)
+            exec(command[-2], {})
+        return subprocess.CompletedProcess(
+            command, 0, stdout=output.getvalue(), stderr=""
+        )
+
+    monkeypatch.setattr(runtime_maintenance.subprocess, "run", run)
+    assert (
+        probe_runtime_components(tmp_path, ("mineru-cpu",))["mineru-cpu"]
+        is llama_available
+    )
