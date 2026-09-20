@@ -578,6 +578,7 @@ def create_app(
                 sources = list(module.settings().download_source_ids) or None
             return await asyncio.to_thread(
                 control().preview_install_plan,
+                additional_blockers=module.runtime_maintenance_blockers(),
                 accelerator=body.get("accelerator"),
                 install_component_ids=tuple(body["install_component_ids"])
                 if "install_component_ids" in body

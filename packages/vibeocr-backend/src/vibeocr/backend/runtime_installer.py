@@ -1747,7 +1747,9 @@ class RuntimeInstaller:
                 )
         return blockers
 
-    def preview_install_plan(self) -> dict[str, Any]:
+    def preview_install_plan(
+        self, *, additional_blockers: tuple[dict[str, str], ...] = ()
+    ) -> dict[str, Any]:
         if CAPABILITY not in self._required_capabilities:
             raise RuntimeCapabilityUnavailable(
                 "preview requires runtime.install-plan.v1"
@@ -1758,7 +1760,7 @@ class RuntimeInstaller:
                 self._selection,
                 self._source,
                 self._plan_baseline(),
-                self._installation_blockers(),
+                [*self._installation_blockers(), *additional_blockers],
             )
 
     def ensure(self) -> RuntimeLaunch | None:

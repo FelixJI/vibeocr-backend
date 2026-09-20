@@ -164,6 +164,7 @@ class RuntimeControl:
         install_component_ids: tuple[str, ...] | None = None,
         download_source_ids: tuple[str, ...] | None = None,
         required_capabilities: tuple[str, ...] = (),
+        additional_blockers: tuple[dict[str, str], ...] = (),
     ) -> dict[str, Any]:
         installer = self._installer(
             accelerator=accelerator,
@@ -173,7 +174,9 @@ class RuntimeControl:
         )
         return {
             "schema_version": 2,
-            "plan": installer.preview_install_plan(),
+            "plan": installer.preview_install_plan(
+                additional_blockers=additional_blockers
+            ),
             "negotiated_capabilities": list(required_capabilities),
         }
 

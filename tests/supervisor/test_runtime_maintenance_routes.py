@@ -324,7 +324,7 @@ async def test_stream_rejects_unnegotiated_media_type(
 
 
 async def test_install_plan_http_preserves_selection_and_confirmation_binding(
-    pdf_module, supervisor_token
+    pdf_module, supervisor_token, monkeypatch
 ):
     from importlib.resources import files
 
@@ -346,6 +346,8 @@ async def test_install_plan_http_preserves_selection_and_confirmation_binding(
             self.execute_calls.append(kwargs)
             raise RuntimeInstallPlanStale("preview again")
 
+    blockers = ({"code": "recognition_jobs_active", "next_action": "close_tasks"},)
+    monkeypatch.setattr(pdf_module, "runtime_maintenance_blockers", lambda: blockers)
     control = PlanControl()
     app = create_app(pdf_module, supervisor_token, runtime_control=control)
     async with _http(supervisor_token, app) as http:
@@ -355,6 +357,8 @@ async def test_install_plan_http_preserves_selection_and_confirmation_binding(
         )
         assert response.status_code == 200
         assert control.preview_request["install_component_ids"] == ()
+        assert control.preview_request["additional_blockers"] == blockers
+        monkeypatch.setattr(pdf_module, "runtime_maintenance_blockers", lambda: ())
         bad = await http.post(
             "/v2/runtime/install-plan",
             json={"required_capabilities": [], "pip_args": []},

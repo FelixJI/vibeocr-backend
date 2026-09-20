@@ -253,12 +253,25 @@ class SupervisorModule:
     # Submit
     # ------------------------------------------------------------------
 
+    def runtime_maintenance_blockers(self) -> tuple[dict[str, str], ...]:
+        with self._lock:
+            if self._runtime_maintenance:
+                return (
+                    {
+                        "code": "runtime_maintenance_active",
+                        "next_action": "wait_for_maintenance",
+                    },
+                )
+            if any(record.state not in TERMINAL_JOB_STATES for record in self.registry):
+                return (
+                    {"code": "recognition_jobs_active", "next_action": "close_tasks"},
+                )
+            return ()
+
     def run_runtime_maintenance[T](self, action: Callable[[], T]) -> T:
         """Exclude job admission through the complete maintenance transaction."""
         with self._lock:
-            if self._runtime_maintenance or any(
-                record.state not in TERMINAL_JOB_STATES for record in self.registry
-            ):
+            if self.runtime_maintenance_blockers():
                 raise RuntimeLockTimeout(
                     "recognition jobs or runtime maintenance are active"
                 )

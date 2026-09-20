@@ -343,3 +343,35 @@ def test_successful_noop_plan_cannot_be_confirmed_with_another_operation(tmp_pat
             required_capabilities=(CAPABILITY,),
         )
     assert len(calls) == 1
+
+
+def test_preview_persists_supervisor_blocker_until_fresh_preview(tmp_path):
+    from vibeocr.backend.runtime_maintenance import RuntimeInstallPlanBlocked
+
+    control, _, calls, _, _ = _control(tmp_path)
+    blocker = {"code": "recognition_jobs_active", "next_action": "close_tasks"}
+    plan = control.preview_install_plan(
+        install_component_ids=(),
+        required_capabilities=(CAPABILITY,),
+        additional_blockers=(blocker,),
+    )["plan"]
+    assert plan["blockers"] == [blocker]
+    with pytest.raises(RuntimeInstallPlanBlocked):
+        control.execute(
+            operation="ensure",
+            operation_id="blocked-job",
+            plan_id=plan["plan_id"],
+            required_capabilities=(CAPABILITY,),
+        )
+    assert calls == []
+    fresh = control.preview_install_plan(
+        install_component_ids=(), required_capabilities=(CAPABILITY,)
+    )["plan"]
+    assert fresh["blockers"] == []
+    control.execute(
+        operation="ensure",
+        operation_id="fresh-job",
+        plan_id=fresh["plan_id"],
+        required_capabilities=(CAPABILITY,),
+    )
+    assert len(calls) == 1

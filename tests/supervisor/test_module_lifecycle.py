@@ -451,5 +451,8 @@ def test_maintenance_cannot_pass_job_during_staging(module, monkeypatch):
         maintenance = pool.submit(module.run_runtime_maintenance, lambda: None)
         release.set()
         job.result()
+        assert module.runtime_maintenance_blockers() == (
+            {"code": "recognition_jobs_active", "next_action": "close_tasks"},
+        )
         with pytest.raises(RuntimeLockTimeout):
             maintenance.result()
