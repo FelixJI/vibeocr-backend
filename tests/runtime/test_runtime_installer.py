@@ -2813,3 +2813,34 @@ def test_resolve_report_accepts_only_files_in_bound_download_cache(tmp_path):
         installer._parse_resolve_report(report, tmp_path / "other")
     with pytest.raises(RuntimeInstallError, match="outside download cache"):
         installer._parse_resolve_report(report)
+
+
+@pytest.mark.parametrize("component", ["paddleocr-cuda", "gpu_runtime", "mineru-cuda"])
+def test_gpu_probe_fails_when_import_works_but_device_is_unavailable(
+    tmp_path, monkeypatch, component
+):
+    import contextlib
+    import importlib
+    import io
+    import sys
+    from types import SimpleNamespace
+
+    module = SimpleNamespace(
+        device=SimpleNamespace(is_compiled_with_cuda=lambda: False),
+        cuda=SimpleNamespace(is_available=lambda: False),
+    )
+
+    def run(command, **kwargs):
+        output = io.StringIO()
+        with monkeypatch.context() as patch, contextlib.redirect_stdout(output):
+            patch.setattr(importlib, "import_module", lambda name: module)
+            patch.setattr(sys, "argv", ["-c", command[-1]])
+            exec(command[-2], {})
+        return subprocess.CompletedProcess(
+            command, 0, stdout=output.getvalue(), stderr=""
+        )
+
+    monkeypatch.setattr(runtime_maintenance.subprocess, "run", run)
+    assert probe_runtime_components(
+        tmp_path, (component,), profile_id="win-x64-cu126"
+    ) == {component: False}
