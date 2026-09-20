@@ -357,9 +357,16 @@ def test_heartbeat_keeps_last_real_activity_and_progress(tmp_path, monkeypatch):
         "{'password': 'synthetic-credential', 'status': 'failed'}",
         'Authorization: "Bearer synthetic-credential"',
         'secret="synthetic-credential without closing quote',
+        "access_token=synthetic-credential",
+        "HF_TOKEN=synthetic-credential",
+        '{"client_secret": "synthetic-credential"}',
+        'accessToken="synthetic-credential"',
+        "X-API-Key: synthetic-credential",
     ],
 )
-def test_quoted_credentials_are_redacted_before_durable_public_events(tmp_path, detail):
+def test_credential_key_families_are_redacted_before_durable_public_events(
+    tmp_path, detail
+):
     reporter = _reporter(tmp_path)
     reporter.fail(ValueError(detail))
     replay = RuntimeOperationStore(tmp_path).observe(
