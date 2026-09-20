@@ -1168,6 +1168,9 @@ class RuntimeInstaller:
     ) -> None:
         self.product_root = Path(product_root).resolve()
         self._product_id = product_id
+        self._layout_manifest = (
+            Path(layout_manifest).resolve() if layout_manifest is not None else None
+        )
         self.component_lock_path = Path(component_lock).resolve()
         self.manifest = load_runtime_manifest(runtime_manifest)
         self.component_lock = _load_component_lock(self.component_lock_path)
@@ -1602,6 +1605,8 @@ class RuntimeInstaller:
         state = self.paths.state_root
         environment = {
             "VIBEOCR_PRODUCT_ROOT": str(self.product_root),
+            "VIBEOCR_LAYOUT_MANIFEST": str(self._layout_manifest or ""),
+            "VIBEOCR_PRODUCT_ID": self._product_id or "",
             "VIBEOCR_RUNTIME_ROOT": str(self.paths.runtime_root),
             "VIBEOCR_RUNTIME_MANIFEST": str(self.manifest.path),
             "VIBEOCR_COMPONENT_LOCK": str(self.component_lock_path),
@@ -1733,21 +1738,27 @@ class RuntimeInstaller:
                             "next_action": "install_supported_driver",
                         }
                     )
-            existing_parent = next(
-                path
-                for path in (self.product_root, *self.product_root.parents)
-                if path.exists()
+            destinations = (
+                self.product_root,
+                self.paths.store_root,
+                self.paths.runtime_root,
+                self.paths.state_root,
             )
-            if not os.access(existing_parent, os.W_OK):
+            existing_parents = dict.fromkeys(
+                next(path for path in (target, *target.parents) if path.exists())
+                for target in destinations
+            )
+            if any(not os.access(path, os.W_OK) for path in existing_parents):
                 blockers.append(
                     {
                         "code": "runtime_not_writable",
                         "next_action": "choose_writable_location",
                     }
                 )
-            if (
-                shutil.disk_usage(existing_parent).free
+            if any(
+                shutil.disk_usage(path).free
                 < self.manifest.python.archive_path.stat().st_size
+                for path in existing_parents
             ):
                 blockers.append(
                     {

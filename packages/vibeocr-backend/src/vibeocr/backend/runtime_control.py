@@ -46,11 +46,15 @@ class RuntimeControl:
         component_lock: str | Path,
         runtime_manifest: str | Path,
         accelerator: str | None = None,
+        layout_manifest: str | Path | None = None,
+        product_id: str | None = None,
     ) -> None:
         self._product_root = Path(product_root)
         self._component_lock = Path(component_lock)
         self._runtime_manifest = Path(runtime_manifest)
         self._accelerator = accelerator
+        self._layout_manifest = layout_manifest
+        self._product_id = product_id
         self._installer_factory: Callable[..., RuntimeInstaller] | None = None
         self._active_snapshot: dict[str, Any] | None = None
         probe = self._installer()
@@ -88,13 +92,26 @@ class RuntimeControl:
         }
         if any(not value for value in required.values()):
             raise RuntimeError("Runtime control environment is incomplete")
-        return cls(
+        control = cls(
             product_root=str(required["product_root"]),
             component_lock=str(required["component_lock"]),
             runtime_manifest=str(required["runtime_manifest"]),
+            layout_manifest=os.environ.get("VIBEOCR_LAYOUT_MANIFEST") or None,
+            product_id=os.environ.get("VIBEOCR_PRODUCT_ID") or None,
             # A running Supervisor may still carry the pre-switch launch device.
             # New maintenance intents follow the persisted choice/product default.
         )
+
+        for variable, actual in (
+            ("VIBEOCR_RUNTIME_ROOT", control._state_root.parent / "runtime"),
+            ("VIBEOCR_RUNTIME_STATE_ROOT", control._state_root),
+        ):
+            declared = os.environ.get(variable)
+            if declared and Path(declared).resolve() != actual.resolve():
+                raise RuntimeIdentityMismatch(
+                    "Runtime control store differs from the launch environment"
+                )
+        return control
 
     @property
     def state_root(self) -> Path:
@@ -135,6 +152,8 @@ class RuntimeControl:
             )
         return RuntimeInstaller(
             product_root=self._product_root,
+            layout_manifest=self._layout_manifest,
+            product_id=self._product_id,
             component_lock=self._component_lock,
             runtime_manifest=self._runtime_manifest,
             accelerator=accelerator if accelerator is not None else self._accelerator,

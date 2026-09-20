@@ -836,3 +836,141 @@ def test_shared_layout_plan_and_receipt_are_bound_to_initiating_product(
         other.execute(**request)
     assert owner.execute(**request) == receipt
     assert "product" not in plan
+
+
+def _shared_factory(tmp_path):
+    _, _, _, manifest, component = _control(tmp_path)
+    bundle = tmp_path / "bundle"
+    product = bundle / "classic"
+    product.mkdir(parents=True)
+    layout = bundle / "portable-layout.json"
+    layout.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "shared_root": "shared",
+                "products": {"classic": {"root": "classic"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def factory(**kwargs):
+        return RuntimeInstaller(
+            product_root=product,
+            component_lock=component,
+            runtime_manifest=manifest,
+            layout_manifest=layout,
+            product_id="classic",
+            install_runner=_fake_install,
+            **kwargs,
+        )
+
+    return factory
+
+
+@pytest.mark.parametrize("failure", ["permission", "space"])
+def test_shared_store_preflight_checks_actual_destination(
+    tmp_path, monkeypatch, failure
+):
+    from types import SimpleNamespace
+
+    import vibeocr.backend.runtime_installer as installer_module
+
+    installer = _shared_factory(tmp_path)(accelerator="cpu", install_component_ids=())
+    shared = installer.paths.store_root
+    shared.mkdir(parents=True)
+    installer._runner_reports_phases = True
+    monkeypatch.setattr(installer_module.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(
+        installer_module.os,
+        "access",
+        lambda path, mode: not (failure == "permission" and path == shared),
+    )
+    monkeypatch.setattr(
+        installer_module.shutil,
+        "disk_usage",
+        lambda path: SimpleNamespace(
+            free=0 if failure == "space" and path == shared else 10**12
+        ),
+    )
+    expected = (
+        "runtime_not_writable" if failure == "permission" else "insufficient_disk_space"
+    )
+    assert expected in {entry["code"] for entry in installer._installation_blockers()}
+    assert not installer.paths.runtime_root.exists()
+
+
+async def test_host_environment_preserves_shared_http_plan_and_receipt(
+    tmp_path, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    import httpx
+    import vibeocr.backend.runtime_installer as installer_module
+    from vibeocr.backend.supervisor.app import create_app
+    from vibeocr.backend.supervisor.module import SupervisorModule, SupervisorOptions
+
+    monkeypatch.setattr(
+        installer_module,
+        "_default_component_probe",
+        lambda root, component_ids, profile: {item: True for item in component_ids},
+    )
+    factory = _shared_factory(tmp_path)
+    launch = factory(accelerator="cpu", install_component_ids=()).ensure()
+    for key, value in launch.environment.items():
+        if key.startswith("VIBEOCR_"):
+            monkeypatch.setenv(key, value)
+    host = RuntimeControl.from_installer_factory(factory)
+    plan = host.preview_install_plan(required_capabilities=(CAPABILITY,))["plan"]
+    control = RuntimeControl.from_environment()
+    assert control.state_root == host.state_root
+    assert control._installer()._plan_baseline() == host._installer()._plan_baseline()
+    with ThreadPoolExecutor() as executor:
+        module = SupervisorModule(
+            options=SupervisorOptions(instance_id="shared-test"),
+            stager_root=tmp_path / "staging",
+            executor=executor,
+        )
+        app = create_app(module, "test-token", runtime_control=control)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://127.0.0.1",
+            headers={"Authorization": "Bearer test-token"},
+        ) as http:
+            preview = await http.post(
+                "/v2/runtime/install-plan", json={"required_capabilities": [CAPABILITY]}
+            )
+            assert preview.status_code == 200, preview.text
+            assert (
+                preview.json()["plan"]["effective_component_ids"]
+                == plan["effective_component_ids"]
+            )
+            request = dict(
+                operation="ensure",
+                operation_id="shared-op",
+                plan_id=plan["plan_id"],
+                required_capabilities=[CAPABILITY],
+            )
+            response = await http.post("/v2/runtime/maintenance", json=request)
+            assert response.status_code == 200, response.text
+            assert response.json() == host.execute(
+                **{**request, "required_capabilities": (CAPABILITY,)}
+            )
+            replay = await http.post("/v2/runtime/maintenance", json=request)
+            assert replay.json() == response.json()
+    assert not (tmp_path / "bundle/classic/runtime").exists()
+    assert not (tmp_path / "bundle/classic/state/operations").exists()
+
+
+def test_environment_rejects_missing_shared_layout_binding(tmp_path, monkeypatch):
+    from vibeocr.backend.runtime_installer import RuntimeIdentityMismatch
+
+    installer = _shared_factory(tmp_path)(accelerator="cpu", install_component_ids=())
+    for key, value in installer._environment().items():
+        if key.startswith("VIBEOCR_"):
+            monkeypatch.setenv(key, value)
+    monkeypatch.delenv("VIBEOCR_LAYOUT_MANIFEST", raising=False)
+    monkeypatch.delenv("VIBEOCR_PRODUCT_ID", raising=False)
+    with pytest.raises(RuntimeIdentityMismatch, match="store differs"):
+        RuntimeControl.from_environment()
