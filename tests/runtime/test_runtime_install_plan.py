@@ -542,3 +542,106 @@ async def test_http_replays_confirm_and_retry_while_ocr_blocks_new_installs(
             assert blocked.status_code == 423, blocked.text
             assert blocked.json()["code"] == "RUNTIME_BUSY"
             assert calls == ["win-x64-base"]
+
+
+@pytest.mark.parametrize(
+    "accelerators", [("cpu", "nvidia_cuda"), ("nvidia_cuda", "cpu")]
+)
+def test_base_device_switch_previews_candidate_cost_as_unknown(
+    tmp_path, monkeypatch, accelerators
+):
+    control, factory, calls, _, _ = _control(tmp_path)
+    monkeypatch.setattr(RuntimeInstaller, "_installation_blockers", lambda self: [])
+    old, new = accelerators
+    factory(accelerator=old, install_component_ids=()).ensure()
+    plan = control.preview_install_plan(
+        accelerator=new, install_component_ids=(), required_capabilities=(CAPABILITY,)
+    )["plan"]
+    assert {item["action"] for item in plan["components"]} == {"replace"}
+    assert plan["cost"]["download_bytes"] is None
+    assert plan["cost"]["additional_disk_bytes"] is None
+    assert "candidate_disk_usage_unknown" in plan["cost"]["unknown_reason_codes"]
+    receipt = control.execute(
+        operation="ensure",
+        operation_id="switch",
+        plan_id=plan["plan_id"],
+        required_capabilities=(CAPABILITY,),
+    )
+    assert receipt["snapshot"]["operation_state"] == "succeeded"
+    assert len(calls) == 2
+    assert (tmp_path / "product/runtime.rollback").is_dir()
+
+
+def test_confirmation_rechecks_failed_receipt_after_first_lookup_race(tmp_path):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from vibeocr.backend.runtime_installer import RuntimeInstallError
+
+    control, factory, calls, _, _ = _control(tmp_path)
+    plan = control.preview_install_plan(
+        install_component_ids=(), required_capabilities=(CAPABILITY,)
+    )["plan"]
+    entered, release = threading.Event(), threading.Event()
+
+    def delayed_factory(**kwargs):
+        installer = factory(**kwargs)
+        if kwargs.get("plan_id"):
+            entered.set()
+            assert release.wait(10)
+        return installer
+
+    def fail(*args):
+        raise RuntimeInstallError("first confirmation failed")
+
+    other = RuntimeControl.from_installer_factory(delayed_factory)
+    control._installer_factory = lambda **kwargs: factory(install_runner=fail, **kwargs)
+    request = dict(
+        operation="ensure",
+        operation_id="op",
+        plan_id=plan["plan_id"],
+        required_capabilities=(CAPABILITY,),
+    )
+    with ThreadPoolExecutor() as pool:
+        pending = pool.submit(other.execute, **request)
+        assert entered.wait(5)
+        try:
+            with pytest.raises(RuntimeInstallError):
+                control.execute(**request)
+        finally:
+            release.set()
+        assert pending.result()["snapshot"] == control._store.snapshot("op")
+    assert calls == []
+
+
+def test_confirmation_rechecks_receipt_after_http_admission_race(tmp_path):
+    from vibeocr.backend.runtime_installer import RuntimeInstallError
+    from vibeocr.backend.runtime_lock import RuntimeLockTimeout
+
+    control, factory, calls, _, _ = _control(tmp_path)
+    plan = control.preview_install_plan(
+        install_component_ids=(), required_capabilities=(CAPABILITY,)
+    )["plan"]
+    other = RuntimeControl.from_installer_factory(factory)
+    request = dict(
+        operation="ensure",
+        operation_id="op",
+        plan_id=plan["plan_id"],
+        required_capabilities=(CAPABILITY,),
+    )
+
+    def fail(*args):
+        raise RuntimeInstallError("first confirmation failed")
+
+    other._installer_factory = lambda **kwargs: factory(install_runner=fail, **kwargs)
+
+    def admission(action):
+        # A competing HTTP request is accepted after this request's first lookup.
+        with pytest.raises(RuntimeInstallError):
+            other.execute(**request)
+        raise RuntimeLockTimeout("another maintenance owns admission")
+
+    receipt = control.execute(**request, run_maintenance=admission)
+    assert receipt["snapshot"] == other._store.snapshot("op")
+    assert receipt["snapshot"]["operation_state"] == "failed"
+    assert calls == []

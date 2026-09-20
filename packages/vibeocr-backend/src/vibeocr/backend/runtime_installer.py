@@ -1783,14 +1783,16 @@ class RuntimeInstaller:
                     )
                 except RuntimeOperationNotFound:
                     existing = None
-                if existing is None:
-                    validate_plan(
-                        self._plan_record, self._plan_baseline(), self._source
+                if existing is not None:
+                    # Recheck under the writer lock: the caller may have raced a
+                    # first confirmation before its durable receipt existed.
+                    self._start_operation("ensure")
+                    return None
+                validate_plan(self._plan_record, self._plan_baseline(), self._source)
+                if self._installation_blockers():
+                    raise RuntimeInstallPlanBlocked(
+                        "preflight changed; resolve blockers and preview again"
                     )
-                    if self._installation_blockers():
-                        raise RuntimeInstallPlanBlocked(
-                            "preflight changed; resolve blockers and preview again"
-                        )
                 bind_plan(self.paths.state_root, self._plan_record, self._operation_id)
             return self._ensure_locked()
 

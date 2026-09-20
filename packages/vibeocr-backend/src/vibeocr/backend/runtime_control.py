@@ -192,7 +192,9 @@ class RuntimeControl:
         install_component_ids: tuple[str, ...] | None = None,
         download_source_ids: tuple[str, ...] | None = None,
         plan_id: str | None = None,
-        run_maintenance: Callable[[Callable[[], RuntimeLaunch]], RuntimeLaunch]
+        run_maintenance: Callable[
+            [Callable[[], RuntimeLaunch | None]], RuntimeLaunch | None
+        ]
         | None = None,
     ) -> dict[str, Any]:
         if operation not in {"inspect", "ensure", "repair"}:
@@ -223,7 +225,9 @@ class RuntimeControl:
         install_component_ids: tuple[str, ...] | None = None,
         download_source_ids: tuple[str, ...] | None = None,
         plan_id: str | None = None,
-        run_maintenance: Callable[[Callable[[], RuntimeLaunch]], RuntimeLaunch]
+        run_maintenance: Callable[
+            [Callable[[], RuntimeLaunch | None]], RuntimeLaunch | None
+        ]
         | None = None,
     ) -> RuntimeControlResult:
         """Execute once while exposing adapter-only launch projection."""
@@ -241,7 +245,10 @@ class RuntimeControl:
             operation != "ensure" or component_ids or profile_id is not None
         ):
             raise ValueError("plan confirmation requires ensure without overrides")
-        if plan_id is not None and operation_id is not None:
+
+        def replay_plan() -> RuntimeControlResult | None:
+            if plan_id is None or operation_id is None:
+                return None
             try:
                 previous = self._store.snapshot(operation_id)
             except RuntimeOperationNotFound:
@@ -267,6 +274,10 @@ class RuntimeControl:
                     },
                     include_launch=False,
                 )
+            return None
+
+        if (replayed := replay_plan()) is not None:
+            return replayed
         installer = self._installer(
             operation_id=operation_id,
             source_operation_id=source_operation_id,
@@ -287,6 +298,11 @@ class RuntimeControl:
             else:
                 action = getattr(installer, operation)
                 launch = run_maintenance(action) if run_maintenance else action()
+        except RuntimeLockTimeout:
+            # Another confirmation may have been accepted after our initial read.
+            if (replayed := replay_plan()) is not None:
+                return replayed
+            raise
         finally:
             self._active_snapshot = installer.maintenance_snapshot()
         receipt = self._receipt(installer, required_capabilities)
@@ -347,7 +363,9 @@ class RuntimeControl:
         download_source_ids: tuple[str, ...] | None = None,
         plan_id: str | None = None,
         required_capabilities: tuple[str, ...] = (),
-        run_maintenance: Callable[[Callable[[], RuntimeLaunch]], RuntimeLaunch]
+        run_maintenance: Callable[
+            [Callable[[], RuntimeLaunch | None]], RuntimeLaunch | None
+        ]
         | None = None,
     ) -> dict[str, Any]:
         # 选择字段只对 retry 合法；cancel 不接受 selection（计划 §4.3）。

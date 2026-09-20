@@ -1312,6 +1312,7 @@ class RuntimeMaintenanceReporter:
             self._event_sink(started.event)
         if (
             not started.created
+            and plan_id is None
             and started.snapshot is not None
             and started.snapshot.get("operation_state") == "failed"
         ):

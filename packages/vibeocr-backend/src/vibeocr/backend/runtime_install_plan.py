@@ -89,7 +89,12 @@ def create_plan(
 ) -> dict[str, Any]:
     marker = baseline["marker"] or {}
     installed = marker.get("component_ids", [])
-    current_source = marker.get("manifest_sha256") == source["runtime_manifest_sha256"]
+    current_binding = (
+        marker.get("schema_version") == 1
+        and marker.get("backend_version") == source["backend_version"]
+        and marker.get("manifest_sha256") == source["runtime_manifest_sha256"]
+        and marker.get("accelerator") == selection.accelerator
+    )
     probes = baseline["probes"]
     versions = baseline.get("versions", {})
     expected_versions = {
@@ -106,7 +111,7 @@ def create_plan(
         expected = expected_versions.get(component_id)
         healthy = (
             present
-            and current_source
+            and current_binding
             and probes.get(component_id, False)
             and (expected is None or versions.get(component_id) == expected)
         )
