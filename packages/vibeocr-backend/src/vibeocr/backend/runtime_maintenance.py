@@ -86,7 +86,8 @@ def safe_runtime_detail(text: str) -> str:
     text = re.sub(r"(?i)(?:[a-z]:[\\/]|\\\\)[^\r\n\"']+", "[path]", text)
     text = re.sub(r"(?<![\w])/(?:[^\s/]+/)*[^\s,;)]+", "[path]", text)
     text = re.sub(
-        r"(?i)\b(token|password|secret|authorization|api[_-]?key)\s*[:=]\s*(?:Bearer\s+)?[^\s,;]+",
+        r"""(?i)\b(token|password|secret|authorization|api[_-]?key)["']?\s*[:=]\s*"""
+        r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|["'][^\r\n]*|(?:Bearer\s+)?[^\s,;]+)""",
         r"\1=[redacted]",
         text,
     )
