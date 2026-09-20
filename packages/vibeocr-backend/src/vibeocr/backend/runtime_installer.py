@@ -8,6 +8,7 @@ never dependency names, index URLs or pip arguments.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import json
 import os
@@ -32,6 +33,7 @@ from pathlib import Path
 from typing import Any, TextIO
 from uuid import uuid4
 
+import httpx
 from vibeocr.backend.runtime_install_plan import (
     CAPABILITY,
     bind_plan,
@@ -63,6 +65,7 @@ from vibeocr.backend.runtime_maintenance import (
     profile_descriptor,
     runtime_profile_status,
     runtime_source_identity,
+    safe_runtime_detail,
 )
 from vibeocr.backend.runtime_manifest import (
     ACCELERATOR_TO_PLAN,
@@ -196,15 +199,7 @@ def _child_status_detail(line: str) -> str | None:
 
 def _safe_child_text(text: str) -> str:
     """Remove locations and credentials before output reaches events or errors."""
-    text = re.sub(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s<>\"']+", "[url]", text)
-    text = re.sub(
-        r"(?i)\b(?:authorization|password|token|api[_-]?key)\s*[:=]\s*(?:Bearer\s+)?\S+",
-        "[credential]",
-        text,
-    )
-    text = re.sub(r"(?i)(?:[a-z]:[\\/]|\\\\)[^\r\n\"']+", "[path]", text)
-    text = re.sub(r"(?<![\w])/(?:[^\s/]+/)*[^\s,;)]+", "[path]", text)
-    return text
+    return safe_runtime_detail(text)
 
 
 def _drain_child_lines(
@@ -278,6 +273,10 @@ def _run_install_command(
 
     if reporter is not None:
         reporter.check_cancelled(fallback_message=diagnostic("cancelled"))
+    if reporter is not None:
+        reporter.child_status_detail(
+            message_code=heartbeat_code, fallback_message=diagnostic("started")
+        )
     guard = JobObjectGuard(allow_breakaway=False)
     launched = command
     if os.name == "nt":
@@ -308,14 +307,19 @@ def _run_install_command(
         if reporter is not None:
             reporter.clear_cancellation_detail()
         guard.close()
-        raise RuntimeInstallError(diagnostic("spawn_failed")) from None
+        raise RuntimeInstallError(
+            diagnostic("spawn_failed"), reason_code="process_spawn_failed"
+        ) from None
     readers: list[threading.Thread] = []
     done = [threading.Event(), threading.Event()]
     line_queue: queue.Queue[str] = queue.Queue(maxsize=64)
     try:
         if os.name == "nt":
             if not guard.assign_from_popen(process):
-                raise RuntimeInstallError(diagnostic("process_containment_failed"))
+                raise RuntimeInstallError(
+                    diagnostic("process_containment_failed"),
+                    reason_code="process_containment_failed",
+                )
             assert process.stdin is not None
             process.stdin.write("1")
             process.stdin.close()
@@ -329,10 +333,6 @@ def _run_install_command(
             readers.append(reader)
             reader.start()
         last_heartbeat = started
-        if resolver and reporter is not None:
-            reporter.child_status_detail(
-                message_code=heartbeat_code, fallback_message=diagnostic("started")
-            )
         while True:
             now = time.monotonic()
             if reporter is not None:
@@ -352,7 +352,11 @@ def _run_install_command(
             elif idle_timeout is not None and now - last_activity >= idle_timeout:
                 reason = "idle_timeout"
             if reason is not None:
-                raise RuntimeInstallError(diagnostic(reason))
+                raise RuntimeInstallError(
+                    diagnostic(reason),
+                    reason_code=reason,
+                    next_action="check_source_and_retry",
+                )
             try:
                 line = line_queue.get(
                     timeout=min(0.1, max(0.001, timeout - (now - started)))
@@ -381,7 +385,8 @@ def _run_install_command(
         if process.returncode != 0:
             raise RuntimeInstallError(
                 f"{heartbeat_code} failed with exit code {process.returncode}; "
-                + diagnostic("exit_nonzero")
+                + diagnostic("exit_nonzero"),
+                reason_code="process_exit_nonzero",
             )
         if resolver and reporter is not None:
             reporter.child_status_detail(
@@ -389,7 +394,9 @@ def _run_install_command(
             )
     except RuntimeInstallError as exc:
         raise RuntimeInstallError(
-            str(exc) + _child_output_tail("".join(tails[1]), "".join(tails[0]))
+            str(exc) + _child_output_tail("".join(tails[1]), "".join(tails[0])),
+            reason_code=exc.reason_code,
+            next_action=exc.next_action,
         ) from None
     finally:
         if reporter is not None:
@@ -567,26 +574,25 @@ def _parse_resolve_report(
             or ":" in filename
             or ".." in filename
         ):
-            raise RuntimeInstallError(f"pip resolve artifact url is unsafe: {url}")
+            raise RuntimeInstallError("pip resolve artifact URL is unsafe")
         artifacts.append(_ResolvedArtifact(name, url, sha256, filename))
     return tuple(artifacts)
 
 
-def _remote_content_length(url: str) -> int | None:
-    request = urllib.request.Request(url, method="HEAD")
+def _content_length(headers: httpx.Headers) -> int | None:
     try:
-        with urllib.request.urlopen(
-            request, timeout=_DOWNLOAD_HTTP_TIMEOUT_SECONDS
-        ) as response:
-            if response.status != 200:
-                return None
-            value = response.headers.get("Content-Length")
-    except (OSError, ValueError):
+        value = int(headers.get("Content-Length", ""))
+        return value if value > 0 else None
+    except ValueError:
         return None
-    try:
-        return int(value) if value else None
-    except (TypeError, ValueError):
-        return None
+
+
+def _download_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=_DOWNLOAD_HTTP_TIMEOUT_SECONDS,
+        headers={"Accept-Encoding": "identity"},
+    )
 
 
 def _file_sha256(path: Path) -> str:
@@ -603,85 +609,187 @@ def _download_resolved_artifacts(
     download_root: Path,
     reporter: RuntimeMaintenanceReporter | None,
 ) -> Path:
-    """Resolve the exact lock closure and download it with byte progress.
-
-    The download reuses previously verified files so a retry after a network
-    failure only refetches the missing artifacts. Every completed file is
-    verified against the lock allow-list before the offline install consumes
-    it.
-    """
+    """Fetch each verified artifact once; progress counts this batch's network bytes."""
     download_root.mkdir(parents=True, exist_ok=True)
-    cached: dict[int, int] = {}
-    for index, artifact in enumerate(artifacts):
-        destination = download_root / artifact.filename
-        if destination.is_file() and _file_sha256(destination) in allowed_hashes.get(
-            _normalize_dist_name(artifact.name), set()
+    unique: dict[str, _ResolvedArtifact] = {}
+    for artifact in artifacts:
+        previous = unique.setdefault(artifact.filename, artifact)
+        if previous != artifact and (
+            previous.name != artifact.name
+            or previous.sha256 is None
+            or previous.sha256 != artifact.sha256
         ):
-            cached[index] = destination.stat().st_size
-    sizes = {
-        index: cached.get(index)
-        if index in cached
-        else _remote_content_length(artifact.url)
-        for index, artifact in enumerate(artifacts)
-    }
-    total_bytes = sum(size for size in sizes.values() if size is not None)
-    known_bytes = all(size is not None for size in sizes.values())
-
-    def report_progress(current: int, total: int, unit: str) -> None:
-        if reporter is None:
-            return
-        reporter.advance_measured(
-            phase="install_profile",
-            unit=unit,  # type: ignore[arg-type]
-            current=current,
-            total=total,
-            message_code="runtime.download_package",
+            raise RuntimeInstallError("conflicting download artifact filename")
+    identities: set[tuple[str, str]] = set()
+    distinct = []
+    for artifact in unique.values():
+        identity = (
+            _normalize_dist_name(artifact.name),
+            artifact.sha256 or artifact.url,
         )
+        if identity not in identities:
+            identities.add(identity)
+            distinct.append(artifact)
+    artifacts = tuple(distinct)
+    received = 0
+    total: int | None = None
 
-    if known_bytes:
-        report_progress(sum(cached.values()), total_bytes, "bytes")
-    else:
-        report_progress(len(cached), len(artifacts), "items")
-
-    completed_bytes = sum(cached.values())
-    completed_items = len(cached)
-    last_event_bytes = completed_bytes
-    for index, artifact in enumerate(artifacts):
-        if index in cached:
-            continue
-        destination = download_root / artifact.filename
-        temporary = destination.with_suffix(destination.suffix + ".part")
-        expected = allowed_hashes.get(_normalize_dist_name(artifact.name), set())
-        digest = hashlib.sha256()
-        request = urllib.request.Request(artifact.url)
-        with (
-            urllib.request.urlopen(
-                request, timeout=_DOWNLOAD_HTTP_TIMEOUT_SECONDS
-            ) as response,
-            temporary.open("wb") as stream,
-        ):
-            while True:
-                chunk = response.read(_DOWNLOAD_CHUNK_BYTES)
-                if not chunk:
-                    break
-                stream.write(chunk)
-                digest.update(chunk)
-                if known_bytes:
-                    completed_bytes += len(chunk)
-                    if completed_bytes - last_event_bytes >= _DOWNLOAD_EVENT_MIN_BYTES:
-                        report_progress(completed_bytes, total_bytes, "bytes")
-                        last_event_bytes = completed_bytes
-        if digest.hexdigest() not in expected:
-            temporary.unlink(missing_ok=True)
-            raise RuntimeInstallError(
-                f"downloaded artifact hash mismatch: {artifact.name}"
+    def report(code: str, **details: str) -> None:
+        if reporter is not None:
+            reporter.advance_measured(
+                phase="install_profile",
+                unit="bytes",
+                current=received,
+                total=total,
+                message_code=code,
+                message_args={"step": code, **details},
             )
-        os.replace(temporary, destination)
-        completed_items += 1
-        if not known_bytes:
-            report_progress(completed_items, len(artifacts), "items")
-        elif completed_bytes > last_event_bytes:
-            report_progress(completed_bytes, total_bytes, "bytes")
+
+    async def download() -> None:
+        nonlocal received, total
+        pending = []
+        for artifact in artifacts:
+            if reporter is not None:
+                reporter.check_cancelled()
+            report("runtime.verify_download_cache", package=artifact.name)
+            destination = download_root / artifact.filename
+            expected = allowed_hashes.get(_normalize_dist_name(artifact.name), set())
+            if artifact.sha256 is not None:
+                expected = expected & {artifact.sha256}
+            cached_digest = None
+            if destination.is_file():
+                digest = hashlib.sha256()
+                with destination.open("rb") as stream:
+                    while chunk := stream.read(_DOWNLOAD_CHUNK_BYTES):
+                        if reporter is not None:
+                            reporter.check_cancelled()
+                            reporter.record_activity()
+                        digest.update(chunk)
+                        await asyncio.sleep(0)
+                cached_digest = digest.hexdigest()
+            if cached_digest in expected:
+                report(
+                    "runtime.download_cache_hit",
+                    package=artifact.name,
+                    cache_bytes=str(destination.stat().st_size),
+                )
+            else:
+                if cached_digest is not None:
+                    report("runtime.download_cache_invalid", package=artifact.name)
+                pending.append((artifact, expected))
+        if not pending:
+            return
+        async with _download_client() as client:
+            sizes: list[int | None] = []
+            for artifact, _ in pending:
+                report("runtime.probe_package_metadata", package=artifact.name)
+                if urllib.parse.urlsplit(artifact.url).scheme not in {"https", "http"}:
+                    raise RuntimeInstallError(
+                        "verified local artifact is unavailable",
+                        reason_code="cache_invalid",
+                        next_action="retry_operation",
+                    )
+                try:
+                    response = await client.head(artifact.url)
+                    sizes.append(
+                        _content_length(response.headers)
+                        if response.status_code == 200
+                        else None
+                    )
+                except httpx.RequestError:
+                    # HEAD is optional; the GET remains authoritative and bounded.
+                    sizes.append(None)
+            total = (
+                sum(size for size in sizes if size is not None)
+                if all(size is not None for size in sizes)
+                else None
+            )
+            for index, (artifact, expected) in enumerate(pending):
+                report("runtime.download_package", package=artifact.name)
+                destination = download_root / artifact.filename
+                temporary = destination.with_suffix(destination.suffix + ".part")
+                digest = hashlib.sha256()
+                last_event_bytes = received
+                try:
+                    async with client.stream("GET", artifact.url) as response:
+                        response.raise_for_status()
+                        if _content_length(response.headers) != sizes[index]:
+                            total = None
+                            report("runtime.download_package", package=artifact.name)
+                        with temporary.open("wb") as stream:
+                            async for chunk in response.aiter_raw():
+                                if reporter is not None:
+                                    reporter.check_cancelled()
+                                    reporter.record_activity()
+                                stream.write(chunk)
+                                digest.update(chunk)
+                                received += len(chunk)
+                                if total is not None and received > total:
+                                    total = None
+                                # Never announce 100% before the lock digest is accepted.
+                                if (
+                                    received != total
+                                    and received - last_event_bytes
+                                    >= _DOWNLOAD_EVENT_MIN_BYTES
+                                ):
+                                    report(
+                                        "runtime.download_package",
+                                        package=artifact.name,
+                                    )
+                                    last_event_bytes = received
+                    if digest.hexdigest() not in expected:
+                        raise RuntimeInstallError(
+                            f"downloaded artifact hash mismatch: {artifact.name}",
+                            reason_code="hash_mismatch",
+                            next_action="check_source_and_retry",
+                        )
+                    if reporter is not None:
+                        reporter.check_cancelled()
+                    os.replace(temporary, destination)
+                    report("runtime.download_verified", package=artifact.name)
+                finally:
+                    temporary.unlink(missing_ok=True)
+
+    async def supervise() -> None:
+        task = asyncio.create_task(download())
+        last_heartbeat = time.monotonic()
+        try:
+            while not task.done():
+                await asyncio.wait({task}, timeout=0.1)
+                if reporter is not None:
+                    reporter.check_cancelled()
+                    if (
+                        time.monotonic() - last_heartbeat
+                        >= _CHILD_HEARTBEAT_INTERVAL_SECONDS
+                    ):
+                        reporter.heartbeat(message_code="runtime.download_wait")
+                        last_heartbeat = time.monotonic()
+            await task
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    try:
+        asyncio.run(supervise())
+    except httpx.TimeoutException:
+        raise RuntimeInstallError(
+            "package download timed out",
+            reason_code="network_timeout",
+            next_action="check_source_and_retry",
+        ) from None
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeInstallError(
+            f"package download HTTP status {exc.response.status_code}",
+            reason_code="http_error",
+            next_action="check_source_and_retry",
+        ) from None
+    except httpx.RequestError:
+        raise RuntimeInstallError(
+            "package download connection failed",
+            reason_code="network_error",
+            next_action="check_source_and_retry",
+        ) from None
     return download_root
 
 
@@ -1870,7 +1978,7 @@ class RuntimeInstaller:
                     phase="verify_runtime",
                     current=6,
                     total=7,
-                    message_code="runtime.verify_runtime",
+                    message_code="runtime.already_satisfied",
                 )
             launch = self._launch(startup_probe if ready else None)
             self._reporter.succeed(
@@ -1941,7 +2049,9 @@ class RuntimeInstaller:
             )
             if failed_components:
                 raise RuntimeInstallError(
-                    f"installed Runtime component imports failed: {failed_components}"
+                    f"installed Runtime component imports failed: {failed_components}",
+                    reason_code="component_verification_failed",
+                    next_action="inspect_runtime_diagnostics",
                 )
             (partial / ".component-integrity.json").write_text(
                 json.dumps(probe_results, sort_keys=True) + "\n",
@@ -1978,11 +2088,13 @@ class RuntimeInstaller:
             ]
             if invalid:
                 raise RuntimeInstallError(
-                    f"candidate Runtime did not verify: {invalid}"
+                    f"candidate Runtime did not verify: {invalid}",
+                    reason_code="component_verification_failed",
+                    next_action="inspect_runtime_diagnostics",
                 )
             self._reporter.advance(
                 phase="commit_runtime",
-                current=7,
+                current=6,
                 total=7,
                 message_code="runtime.commit_runtime",
             )

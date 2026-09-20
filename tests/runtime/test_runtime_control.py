@@ -205,15 +205,17 @@ def test_start_reconciles_durable_event_after_metadata_replace_crash(
     assert len(events) == 1
 
 
-def test_latest_projection_prefers_active_operation_over_newer_terminal(
+@pytest.mark.parametrize("state", ["running", "failed", "cancelled"])
+def test_latest_projection_preserves_maintenance_over_later_inspect(
     tmp_path: Path,
+    state: str,
 ) -> None:
     store = RuntimeOperationStore(tmp_path)
     store.start(
         "active-repair",
         {"operation": "repair", "profile_id": "win-x64-cpu"},
         initial_snapshot={
-            **_snapshot("active-repair", 1),
+            **_snapshot("active-repair", 1, state),
             "updated_at": "2026-08-05T12:00:00Z",
         },
     )
@@ -241,7 +243,7 @@ def test_latest_projection_prefers_active_operation_over_newer_terminal(
 
     assert projection is not None
     assert projection["operation_id"] == "active-repair"
-    assert projection["operation_state"] == "running"
+    assert projection["operation_state"] == state
 
 
 def test_cancel_intent_recovers_from_event_before_metadata_replace_crash(

@@ -10,6 +10,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+import httpx
 import pytest
 from vibeocr.backend import runtime_maintenance
 from vibeocr.backend.runtime_control import RuntimeControl
@@ -1435,7 +1436,8 @@ def test_long_install_command_emits_heartbeat(
     assert heartbeats[0]["message_code"] == "runtime.install_profile"
     # 状态行明细按变化回报：无前缀的噪声行不产生事件
     detail_events = [event for event in events if event.get("fallback_message")]
-    assert [event["fallback_message"] for event in detail_events] == [
+    assert "reason=started" in detail_events[0]["fallback_message"]
+    assert [event["fallback_message"] for event in detail_events[1:]] == [
         "Collecting torch-2.7.0",
         "Downloading torch-2.7.0-cp313 (2.5 GB)",
     ]
@@ -2527,7 +2529,8 @@ def test_document_parsing_ensure_passes_selected_model_source_to_native_clients(
 
 class _MeasuredRecorder:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, int, int]] = []
+        self.calls: list[tuple[str, int, int | None]] = []
+        self.codes: list[str] = []
 
     def advance_measured(
         self,
@@ -2535,32 +2538,49 @@ class _MeasuredRecorder:
         phase: str,
         unit: str,
         current: int,
-        total: int,
+        total: int | None,
         message_code: str,
         component_id: str | None = None,
         estimated_remaining_seconds: int | None = None,
+        message_args: dict[str, str] | None = None,
     ) -> None:
         self.calls.append((unit, current, total))
 
+        self.codes.append(message_code)
 
-class _FakeResponse:
-    def __init__(self, payload: bytes) -> None:
-        self._payload = payload
-        self._offset = 0
+    def check_cancelled(self) -> None:
+        pass
 
-    def read(self, size: int = -1) -> bytes:
-        if self._offset >= len(self._payload):
-            return b""
-        window = self._payload[self._offset :]
-        chunk = window if size < 0 else window[:size]
-        self._offset += len(chunk)
-        return chunk
+    def record_activity(self) -> None:
+        pass
 
-    def __enter__(self) -> _FakeResponse:
-        return self
+    def heartbeat(self, **kwargs) -> None:
+        pass
 
-    def __exit__(self, *_exc: object) -> bool:
-        return False
+
+def _mock_downloads(monkeypatch, payloads, *, known_length=True, opened=None):
+    from vibeocr.backend import runtime_installer as installer
+
+    def respond(request):
+        filename = request.url.path.rsplit("/", 1)[-1]
+        payload = payloads[filename]
+        headers = {"Content-Length": str(len(payload))} if known_length else {}
+        if request.method == "HEAD":
+            return httpx.Response(200, headers=headers)
+        if opened is not None:
+            opened.append(filename)
+
+        class Body(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield payload
+
+        return httpx.Response(200, headers=headers, stream=Body())
+
+    monkeypatch.setattr(
+        installer,
+        "_download_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    )
 
 
 class TestOnlineArtifactDownload:
@@ -2608,24 +2628,14 @@ class TestOnlineArtifactDownload:
         }
         opened: list[str] = []
 
-        def fake_urlopen(request, timeout=None):  # type: ignore[no-untyped-def]
-            url = request.full_url
-            opened.append(url.rsplit("/", 1)[-1])
-            return _FakeResponse(payloads[url.rsplit("/", 1)[-1]])
-
-        monkeypatch.setattr(installer.urllib.request, "urlopen", fake_urlopen)
-        monkeypatch.setattr(
-            installer,
-            "_remote_content_length",
-            lambda url: len(payloads[url.rsplit("/", 1)[-1]]),
-        )
+        _mock_downloads(monkeypatch, payloads, opened=opened)
         reporter = _MeasuredRecorder()
         root = installer._download_resolved_artifacts(
             tuple(artifacts), allowed, tmp_path / "downloads", reporter
         )
 
         assert sorted(path.name for path in root.iterdir()) == sorted(payloads)
-        assert reporter.calls[0] == ("bytes", 0, sum(map(len, payloads.values())))
+        assert ("bytes", 0, sum(map(len, payloads.values()))) in reporter.calls
         assert reporter.calls[-1][0] == "bytes"
         assert reporter.calls[-1][2] == sum(map(len, payloads.values()))
         # 已验证文件直接复用：第二次调用不再发起网络请求。
@@ -2635,7 +2645,8 @@ class TestOnlineArtifactDownload:
             tuple(artifacts), allowed, root, reporter2
         )
         assert opened == []
-        assert reporter2.calls[0][1] == sum(map(len, payloads.values()))
+        assert all(current == 0 for _, current, _ in reporter2.calls)
+        assert reporter2.codes.count("runtime.download_cache_hit") == 2
 
     def test_download_fails_closed_on_hash_mismatch(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2649,19 +2660,14 @@ class TestOnlineArtifactDownload:
             sha256=None,
             filename="alpha-1.0.whl",
         )
-        monkeypatch.setattr(
-            installer.urllib.request,
-            "urlopen",
-            lambda request, timeout=None: _FakeResponse(payload),
-        )
-        monkeypatch.setattr(installer, "_remote_content_length", lambda url: None)
+        _mock_downloads(monkeypatch, {artifact.filename: payload}, known_length=False)
         with pytest.raises(RuntimeInstallError, match="hash mismatch"):
             installer._download_resolved_artifacts(
                 (artifact,), {"alpha": {"0" * 64}}, tmp_path / "downloads", None
             )
         assert not list((tmp_path / "downloads").glob("*.part"))
 
-    def test_download_falls_back_to_item_progress_without_sizes(
+    def test_download_omits_total_without_sizes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from vibeocr.backend import runtime_installer as installer
@@ -2673,12 +2679,7 @@ class TestOnlineArtifactDownload:
             sha256=hashlib.sha256(payload).hexdigest(),
             filename="alpha-1.0.whl",
         )
-        monkeypatch.setattr(
-            installer.urllib.request,
-            "urlopen",
-            lambda request, timeout=None: _FakeResponse(payload),
-        )
-        monkeypatch.setattr(installer, "_remote_content_length", lambda url: None)
+        _mock_downloads(monkeypatch, {artifact.filename: payload}, known_length=False)
         reporter = _MeasuredRecorder()
         installer._download_resolved_artifacts(
             (artifact,),
@@ -2686,7 +2687,10 @@ class TestOnlineArtifactDownload:
             tmp_path / "downloads",
             reporter,
         )
-        assert reporter.calls == [("items", 0, 1), ("items", 1, 1)]
+        assert reporter.calls[-1] == ("bytes", len(payload), None)
+        assert all(
+            unit == "bytes" and total is None for unit, _, total in reporter.calls
+        )
 
 
 def test_paddle_environment_installs_in_separate_interpreter_and_shared_cache(
@@ -2755,14 +2759,8 @@ def test_different_scope_locks_reuse_verified_download_without_second_request(
         installer, "_resolve_online_report", lambda *args: tmp_path / "report.json"
     )
     monkeypatch.setattr(installer, "_parse_resolve_report", lambda *args: (artifact,))
-    monkeypatch.setattr(installer, "_remote_content_length", lambda url: len(payload))
     requests = []
-
-    def download(request, timeout):
-        requests.append(request.full_url)
-        return _FakeResponse(payload)
-
-    monkeypatch.setattr(installer.urllib.request, "urlopen", download)
+    _mock_downloads(monkeypatch, {"shared.whl": payload}, opened=requests)
     roots = [
         installer._prepare_online_artifacts(
             Path("python"),
