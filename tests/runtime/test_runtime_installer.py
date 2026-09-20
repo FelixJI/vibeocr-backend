@@ -2849,6 +2849,7 @@ def test_gpu_probe_fails_when_import_works_but_device_is_unavailable(
 def test_paddle_only_cuda_status_uses_base_host_lock(tmp_path: Path) -> None:
     manifest_path, component_lock = _release(tmp_path / "release")
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["capabilities"].append("runtime.install-plan.v1")
     payload["profiles"]["win-x64-cu126"]["components"] = [
         {
             **item.to_payload(),
@@ -2892,8 +2893,6 @@ def test_paddle_only_cuda_status_uses_base_host_lock(tmp_path: Path) -> None:
         installer.paths.runtime_root
         / "Lib/site-packages/fastapi-1.0.0.dist-info/METADATA"
     )
-    metadata.write_text("Name: fastapi\nVersion: 0.141.0\n", encoding="utf-8")
-    assert installer._drifted_component_ids() == ("runtime_host",)
     marker = installer._marker().read_bytes()
     replacement = RuntimeInstaller(
         product_root=tmp_path / "product",
@@ -2901,9 +2900,18 @@ def test_paddle_only_cuda_status_uses_base_host_lock(tmp_path: Path) -> None:
         runtime_manifest=manifest_path,
         accelerator="nvidia_cuda",
         install_component_ids=("paddleocr-cuda", "mineru-cuda"),
+        required_capabilities=("runtime.install-plan.v1",),
         install_runner=install,
     )
+    preview = replacement.preview_install_plan()
+    host_change = next(
+        item for item in preview["components"] if item["component_id"] == "runtime_host"
+    )
+    assert host_change["action"] == "replace"
+    assert host_change["dependency_state"] == "pending"
     with pytest.raises(RuntimeInstallError, match="candidate Runtime did not verify"):
         replacement.ensure()
     assert installer._marker().read_bytes() == marker
     assert not (tmp_path / "product/runtime.rollback").exists()
+    metadata.write_text("Name: fastapi\nVersion: 0.141.0\n", encoding="utf-8")
+    assert installer._drifted_component_ids() == ("runtime_host",)

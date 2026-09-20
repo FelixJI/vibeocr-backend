@@ -15,6 +15,7 @@ from vibeocr.backend.runtime_maintenance import (
     RuntimeOperationConflict,
     _atomic_json,
 )
+from vibeocr.backend.runtime_manifest import scoped_component_version
 from vibeocr.backend.runtime_selection import ResolvedRuntimeSelection
 from vibeocr.runtime_contracts.parser import parse_runtime_install_plan_response
 
@@ -90,12 +91,25 @@ def create_plan(
     installed = marker.get("component_ids", [])
     current_source = marker.get("manifest_sha256") == source["runtime_manifest_sha256"]
     probes = baseline["probes"]
+    versions = baseline.get("versions", {})
+    expected_versions = {
+        item.component_id: scoped_component_version(
+            selection.profile, selection.install_scope, item
+        )
+        for item in selection.profile.components
+    }
     components = []
     requested = selection.requested_component_ids
     for component_id in dict.fromkeys([*selection.effective_component_ids, *installed]):
         selected = component_id in selection.effective_component_ids
         present = component_id in installed
-        healthy = present and current_source and probes.get(component_id, False)
+        expected = expected_versions.get(component_id)
+        healthy = (
+            present
+            and current_source
+            and probes.get(component_id, False)
+            and (expected is None or versions.get(component_id) == expected)
+        )
         action = (
             "remove"
             if not selected

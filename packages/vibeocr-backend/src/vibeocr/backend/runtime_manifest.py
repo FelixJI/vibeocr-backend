@@ -362,6 +362,29 @@ def _validate_protocol_release_manifest(
         raise ManifestError("Protocol wheel is not bound by its release manifest")
 
 
+def scoped_component_version(
+    profile: RuntimeProfile,
+    scope: RuntimeInstallScope | None,
+    component: RuntimeComponent,
+) -> str | None:
+    """Project the selected host lock without changing isolated Paddle's binding."""
+    if (
+        scope is not None
+        and scope.lock_path != profile.lock_path
+        and component.version is not None
+        and not component.component_id.startswith("paddleocr-")
+        and component.component_id in scope.component_ids
+    ):
+        distribution = runtime_component_binding(
+            profile.name, component.component_id
+        ).distribution
+        return (
+            locked_distribution_version(scope.lock_path, distribution)
+            or component.version
+        )
+    return component.version
+
+
 def locked_distribution_version(path: Path, project: str) -> str | None:
     text = path.read_text(encoding="utf-8")
     exact = re.search(rf"(?mi)^{re.escape(project)}==([^\s\\]+)", text)

@@ -25,8 +25,8 @@ from vibeocr.backend.runtime_manifest import (
     RuntimeProfile,
     covering_profile_id,
     load_runtime_manifest,
-    locked_distribution_version,
     runtime_component_binding,
+    scoped_component_version,
 )
 from vibeocr.backend.runtime_selection import durable_selection_fields
 
@@ -1048,23 +1048,10 @@ def _component_statuses(
     )
     statuses: list[dict[str, Any]] = []
     for component in descriptor.components:
-        # Independent scopes may use a different host lock than the full profile.
-        # Keep Paddle's separate environment and unversioned legacy components.
-        if (
-            installed_scope is not None
-            and installed_scope.lock_path != profile.lock_path
-            and component.version is not None
-            and not component.component_id.startswith("paddleocr-")
-            and component.component_id in installed_scope.component_ids
-        ):
-            distribution = runtime_component_binding(
-                descriptor.profile_id, component.component_id
-            ).distribution
-            version = locked_distribution_version(
-                installed_scope.lock_path, distribution
-            )
-            if version is not None:
-                component = replace(component, version=version)
+        component = replace(
+            component,
+            version=scoped_component_version(profile, installed_scope, component),
+        )
         if required_ids is not None and component.component_id not in required_ids:
             # base-only / 精确 scope 安装不含该可选组件：缺席是合法状态，
             # 不是 drift，也不可 repair（扩闭包属于 ensure 的选择面）。

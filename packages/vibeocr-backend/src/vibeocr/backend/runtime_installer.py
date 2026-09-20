@@ -1634,12 +1634,31 @@ class RuntimeInstaller:
     def _plan_baseline(self) -> dict[str, Any]:
         marker = self._marker_value()
         components = tuple((marker or {}).get("component_ids", []))
-        profile = ACCELERATOR_TO_PLAN.get((marker or {}).get("accelerator"), self.plan)
+        current_accelerator = (marker or {}).get("accelerator", self.accelerator)
+        profile = (
+            covering_profile_id(
+                self.manifest, accelerator=current_accelerator, component_ids=components
+            )
+            if components
+            else self.plan
+        )
         probes = (
             self._component_probe(self.paths.runtime_root, components, profile)
             if components
             else {}
         )
+
+        statuses = runtime_profile_status(
+            self.manifest,
+            accelerator=current_accelerator,
+            runtime_root=self.paths.runtime_root,
+            probe_results=probes,
+            profile_id=profile,
+        )["components"]
+        probes = {
+            item["component_id"]: item["actual_state"] == "ready" for item in statuses
+        }
+        versions = {item["component_id"]: item["actual_version"] for item in statuses}
 
         def read_state(path: Path) -> object:
             try:
@@ -1650,6 +1669,7 @@ class RuntimeInstaller:
         return {
             "marker": marker,
             "probes": probes,
+            "versions": versions,
             "preference": read_state(self._preference_path()),
             "settings": read_state(
                 self.product_root / "state" / "supervisor-settings.json"
