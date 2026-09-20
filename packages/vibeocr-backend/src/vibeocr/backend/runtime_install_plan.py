@@ -134,6 +134,16 @@ def create_plan(
             }
         )
     unchanged = all(item["action"] == "retain" for item in components)
+    unknown_costs = (
+        []
+        if unchanged
+        else ["artifact_resolution_required", "candidate_disk_usage_unknown"]
+    )
+    if any(
+        item.startswith(("paddleocr-", "mineru-"))
+        for item in selection.effective_component_ids
+    ):
+        unknown_costs.append("native_model_preparation_not_estimated")
     plan = {
         "plan_id": uuid4().hex,
         "expires_at": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
@@ -151,9 +161,7 @@ def create_plan(
         "cost": {
             "download_bytes": 0 if unchanged else None,
             "additional_disk_bytes": 0 if unchanged else None,
-            "unknown_reason_codes": []
-            if unchanged
-            else ["artifact_resolution_required", "candidate_disk_usage_unknown"],
+            "unknown_reason_codes": unknown_costs,
         },
     }
     _atomic_json(

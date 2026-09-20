@@ -62,6 +62,10 @@ def test_preview_is_contract_valid_and_does_not_create_operation_or_runtime(tmp_
     assert not (tmp_path / "product/runtime").exists()
     assert not (tmp_path / "product/state/operations").exists()
     assert parsed.plan.cost.download_bytes is None
+    assert (
+        "native_model_preparation_not_estimated"
+        in parsed.plan.cost.unknown_reason_codes
+    )
 
 
 def test_confirmation_and_expired_replay_keep_same_receipt(tmp_path):
