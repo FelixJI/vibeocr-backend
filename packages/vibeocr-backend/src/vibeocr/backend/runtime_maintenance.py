@@ -46,6 +46,14 @@ class RuntimeOperationError(RuntimeError):
     """Base error for durable Runtime maintenance control."""
 
 
+class RuntimeInstallPlanStale(RuntimeOperationError):
+    pass
+
+
+class RuntimeInstallPlanBlocked(RuntimeOperationError):
+    pass
+
+
 class RuntimeOperationConflict(RuntimeOperationError):
     """An operation id is already bound to a different normalized intent."""
 
@@ -182,6 +190,8 @@ def _raise_command_error(value: dict[str, Any]) -> None:
         raise taxonomy_types[taxonomy](message)
     error_type = value.get("type")
     error_types: dict[str, type[Exception]] = {
+        "RuntimeInstallPlanStale": RuntimeInstallPlanStale,
+        "RuntimeInstallPlanBlocked": RuntimeInstallPlanBlocked,
         "RuntimeOperationConflict": RuntimeOperationConflict,
         "RuntimeCommandConflict": RuntimeCommandConflict,
         "RuntimeOperationNotFound": RuntimeOperationNotFound,
@@ -1193,6 +1203,7 @@ class RuntimeMaintenanceReporter:
         source: dict[str, Any] | None = None,
         source_operation_id: str | None = None,
         required_capabilities: tuple[str, ...] = (),
+        plan_id: str | None = None,
     ) -> bool:
         self._operation = operation
         self._operation_id = operation_id or str(uuid4())
@@ -1241,6 +1252,8 @@ class RuntimeMaintenanceReporter:
             "source_identity": dict(source or {}),
             "source_operation_id": source_operation_id,
         }
+        if plan_id is not None:
+            intent["plan_id"] = plan_id
         # normalized selection 与 command identity 使用同一投影，避免 retry
         # 手工重建字段形状后发生漂移。
         intent.update(

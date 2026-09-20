@@ -155,6 +155,23 @@ uv run --no-sync powershell -NoProfile -File scripts/check-quality.ps1
 - 运行时 profile、manifest 与组件 identity 由发布自动化生成并验证。
 - 本地开发不能通过 editable/path dependency 绕过已发布 Protocol/Backend 组件关系。
 
+## 安装预览与独立组件
+
+正式 Protocol 2.8.3 的 `runtime.install-plan.v1` 支持 HTTP `POST /v2/runtime/install-plan`
+与冷启动 Host `request_kind: install_plan`。先协商 capability，再预览设备、请求/有效组件、
+保留/安装/替换/移除项和阻断原因；预览不安装包或创建维护 operation。成本尚未解析时返回
+`null` 与原因，不用包数量或压缩大小冒充实际下载/磁盘成本。
+
+确认使用同一 `plan_id` 和显式 `operation_id`，不能同时覆盖选择。计划有效期10分钟，
+安装写锁内校验来源及安装基线；过期或状态变化要求重新预览。已完成 operation 的同请求
+重放返回原收据。失败后重试需新计划和新的 operation ID；旧的无计划 API 仍可使用。
+
+Paddle-only 使用 Base 主环境和独立 Paddle 环境，不强装 MinerU/Torch；MinerU-only 不装
+Paddle。CUDA MinerU 才依赖 Torch `gpu_runtime`。省略组件选择的重启保留已有引擎意图，
+显式空集合选择 Base；CPU/CUDA 切换映射同一引擎。候选环境全部校验后才切换，旧环境保留，
+跨环境只复用目标锁接受的下载 artifact，不共享 `site-packages` 或删除模型。最终体积与
+真实识别能力由各引擎的实际验收确定。
+
 ## 发布
 
 正式 Release 由 CI/CD 生成并绑定源码 SHA、组件 identity、精确资产集合、SHA-256 与 SPDX SBOM。

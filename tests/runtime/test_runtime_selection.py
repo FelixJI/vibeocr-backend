@@ -58,11 +58,19 @@ def _selection_profiles() -> dict[str, RuntimeProfile]:
     )
     return {
         "win-x64-base": _profile("win-x64-base", _scope("default", base_ids)),
-        "win-x64-cpu": _profile("win-x64-cpu", _scope("default", cpu_ids)),
+        "win-x64-cpu": _profile(
+            "win-x64-cpu",
+            _scope("default", cpu_ids),
+            _scope("paddle", (*base_ids, "paddleocr-cpu")),
+            _scope("mineru", (*base_ids, "mineru-cpu")),
+        ),
         "win-x64-cu126": _profile(
             "win-x64-cu126",
             _scope("default", cuda_ids),
             _scope("gpu-runtime", (*base_ids, "gpu_runtime")),
+            _scope("paddle", (*base_ids, "paddleocr-cuda")),
+            _scope("mineru", (*base_ids, "mineru-cuda", "gpu_runtime")),
+            _scope("paddle-gpu-runtime", (*base_ids, "paddleocr-cuda", "gpu_runtime")),
         ),
     }
 
@@ -218,10 +226,9 @@ def test_selection_policy_resolves_exact_cuda_dependency_closure() -> None:
         "runtime_host",
         "gpu_runtime",
     )
-    assert document_parsing.install_scope.scope_id == "default"
+    assert document_parsing.install_scope.scope_id == "mineru"
     assert document_parsing.effective_component_ids == (
         "rapidocr-base",
-        "paddleocr-cuda",
         "mineru-cuda",
         "runtime_host",
         "gpu_runtime",
@@ -364,3 +371,20 @@ def test_normalize_install_component_ids_fails_closed() -> None:
     with pytest.raises(RuntimeSelectionError) as excinfo:
         normalize_install_component_ids(["document_parsing"], accelerator="base")
     assert excinfo.value.code is ErrorCode.VALIDATION_ERROR
+
+
+@pytest.mark.parametrize(
+    "accelerator,suffix", [("cpu", "cpu"), ("nvidia_cuda", "cuda")]
+)
+def test_paddle_selection_never_adds_mineru_or_torch(accelerator, suffix):
+    selection = _selection_policy().plan_start(
+        accelerator=accelerator,
+        install_component_ids=(f"paddleocr-{suffix}",),
+        download_source_ids=None,
+    )
+    assert set(selection.effective_component_ids) == {
+        "rapidocr-base",
+        "runtime_host",
+        f"paddleocr-{suffix}",
+    }
+    assert selection.install_scope.scope_id == "paddle"

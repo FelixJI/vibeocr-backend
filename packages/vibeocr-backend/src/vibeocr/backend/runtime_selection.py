@@ -341,16 +341,6 @@ class RuntimeSelectionPolicy:
 
         for component_id in requested:
             include(component_id)
-        # 当前 release 的 Paddle/MinerU 共用一个 full lock；请求身份保持分离，
-        # 实际安装闭包则如实扩成原子 full scope，避免目录列出不可安装的选项。
-        advanced_group = {
-            component.component_id
-            for component in profile.components
-            if component.component_id.startswith(("paddleocr-", "mineru-"))
-        }
-        if selected.intersection(advanced_group):
-            for component_id in advanced_group:
-                include(component_id)
         return tuple(
             component.component_id
             for component in profile.components

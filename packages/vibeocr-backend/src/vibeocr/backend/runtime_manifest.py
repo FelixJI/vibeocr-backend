@@ -44,7 +44,6 @@ PROFILE_COMPONENTS = {
     ),
 }
 _DEFAULT_COMPONENT_DEPENDENCIES = {
-    ("win-x64-cu126", "paddleocr-cuda"): ("gpu_runtime",),
     ("win-x64-cu126", "mineru-cuda"): ("gpu_runtime",),
 }
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -777,7 +776,14 @@ def load_runtime_manifest(
                     raise ManifestError(f"{scope_field} lock SHA-256 mismatch")
                 validate_requirements_lock(
                     scope_lock_path,
-                    profile=name,
+                    profile=(
+                        name
+                        if "gpu_runtime" in scope_component_set
+                        or any(
+                            item.startswith("mineru-") for item in scope_component_set
+                        )
+                        else "win-x64-base"
+                    ),
                     paddle_isolated=paddle_environment is not None,
                 )
                 for pack_name, pack_sha in zip(

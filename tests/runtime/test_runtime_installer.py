@@ -129,6 +129,29 @@ def _release(
             "runtime_pack": None,
         }
     ]
+    base_ids = ["rapidocr-base", "runtime_host"]
+    for profile, suffix in [("win-x64-cpu", "cpu"), ("win-x64-cu126", "cuda")]:
+        for engine in ["paddleocr", "mineru"]:
+            host = (
+                profiles["win-x64-base"] if engine == "paddleocr" else profiles[profile]
+            )
+            profiles[profile].setdefault("install_scopes", []).append(
+                {
+                    "scope_id": engine,
+                    "component_ids": [
+                        *base_ids,
+                        f"{engine}-{suffix}",
+                        *(
+                            ["gpu_runtime"]
+                            if engine == "mineru" and suffix == "cuda"
+                            else []
+                        ),
+                    ],
+                    "lock": host["lock"],
+                    "sha256": host["sha256"],
+                    "runtime_pack": None,
+                }
+            )
     if with_base_pack:
         pack = root / "vibeocr-runtime-pack-win-x64-base-0.7.0.zip"
         with zipfile.ZipFile(pack, mode="w") as archive:
@@ -2100,7 +2123,7 @@ def test_repair_fails_closed_when_installed_marker_is_untrusted(
         repair.repair()
 
 
-def test_ensure_with_optional_components_reports_full_profile_closure(
+def test_ensure_with_optional_components_reports_independent_closure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2121,14 +2144,15 @@ def test_ensure_with_optional_components_reports_full_profile_closure(
     )
     installer.ensure()
 
-    # per-profile lock 粒度：选择任一可选组件即安装目标档位完整闭包，
-    # effective 诚实回显闭包而非请求子集。
+    # 独立 MinerU scope 不再因为旧 full lock 强装 Paddle。
     assert seen_profiles == ["win-x64-cpu"]
     snapshot = installer.maintenance_snapshot()
     assert snapshot["requested_component_ids"] == ["mineru-cpu"]
-    assert snapshot["effective_component_ids"] == list(
-        installer._profile_component_ids()
-    )
+    assert snapshot["effective_component_ids"] == [
+        "rapidocr-base",
+        "mineru-cpu",
+        "runtime_host",
+    ]
 
 
 def test_ensure_reinstalls_when_scope_changes(
@@ -2158,6 +2182,7 @@ def test_ensure_reinstalls_when_scope_changes(
         runtime_manifest=manifest,
         accelerator="cpu",
         install_runner=install,
+        install_component_ids=("paddleocr-cpu", "mineru-cpu"),
     )
     default_scope.ensure()
     assert len(calls) == 2
@@ -2708,3 +2733,56 @@ def test_paddle_environment_installs_in_separate_interpreter_and_shared_cache(
     paddle_install = next(c for c in calls if str(paddle_lock) in c)
     assert paddle_install[0] == str(root / "engines/paddle/python.exe")
     assert str(scope.lock_path) not in paddle_install
+
+
+def test_different_scope_locks_reuse_verified_download_without_second_request(
+    tmp_path, monkeypatch
+):
+    from vibeocr.backend import runtime_installer as installer
+
+    payload = b"same-artifact-used-by-both-environments"
+    digest = hashlib.sha256(payload).hexdigest()
+    artifact = installer._ResolvedArtifact(
+        "shared",
+        "https://example.invalid/shared.whl",
+        digest,
+        "shared-1.0-py3-none-any.whl",
+    )
+    locks = [tmp_path / "paddle.lock", tmp_path / "mineru.lock"]
+    for lock in locks:
+        lock.write_text(f"shared==1.0 --hash=sha256:{digest}\n")
+    monkeypatch.setattr(
+        installer, "_resolve_online_report", lambda *args: tmp_path / "report.json"
+    )
+    monkeypatch.setattr(installer, "_parse_resolve_report", lambda path: (artifact,))
+    monkeypatch.setattr(installer, "_remote_content_length", lambda url: len(payload))
+    requests = []
+
+    def download(request, timeout):
+        requests.append(request.full_url)
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr(installer.urllib.request, "urlopen", download)
+    roots = [
+        installer._prepare_online_artifacts(
+            Path("python"),
+            lock,
+            "https://example.invalid",
+            tmp_path / "cache",
+            None,
+            {},
+        )
+        for lock in locks
+    ]
+    assert roots[0] == roots[1]
+    assert len(requests) == 1
+    (roots[0] / artifact.filename).write_bytes(b"corrupt")
+    installer._prepare_online_artifacts(
+        Path("python"),
+        locks[1],
+        "https://example.invalid",
+        tmp_path / "cache",
+        None,
+        {},
+    )
+    assert len(requests) == 2

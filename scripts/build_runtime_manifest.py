@@ -55,6 +55,7 @@ DEFAULT_CAPABILITIES = (
     "ocr.mineru-config.v1",
     "runtime.download-sources.v1",
     "runtime.component-selection.v1",
+    "runtime.install-plan.v1",
 )
 
 
@@ -133,6 +134,57 @@ def _profile_components(
             }
         )
     return result
+
+
+def _independent_scopes(
+    profile: str,
+    locks: dict[str, Path],
+    gpu_lock: Path,
+    base_packs: list[Path],
+    *,
+    isolated: bool,
+) -> list[dict[str, object]]:
+    """Compose existing verified host/Paddle domains without new lock resolution."""
+    if profile == "win-x64-base":
+        return []
+    base_ids = [
+        item.component_id for item in default_profile_components("win-x64-base")
+    ]
+    scopes: list[dict[str, object]] = []
+
+    def add(scope_id: str, ids: list[str], lock: Path) -> None:
+        scopes.append(
+            {
+                "scope_id": scope_id,
+                "component_ids": ids,
+                "lock": lock.name,
+                "sha256": sha256_file(lock),
+                "runtime_pack": [pack.name for pack in base_packs]
+                if lock == locks["win-x64-base"] and base_packs
+                else None,
+                **(
+                    {"runtime_pack_sha256": [sha256_file(pack) for pack in base_packs]}
+                    if lock == locks["win-x64-base"] and base_packs
+                    else {}
+                ),
+            }
+        )
+
+    cuda = profile == "win-x64-cu126"
+    if cuda:
+        add("gpu-runtime", [*base_ids, "gpu_runtime"], gpu_lock)
+    if isolated:
+        suffix = "cuda" if cuda else "cpu"
+        paddle = f"paddleocr-{suffix}"
+        add("paddle", [*base_ids, paddle], locks["win-x64-base"])
+        add(
+            "mineru",
+            [*base_ids, f"mineru-{suffix}", *(["gpu_runtime"] if cuda else [])],
+            locks[profile],
+        )
+        if cuda:
+            add("paddle-gpu-runtime", [*base_ids, paddle, "gpu_runtime"], gpu_lock)
+    return scopes
 
 
 def build_runtime_manifest(
@@ -227,10 +279,6 @@ def build_runtime_manifest(
     copied_paddle = {
         profile: _copy_exact(lock, output_dir) for profile, lock in paddle_locks.items()
     }
-    base_component_ids = [
-        component.component_id
-        for component in default_profile_components("win-x64-base")
-    ]
 
     manifest = {
         "schema_version": 1,
@@ -286,23 +334,12 @@ def build_runtime_manifest(
                     if profile in copied_paddle
                     else {}
                 ),
-                **(
-                    {
-                        "install_scopes": [
-                            {
-                                "scope_id": "gpu-runtime",
-                                "component_ids": [
-                                    *base_component_ids,
-                                    "gpu_runtime",
-                                ],
-                                "lock": copied_cu126_gpu_lock.name,
-                                "runtime_pack": None,
-                                "sha256": sha256_file(copied_cu126_gpu_lock),
-                            }
-                        ]
-                    }
-                    if profile == "win-x64-cu126"
-                    else {}
+                "install_scopes": _independent_scopes(
+                    profile,
+                    copied_profiles,
+                    copied_cu126_gpu_lock,
+                    copied_packs.get("win-x64-base", []),
+                    isolated=profile in copied_paddle,
                 ),
             }
             for profile in PROFILE_NAMES

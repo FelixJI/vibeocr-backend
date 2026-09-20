@@ -321,3 +321,55 @@ async def test_stream_rejects_unnegotiated_media_type(
         response = await http.get("/v2/runtime/operations/op-1/events")
     assert response.status_code == 426
     assert response.json()["code"] == "RUNTIME_CAPABILITY_UNAVAILABLE"
+
+
+async def test_install_plan_http_preserves_selection_and_confirmation_binding(
+    pdf_module, supervisor_token
+):
+    from importlib.resources import files
+
+    from vibeocr.backend.runtime_maintenance import RuntimeInstallPlanStale
+
+    cap = "runtime.install-plan.v1"
+    plan = json.loads(
+        files("vibeocr.runtime_contracts")
+        .joinpath("golden/golden.json")
+        .read_text(encoding="utf-8")
+    )["install_plan"]
+
+    class PlanControl(FakeRuntimeControl):
+        def preview_install_plan(self, **kwargs):
+            self.preview_request = kwargs
+            return {"schema_version": 2, "plan": plan, "negotiated_capabilities": [cap]}
+
+        def execute(self, **kwargs):
+            self.execute_calls.append(kwargs)
+            raise RuntimeInstallPlanStale("preview again")
+
+    control = PlanControl()
+    app = create_app(pdf_module, supervisor_token, runtime_control=control)
+    async with _http(supervisor_token, app) as http:
+        response = await http.post(
+            "/v2/runtime/install-plan",
+            json={"required_capabilities": [cap], "install_component_ids": []},
+        )
+        assert response.status_code == 200
+        assert control.preview_request["install_component_ids"] == ()
+        bad = await http.post(
+            "/v2/runtime/install-plan",
+            json={"required_capabilities": [], "pip_args": []},
+        )
+        assert bad.status_code == 400
+        confirmation = await http.post(
+            "/v2/runtime/maintenance",
+            json={
+                "operation": "ensure",
+                "operation_id": "confirmed",
+                "plan_id": plan["plan_id"],
+                "required_capabilities": [cap],
+            },
+        )
+        assert confirmation.status_code == 409
+        assert confirmation.json()["code"] == "RUNTIME_INSTALL_PLAN_STALE"
+    assert control.execute_calls[0]["plan_id"] == plan["plan_id"]
+    assert control.execute_calls[0]["download_source_ids"] is None

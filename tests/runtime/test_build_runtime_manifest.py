@@ -194,6 +194,7 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
         "ocr.mineru-config.v1",
         "runtime.download-sources.v1",
         "runtime.component-selection.v1",
+        "runtime.install-plan.v1",
     }
     assert [
         component.component_id
@@ -216,7 +217,7 @@ def test_build_is_byte_deterministic_and_self_verifying(tmp_path: Path) -> None:
         component.component_id: component
         for component in manifest.profiles["win-x64-cu126"].components
     }
-    assert cuda_components["paddleocr-cuda"].dependencies == ("gpu_runtime",)
+    assert cuda_components["paddleocr-cuda"].dependencies == ()
     assert cuda_components["mineru-cuda"].dependencies == ("gpu_runtime",)
     assert cuda_components["gpu_runtime"].dependencies == ()
     assert "dependencies" not in cuda_components["mineru-cuda"].to_payload()
@@ -445,7 +446,7 @@ def test_loader_rejects_install_scope_that_is_not_dependency_closure(
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     scope = _cuda_scope(raw)
     scope["component_ids"].remove("gpu_runtime")
-    scope["component_ids"].append("paddleocr-cuda")
+    scope["component_ids"].append("mineru-cuda")
     raw["profiles"]["win-x64-cu126"]["install_scopes"] = [scope]
     manifest_path.write_text(json.dumps(raw), encoding="utf-8")
 
@@ -564,6 +565,20 @@ def test_isolated_paddle_locks_are_release_bound_and_keep_versions(tmp_path):
     )
     assert "opencv-python==" not in paddle.lock_path.read_text()
     assert "opencv-contrib-python==" not in profile.lock_path.read_text()
+    for name, suffix in [("win-x64-cpu", "cpu"), ("win-x64-cu126", "cuda")]:
+        scopes = {scope.scope_id: scope for scope in manifest.profiles[name].scopes}
+        assert set(scopes["paddle"].component_ids) == {
+            "rapidocr-base",
+            "runtime_host",
+            f"paddleocr-{suffix}",
+        }
+        assert scopes["paddle"].lock_path == manifest.profiles["win-x64-base"].lock_path
+        assert scopes["paddle"].paddle_environment is not None
+        assert scopes["mineru"].paddle_environment is None
+        assert scopes["mineru"].lock_path == manifest.profiles[name].lock_path
+        assert f"paddleocr-{suffix}" not in scopes["mineru"].component_ids
+        if suffix == "cuda":
+            assert "gpu_runtime" in scopes["mineru"].component_ids
     paddle.lock_path.write_text("changed")
     with pytest.raises(ManifestError, match="Paddle environment lock SHA-256"):
         load_runtime_manifest(path)

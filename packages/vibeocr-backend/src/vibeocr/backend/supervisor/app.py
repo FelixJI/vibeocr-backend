@@ -45,6 +45,8 @@ from vibeocr.backend.runtime_maintenance import (
     RuntimeCommandConflict,
     RuntimeCursorExpired,
     RuntimeInstallFailure,
+    RuntimeInstallPlanBlocked,
+    RuntimeInstallPlanStale,
     RuntimeOperationCancelled,
     RuntimeOperationConflict,
     RuntimeOperationNotCancellable,
@@ -61,6 +63,7 @@ from vibeocr.backend.runtime_selection import (
 )
 from vibeocr.runtime_contracts import (
     SCHEMA_VERSION,
+    TERMINAL_JOB_STATES,
     ErrorCode,
     ErrorPayload,
     JobCommandKind,
@@ -257,7 +260,11 @@ def _extract_engine_selection(
 def _runtime_exception_response(exc: Exception, instance_id: str) -> JSONResponse:
     detail: dict[str, Any] = {"reason": str(exc)}
     retry_after: int | None = None
-    if isinstance(exc, RuntimeCursorExpired):
+    if isinstance(exc, RuntimeInstallPlanStale):
+        code = ErrorCode.RUNTIME_INSTALL_PLAN_STALE
+    elif isinstance(exc, RuntimeInstallPlanBlocked):
+        code = ErrorCode.RUNTIME_INSTALL_PLAN_BLOCKED
+    elif isinstance(exc, RuntimeCursorExpired):
         code = ErrorCode.RUNTIME_CURSOR_EXPIRED
         detail = {
             "oldest_sequence": exc.oldest_sequence,
@@ -558,6 +565,31 @@ def create_app(
         return status_provider(instance_id, service_state)
 
     @app.post(
+        "/v2/runtime/install-plan",
+        response_model=wire.RuntimeInstallPlanResponse,
+        operation_id="previewRuntimeInstallPlan",
+    )
+    async def preview_runtime_install_plan(request: Request) -> JsonResult:
+        try:
+            body = _strict_wire_payload(
+                await request.json(), wire.RuntimeInstallPlanRequest
+            )
+            sources = body.get("download_source_ids")
+            if sources is None:
+                sources = list(module.settings().download_source_ids) or None
+            return await asyncio.to_thread(
+                control().preview_install_plan,
+                accelerator=body.get("accelerator"),
+                install_component_ids=tuple(body["install_component_ids"])
+                if "install_component_ids" in body
+                else None,
+                download_source_ids=tuple(sources) if sources is not None else None,
+                required_capabilities=tuple(body["required_capabilities"]),
+            )
+        except Exception as exc:
+            return _runtime_exception_response(exc, instance_id)
+
+    @app.post(
         "/v2/runtime/maintenance",
         response_model=wire.RuntimeMaintenanceReceipt,
         operation_id="startRuntimeMaintenance",
@@ -567,6 +599,12 @@ def create_app(
             body = _strict_wire_payload(
                 await request.json(), wire.RuntimeMaintenanceRequest
             )
+            if body["operation"] in {"ensure", "repair"} and any(
+                item.state not in TERMINAL_JOB_STATES for item in module.registry
+            ):
+                raise RuntimeLockTimeout(
+                    "recognition jobs are active; finish or cancel before maintenance"
+                )
             install_component_ids = body.get("install_component_ids")
             download_source_ids = body.get("download_source_ids")
             if (
@@ -575,7 +613,11 @@ def create_app(
                 raise ValueError(
                     "Runtime selection fields are only valid for operation ensure"
                 )
-            if body["operation"] == "ensure" and download_source_ids is None:
+            if (
+                body["operation"] == "ensure"
+                and download_source_ids is None
+                and "plan_id" not in body
+            ):
                 # 省略时在开始瞬间快照当前 Settings（计划 §4.3）；
                 # 两者都为空时由 installer 解析 Backend 缺省源。
                 settings_sources = module.settings().download_source_ids
@@ -586,6 +628,7 @@ def create_app(
                 control().execute,
                 operation=body["operation"],
                 operation_id=body.get("operation_id"),
+                **({"plan_id": body["plan_id"]} if "plan_id" in body else {}),
                 component_ids=tuple(body.get("component_ids", [])),
                 required_capabilities=tuple(body.get("required_capabilities", [])),
                 profile_id=body.get("profile_id"),
@@ -615,6 +658,12 @@ def create_app(
             body = _strict_wire_payload(
                 await request.json(), wire.RuntimeMaintenanceCommandRequest
             )
+            if body["command"] == "retry" and any(
+                item.state not in TERMINAL_JOB_STATES for item in module.registry
+            ):
+                raise RuntimeLockTimeout(
+                    "recognition jobs are active; finish or cancel before maintenance"
+                )
             install_component_ids = body.get("install_component_ids")
             download_source_ids = body.get("download_source_ids")
             if (
@@ -630,6 +679,14 @@ def create_app(
                 target_operation_id=body["target_operation_id"],
                 new_operation_id=body.get("new_operation_id"),
                 expected_sequence=body.get("expected_sequence"),
+                **(
+                    {
+                        "plan_id": body["plan_id"],
+                        "required_capabilities": tuple(body["required_capabilities"]),
+                    }
+                    if "plan_id" in body
+                    else {}
+                ),
                 install_component_ids=(
                     tuple(install_component_ids)
                     if install_component_ids is not None
