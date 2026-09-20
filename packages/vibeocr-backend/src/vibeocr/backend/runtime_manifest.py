@@ -10,6 +10,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any
+from urllib.parse import unquote
 
 PROFILE_NAMES = ("win-x64-base", "win-x64-cpu", "win-x64-cu126")
 # base：随 Portable 携带的离线必备闭包（win-x64-base）；full 闭包由
@@ -359,6 +360,23 @@ def _validate_protocol_release_manifest(
     artifact = artifacts.get(protocol_wheel)
     if not isinstance(artifact, dict) or artifact.get("sha256") != protocol_sha256:
         raise ManifestError("Protocol wheel is not bound by its release manifest")
+
+
+def locked_distribution_version(path: Path, project: str) -> str | None:
+    text = path.read_text(encoding="utf-8")
+    exact = re.search(rf"(?mi)^{re.escape(project)}==([^\s\\]+)", text)
+    if exact is not None:
+        return exact.group(1)
+    direct = re.search(rf"(?mi)^{re.escape(project)}\s+@\s+(\S+)", text)
+    if direct is None:
+        return None
+    filename = unquote(direct.group(1).rsplit("/", 1)[-1])
+    package_pattern = re.escape(project).replace(r"\-", "[-_]")
+    artifact = re.search(
+        rf"(?i)^{package_pattern}[-_](\d+(?:\.\d+)+(?:\+cu\d+)?)-",
+        filename,
+    )
+    return artifact.group(1) if artifact is not None else None
 
 
 def validate_requirements_lock(

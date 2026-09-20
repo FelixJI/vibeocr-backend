@@ -12,6 +12,7 @@ from uuid import uuid4
 from vibeocr.backend.runtime_maintenance import (
     RuntimeInstallPlanBlocked,
     RuntimeInstallPlanStale,
+    RuntimeOperationConflict,
     _atomic_json,
 )
 from vibeocr.backend.runtime_selection import ResolvedRuntimeSelection
@@ -45,6 +46,19 @@ def read_plan(state_root: Path, plan_id: str) -> dict[str, Any]:
         raise RuntimeInstallPlanStale(
             "install plan is unavailable; preview again"
         ) from exc
+
+
+def bind_plan(state_root: Path, record: dict[str, Any], operation_id: str) -> None:
+    """Bind once under the caller's runtime-store lock, before any execution."""
+    bound_operation = record.get("operation_id")
+    if bound_operation is not None and bound_operation != operation_id:
+        raise RuntimeOperationConflict(
+            "install plan already accepted by another operation"
+        )
+    _atomic_json(
+        state_root / "install-plans" / f"{record['plan']['plan_id']}.json",
+        {**record, "operation_id": operation_id},
+    )
 
 
 def validate_plan(

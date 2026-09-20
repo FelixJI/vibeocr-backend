@@ -14,7 +14,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import unquote
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 for _source_root in (
@@ -30,6 +29,7 @@ from vibeocr.backend.runtime_manifest import (  # noqa: E402
     default_profile_components,
     installer_executable_sha256,
     load_runtime_manifest,
+    locked_distribution_version,
     runtime_component_binding,
     sha256_file,
     validate_requirements_lock,
@@ -99,29 +99,12 @@ def _canonical_json(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def _locked_version(path: Path, project: str) -> str | None:
-    text = path.read_text(encoding="utf-8")
-    exact = re.search(rf"(?mi)^{re.escape(project)}==([^\s\\]+)", text)
-    if exact is not None:
-        return exact.group(1)
-    direct = re.search(rf"(?mi)^{re.escape(project)}\s+@\s+(\S+)", text)
-    if direct is None:
-        return None
-    filename = unquote(direct.group(1).rsplit("/", 1)[-1])
-    package_pattern = re.escape(project).replace(r"\-", "[-_]")
-    artifact = re.search(
-        rf"(?i)^{package_pattern}[-_](\d+(?:\.\d+)+(?:\+cu\d+)?)-",
-        filename,
-    )
-    return artifact.group(1) if artifact is not None else None
-
-
 def _profile_components(
     path: Path, profile: str, paddle_lock: Path | None = None
 ) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
     for descriptor in default_profile_components(profile):
-        version = _locked_version(
+        version = locked_distribution_version(
             paddle_lock
             if paddle_lock and descriptor.component_id.startswith("paddleocr-")
             else path,

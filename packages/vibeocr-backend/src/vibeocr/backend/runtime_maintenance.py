@@ -11,7 +11,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -25,6 +25,7 @@ from vibeocr.backend.runtime_manifest import (
     RuntimeProfile,
     covering_profile_id,
     load_runtime_manifest,
+    locked_distribution_version,
     runtime_component_binding,
 )
 from vibeocr.backend.runtime_selection import durable_selection_fields
@@ -1040,8 +1041,30 @@ def _component_statuses(
         if runtime_root is not None and (runtime_root / "engines" / "paddle").is_dir()
         else versions
     )
+    profile = manifest.profiles[descriptor.profile_id]
+    installed_scope = next(
+        (scope for scope in profile.scopes if set(scope.component_ids) == required_ids),
+        None,
+    )
     statuses: list[dict[str, Any]] = []
     for component in descriptor.components:
+        # Independent scopes may use a different host lock than the full profile.
+        # Keep Paddle's separate environment and unversioned legacy components.
+        if (
+            installed_scope is not None
+            and installed_scope.lock_path != profile.lock_path
+            and component.version is not None
+            and not component.component_id.startswith("paddleocr-")
+            and component.component_id in installed_scope.component_ids
+        ):
+            distribution = runtime_component_binding(
+                descriptor.profile_id, component.component_id
+            ).distribution
+            version = locked_distribution_version(
+                installed_scope.lock_path, distribution
+            )
+            if version is not None:
+                component = replace(component, version=version)
         if required_ids is not None and component.component_id not in required_ids:
             # base-only / 精确 scope 安装不含该可选组件：缺席是合法状态，
             # 不是 drift，也不可 repair（扩闭包属于 ensure 的选择面）。
@@ -1191,6 +1214,7 @@ class RuntimeMaintenanceReporter:
         self._effective_download_source_ids: tuple[str, ...] = ()
         self._source: dict[str, Any] | None = None
         self._source_operation_id: str | None = None
+        self._plan_id: str | None = None
 
     @property
     def profile(self) -> RuntimeProfileDescriptor:
@@ -1228,6 +1252,7 @@ class RuntimeMaintenanceReporter:
         self._effective_download_source_ids = download_source_ids
         self._source = dict(source) if source is not None else None
         self._source_operation_id = source_operation_id
+        self._plan_id = plan_id
         self._sequence = 0
         self._snapshot = None
         initial_snapshot: dict[str, Any] = {
@@ -1257,6 +1282,8 @@ class RuntimeMaintenanceReporter:
             initial_snapshot["effective_download_source_ids"] = list(
                 self._effective_download_source_ids
             )
+        if self._plan_id is not None:
+            initial_snapshot["plan_id"] = self._plan_id
         if self._source is not None:
             initial_snapshot["source"] = dict(self._source)
         intent: dict[str, Any] = {
@@ -1534,6 +1561,8 @@ class RuntimeMaintenanceReporter:
             snapshot["effective_download_source_ids"] = list(
                 self._effective_download_source_ids
             )
+        if self._plan_id is not None:
+            snapshot["plan_id"] = self._plan_id
         if self._source is not None:
             snapshot["source"] = dict(self._source)
         try:

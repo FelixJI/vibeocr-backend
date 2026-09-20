@@ -87,8 +87,9 @@ def test_confirmation_and_expired_replay_keep_same_receipt(tmp_path):
         required_capabilities=(CAPABILITY,),
     )
     assert replay == receipt
+    assert receipt["snapshot"]["plan_id"] == plan["plan_id"]
     assert len(calls) == 1
-    with pytest.raises(RuntimeInstallPlanStale):
+    with pytest.raises(RuntimeOperationConflict):
         control.execute(
             operation="ensure",
             operation_id="new",
@@ -202,12 +203,12 @@ def test_two_confirmations_cannot_install_the_same_baseline_twice(tmp_path):
                 plan_id=plan["plan_id"],
                 required_capabilities=(CAPABILITY,),
             )["snapshot"]["operation_state"]
-        except RuntimeInstallPlanStale:
-            return "stale"
+        except RuntimeOperationConflict:
+            return "conflict"
 
     with ThreadPoolExecutor(max_workers=2) as workers:
         assert sorted(workers.map(confirm, ["first", "second"])) == [
-            "stale",
+            "conflict",
             "succeeded",
         ]
     assert len(calls) == 1
@@ -239,6 +240,15 @@ def test_failed_plan_retry_requires_fresh_plan_and_replays_command(tmp_path):
             command="retry",
             target_operation_id="failed",
             new_operation_id="no-plan-op",
+        )
+    with pytest.raises(RuntimeOperationConflict):
+        control.command(
+            command_id="reused-plan",
+            command="retry",
+            target_operation_id="failed",
+            new_operation_id="reused-plan-op",
+            plan_id=preview["plan_id"],
+            required_capabilities=(CAPABILITY,),
         )
     fresh = control.preview_install_plan(
         install_component_ids=("mineru-cpu",), required_capabilities=(CAPABILITY,)
@@ -306,3 +316,26 @@ def test_cuda_preview_checks_driver_compatibility_floor(
     )
     codes = [item["code"] for item in installer._installation_blockers()]
     assert any(code.startswith("nvidia_driver_") for code in codes) is blocked
+
+
+def test_successful_noop_plan_cannot_be_confirmed_with_another_operation(tmp_path):
+    control, _, calls, _, _ = _control(tmp_path)
+    control.execute(operation="ensure", install_component_ids=())
+    plan = control.preview_install_plan(
+        install_component_ids=(), required_capabilities=(CAPABILITY,)
+    )["plan"]
+    receipt = control.execute(
+        operation="ensure",
+        operation_id="noop",
+        plan_id=plan["plan_id"],
+        required_capabilities=(CAPABILITY,),
+    )
+    assert receipt["snapshot"]["plan_id"] == plan["plan_id"]
+    with pytest.raises(RuntimeOperationConflict):
+        control.execute(
+            operation="ensure",
+            operation_id="other",
+            plan_id=plan["plan_id"],
+            required_capabilities=(CAPABILITY,),
+        )
+    assert len(calls) == 1

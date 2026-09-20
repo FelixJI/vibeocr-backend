@@ -34,6 +34,7 @@ from uuid import uuid4
 
 from vibeocr.backend.runtime_install_plan import (
     CAPABILITY,
+    bind_plan,
     create_plan,
     read_plan,
     validate_plan,
@@ -1745,6 +1746,15 @@ class RuntimeInstaller:
             self.paths.locks_root / "runtime-store.lock", timeout=self._lock_timeout
         ):
             if self._plan_record is not None:
+                self._plan_record = read_plan(self.paths.state_root, self._plan_id)
+                bound_operation = self._plan_record.get("operation_id")
+                if (
+                    bound_operation is not None
+                    and bound_operation != self._operation_id
+                ):
+                    raise RuntimeOperationConflict(
+                        "install plan already accepted by another operation"
+                    )
                 try:
                     existing = RuntimeOperationStore(self.paths.state_root).snapshot(
                         self._operation_id
@@ -1759,6 +1769,7 @@ class RuntimeInstaller:
                         raise RuntimeInstallPlanBlocked(
                             "preflight changed; resolve blockers and preview again"
                         )
+                bind_plan(self.paths.state_root, self._plan_record, self._operation_id)
             return self._ensure_locked()
 
     def _ensure_locked(self) -> RuntimeLaunch | None:
@@ -1898,6 +1909,23 @@ class RuntimeInstaller:
                 json.dumps(marker, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+            candidate_status = runtime_profile_status(
+                self.manifest,
+                accelerator=self.accelerator,
+                runtime_root=partial,
+                probe_results=probe_results,
+                profile_id=profile_name,
+            )
+            invalid = [
+                item["component_id"]
+                for item in candidate_status["components"]
+                if item["component_id"] in target_ids
+                and item["actual_state"] != "ready"
+            ]
+            if invalid:
+                raise RuntimeInstallError(
+                    f"candidate Runtime did not verify: {invalid}"
+                )
             self._reporter.advance(
                 phase="commit_runtime",
                 current=7,

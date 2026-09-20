@@ -2844,3 +2844,66 @@ def test_gpu_probe_fails_when_import_works_but_device_is_unavailable(
     assert probe_runtime_components(
         tmp_path, (component,), profile_id="win-x64-cu126"
     ) == {component: False}
+
+
+def test_paddle_only_cuda_status_uses_base_host_lock(tmp_path: Path) -> None:
+    manifest_path, component_lock = _release(tmp_path / "release")
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["profiles"]["win-x64-cu126"]["components"] = [
+        {
+            **item.to_payload(),
+            **({"version": "0.141.0"} if item.component_id == "runtime_host" else {}),
+        }
+        for item in load_runtime_manifest(manifest_path)
+        .profiles["win-x64-cu126"]
+        .components
+    ]
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    binding = json.loads(component_lock.read_text(encoding="utf-8"))
+    binding["backend"]["runtime_manifest_sha256"] = _sha(manifest_path.read_bytes())
+    component_lock.write_text(json.dumps(binding), encoding="utf-8")
+
+    def install(partial, manifest, profile):
+        python = _fake_install(partial, manifest, profile)
+        metadata = partial / "Lib/site-packages/fastapi-1.0.0.dist-info"
+        metadata.mkdir(parents=True)
+        (metadata / "METADATA").write_text(
+            "Name: fastapi\nVersion: 1.0.0\n", encoding="utf-8"
+        )
+        return python
+
+    installer = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component_lock,
+        runtime_manifest=manifest_path,
+        accelerator="nvidia_cuda",
+        install_component_ids=("paddleocr-cuda",),
+        install_runner=install,
+    )
+    installer.ensure()
+    host = next(
+        item
+        for item in installer.profile_payload()["components"]
+        if item["component_id"] == "runtime_host"
+    )
+    assert host["desired_version"] == "1.0.0"
+    assert host["actual_state"] == "ready"
+    metadata = (
+        installer.paths.runtime_root
+        / "Lib/site-packages/fastapi-1.0.0.dist-info/METADATA"
+    )
+    metadata.write_text("Name: fastapi\nVersion: 0.141.0\n", encoding="utf-8")
+    assert installer._drifted_component_ids() == ("runtime_host",)
+    marker = installer._marker().read_bytes()
+    replacement = RuntimeInstaller(
+        product_root=tmp_path / "product",
+        component_lock=component_lock,
+        runtime_manifest=manifest_path,
+        accelerator="nvidia_cuda",
+        install_component_ids=("paddleocr-cuda", "mineru-cuda"),
+        install_runner=install,
+    )
+    with pytest.raises(RuntimeInstallError, match="candidate Runtime did not verify"):
+        replacement.ensure()
+    assert installer._marker().read_bytes() == marker
+    assert not (tmp_path / "product/runtime.rollback").exists()
