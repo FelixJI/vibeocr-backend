@@ -1849,6 +1849,7 @@ class RuntimeInstaller:
         if not started:
             return self._launch(startup_probe) if ready else None
         try:
+            launch = None
             if not ready:
                 self._reporter.advance(
                     phase="wait_for_lock",
@@ -1861,7 +1862,7 @@ class RuntimeInstaller:
                     or self._installed_scope_ids() != self._desired_scope_ids()
                     or self._drifted_component_ids()
                 ):
-                    self._install_locked(self._desired_scope_ids())
+                    launch = self._install_locked(self._desired_scope_ids())
             else:
                 self._reporter.advance(
                     phase="verify_runtime",
@@ -1869,7 +1870,8 @@ class RuntimeInstaller:
                     total=7,
                     message_code="runtime.verify_runtime",
                 )
-            launch = self._launch(startup_probe if ready else None)
+            if launch is None:
+                launch = self._launch(startup_probe if ready else None)
             self._reporter.succeed(
                 phase="commit_runtime",
                 current=7,
@@ -1883,7 +1885,7 @@ class RuntimeInstaller:
             self._reporter.fail(exc)
             raise
 
-    def _install_locked(self, target_ids: tuple[str, ...]) -> None:
+    def _install_locked(self, target_ids: tuple[str, ...]) -> RuntimeLaunch:
         profile_name = self._covering_profile(target_ids)
         self._active_install_ids = target_ids
         self._reporter.advance(
@@ -1985,12 +1987,19 @@ class RuntimeInstaller:
                 final.replace(rollback)
             try:
                 partial.replace(final)
+                launch = self._launch()
             except Exception:
-                if rollback.exists() and not final.exists():
+                # Final-path probes and launch preparation are part of activation.
+                # Put a rejected candidate back in its disposable staging slot
+                # before restoring the previous runtime and its committed choice.
+                if final.exists():
+                    final.replace(partial)
+                if rollback.exists():
                     rollback.replace(final)
                 raise
-            # Keep the fixed recovery slot after commit. Archive it before the
-            # next installation, so no fallible archive step follows activation.
+            # Keep the fixed recovery slot after successful final-path validation.
+            # Archive it before the next installation, not after this activation.
+            return launch
         except RuntimeOperationCancelled:
             shutil.rmtree(partial, ignore_errors=True)
             raise
@@ -2038,8 +2047,7 @@ class RuntimeInstaller:
                 total=7,
                 message_code="runtime.wait_for_lock",
             )
-            self._install_locked(self._installed_scope_ids())
-            launch = self._launch()
+            launch = self._install_locked(self._installed_scope_ids())
             self._reporter.succeed(
                 phase="commit_runtime",
                 current=7,

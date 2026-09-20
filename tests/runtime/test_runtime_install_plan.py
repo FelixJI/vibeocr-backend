@@ -1027,3 +1027,71 @@ def test_shared_plan_retry_command_replay_checks_product_binding(tmp_path):
     with pytest.raises(RuntimeCommandConflict):
         other.command(**request)
     assert owner.command(**request) == receipt
+
+
+@pytest.mark.parametrize("operation", ["ensure", "repair"])
+@pytest.mark.parametrize("failure", ["final_probe", "launch_directory"])
+def test_activation_failure_restores_previous_runtime_and_choice(
+    tmp_path, monkeypatch, operation, failure
+):
+    from pathlib import Path
+
+    from vibeocr.backend.runtime_installer import RuntimeInstallError
+
+    _, factory, _, _, _ = _control(tmp_path)
+    original = factory(accelerator="cpu", install_component_ids=())
+    original.ensure()
+    marker = original.paths.runtime_root / ".installed.json"
+    before = json.loads(marker.read_text(encoding="utf-8"))
+    model = original.paths.state_root / "models" / "keep.txt"
+    model.write_text("existing model", encoding="utf-8")
+    installer = factory(
+        operation_id="activation-failed",
+        accelerator="nvidia_cuda" if operation == "ensure" else "cpu",
+        install_component_ids=(),
+    )
+
+    def is_new():
+        return (
+            marker.exists() and json.loads(marker.read_text(encoding="utf-8")) != before
+        )
+
+    if operation == "repair":
+        monkeypatch.setattr(
+            installer,
+            "_drifted_component_ids",
+            lambda **kwargs: [] if is_new() else ["rapidocr-base"],
+        )
+
+    def probe(root, components, profile):
+        if (
+            failure == "final_probe"
+            and root == installer.paths.runtime_root
+            and is_new()
+        ):
+            raise RuntimeInstallError("final-path probe failed")
+        return {item: True for item in components}
+
+    monkeypatch.setattr(installer, "_component_probe", probe)
+    # repair's synthetic drift detector does not call component_probe; make the
+    # final-path validation fail through the same detector for that branch.
+    if operation == "repair" and failure == "final_probe":
+        monkeypatch.setattr(
+            installer, "_drifted_component_ids", lambda **kwargs: ["rapidocr-base"]
+        )
+    mkdir = Path.mkdir
+
+    def prepare(path, *args, **kwargs):
+        if failure == "launch_directory" and path == model.parent and is_new():
+            raise PermissionError("launch directory denied")
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", prepare)
+    with pytest.raises((RuntimeInstallError, PermissionError)):
+        getattr(installer, operation)()
+    assert json.loads(marker.read_text(encoding="utf-8")) == before
+    assert model.read_text(encoding="utf-8") == "existing model"
+    assert installer.maintenance_snapshot()["operation_state"] == "failed"
+    restored = factory()
+    assert restored.accelerator == "cpu"
+    assert restored._launch().python_executable == original._launch().python_executable
