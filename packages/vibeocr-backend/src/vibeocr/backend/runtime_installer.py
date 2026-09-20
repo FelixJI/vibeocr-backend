@@ -1849,7 +1849,6 @@ class RuntimeInstaller:
         if not started:
             return self._launch(startup_probe) if ready else None
         try:
-            launch = None
             if not ready:
                 self._reporter.advance(
                     phase="wait_for_lock",
@@ -1862,7 +1861,10 @@ class RuntimeInstaller:
                     or self._installed_scope_ids() != self._desired_scope_ids()
                     or self._drifted_component_ids()
                 ):
-                    launch = self._install_locked(self._desired_scope_ids())
+                    return self._install_locked(
+                        self._desired_scope_ids(),
+                        completion_message="runtime.ensure_complete",
+                    )
             else:
                 self._reporter.advance(
                     phase="verify_runtime",
@@ -1870,8 +1872,7 @@ class RuntimeInstaller:
                     total=7,
                     message_code="runtime.verify_runtime",
                 )
-            if launch is None:
-                launch = self._launch(startup_probe if ready else None)
+            launch = self._launch(startup_probe if ready else None)
             self._reporter.succeed(
                 phase="commit_runtime",
                 current=7,
@@ -1885,7 +1886,9 @@ class RuntimeInstaller:
             self._reporter.fail(exc)
             raise
 
-    def _install_locked(self, target_ids: tuple[str, ...]) -> RuntimeLaunch:
+    def _install_locked(
+        self, target_ids: tuple[str, ...], *, completion_message: str
+    ) -> RuntimeLaunch:
         profile_name = self._covering_profile(target_ids)
         self._active_install_ids = target_ids
         self._reporter.advance(
@@ -1988,6 +1991,12 @@ class RuntimeInstaller:
             try:
                 partial.replace(final)
                 launch = self._launch()
+                self._reporter.succeed(
+                    phase="commit_runtime",
+                    current=7,
+                    total=7,
+                    message_code=completion_message,
+                )
             except Exception:
                 # Final-path probes and launch preparation are part of activation.
                 # Put a rejected candidate back in its disposable staging slot
@@ -2047,14 +2056,10 @@ class RuntimeInstaller:
                 total=7,
                 message_code="runtime.wait_for_lock",
             )
-            launch = self._install_locked(self._installed_scope_ids())
-            self._reporter.succeed(
-                phase="commit_runtime",
-                current=7,
-                total=7,
-                message_code="runtime.repair_complete",
+            return self._install_locked(
+                self._installed_scope_ids(),
+                completion_message="runtime.repair_complete",
             )
-            return launch
         except RuntimeOperationCancelled:
             raise
         except Exception as exc:

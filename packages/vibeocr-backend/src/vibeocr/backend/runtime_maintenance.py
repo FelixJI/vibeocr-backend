@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import logging
 import os
 import re
 import subprocess
@@ -205,6 +206,14 @@ def _raise_command_error(value: dict[str, Any]) -> None:
     }
     exception_type = error_types.get(str(error_type), RuntimeOperationError)
     raise exception_type(message)
+
+
+class _CommittedEventProjectionError(OSError):
+    """The journal event is fsynced; only its metadata projection failed."""
+
+    def __init__(self, event: dict[str, Any], error: OSError) -> None:
+        super().__init__(str(error))
+        self.event = event
 
 
 class RuntimeOperationStore:
@@ -495,6 +504,8 @@ class RuntimeOperationStore:
     ) -> dict[str, Any]:
         metadata_path = self._metadata_path(operation_id)
         metadata = self._reconcile_locked(operation_id)
+        if metadata.get("terminal"):
+            raise RuntimeOperationError("terminal Runtime snapshot is immutable")
         expected = int(metadata["through_sequence"]) + 1
         sequence = snapshot.get("sequence")
         if snapshot.get("operation_id") != operation_id or sequence != expected:
@@ -543,7 +554,12 @@ class RuntimeOperationStore:
             metadata["replay_expires_at"] = _timestamp(
                 self._clock() + TERMINAL_REPLAY_RETENTION
             )
-        _atomic_json(metadata_path, metadata)
+        try:
+            _atomic_json(metadata_path, metadata)
+        except OSError as exc:
+            raise _CommittedEventProjectionError(
+                self._public_event(event), exc
+            ) from exc
         return self._public_event(event)
 
     @staticmethod
@@ -1398,13 +1414,23 @@ class RuntimeMaintenanceReporter:
         message_code: str,
     ) -> None:
         self._abort_if_cancel_requested()
-        self._publish(
-            event_type="snapshot",
-            operation_state="succeeded",
-            phase=phase,
-            progress={"unit": "steps", "current": current, "total": total},
-            message_code=message_code,
-        )
+        try:
+            self._publish(
+                event_type="snapshot",
+                operation_state="succeeded",
+                phase=phase,
+                progress={"unit": "steps", "current": current, "total": total},
+                message_code=message_code,
+            )
+        except _CommittedEventProjectionError as exc:
+            # The authoritative success event is already durable. Do not turn
+            # a failed projection into a failed installation or roll it back.
+            self._snapshot = dict(exc.event["snapshot"])
+            self._sequence = int(self._snapshot["sequence"])
+            self._message_code = message_code
+            logging.getLogger(__name__).warning(
+                "Runtime success committed; metadata projection awaits recovery"
+            )
 
     def fail(
         self,
@@ -1524,11 +1550,11 @@ class RuntimeMaintenanceReporter:
             "cancelled",
         }:
             raise RuntimeOperationError("terminal Runtime snapshot is immutable")
-        self._sequence += 1
+        sequence = self._sequence + 1
         snapshot: dict[str, Any] = {
             "operation_id": self._operation_id,
             "source_operation_id": self._source_operation_id,
-            "sequence": self._sequence,
+            "sequence": sequence,
             "operation": self._operation,
             "operation_state": operation_state,
             "phase": phase,
@@ -1575,10 +1601,18 @@ class RuntimeMaintenanceReporter:
                 self.cancel()
                 raise RuntimeOperationCancelled(self._operation_id) from None
             raise
+        self._sequence = sequence
         self._snapshot = snapshot
         self._message_code = message_code
         if self._event_sink is not None:
-            self._event_sink(event)
+            try:
+                self._event_sink(event)
+            except Exception:
+                if operation_state != "succeeded":
+                    raise
+                logging.getLogger(__name__).warning(
+                    "Runtime success committed; event delivery failed"
+                )
 
 
 def runtime_status_from_environment(

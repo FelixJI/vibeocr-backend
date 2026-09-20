@@ -1030,7 +1030,9 @@ def test_shared_plan_retry_command_replay_checks_product_binding(tmp_path):
 
 
 @pytest.mark.parametrize("operation", ["ensure", "repair"])
-@pytest.mark.parametrize("failure", ["final_probe", "launch_directory"])
+@pytest.mark.parametrize(
+    "failure", ["final_probe", "launch_directory", "success_event"]
+)
 def test_activation_failure_restores_previous_runtime_and_choice(
     tmp_path, monkeypatch, operation, failure
 ):
@@ -1087,7 +1089,18 @@ def test_activation_failure_restores_previous_runtime_and_choice(
         return mkdir(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "mkdir", prepare)
-    with pytest.raises((RuntimeInstallError, PermissionError)):
+    append = installer._reporter._store.append
+
+    def persist(operation_id, **kwargs):
+        if (
+            failure == "success_event"
+            and kwargs["snapshot"]["operation_state"] == "succeeded"
+        ):
+            raise OSError("success event not written")
+        return append(operation_id, **kwargs)
+
+    monkeypatch.setattr(installer._reporter._store, "append", persist)
+    with pytest.raises((RuntimeInstallError, OSError)):
         getattr(installer, operation)()
     assert json.loads(marker.read_text(encoding="utf-8")) == before
     assert model.read_text(encoding="utf-8") == "existing model"
@@ -1095,3 +1108,80 @@ def test_activation_failure_restores_previous_runtime_and_choice(
     restored = factory()
     assert restored.accelerator == "cpu"
     assert restored._launch().python_executable == original._launch().python_executable
+
+
+@pytest.mark.parametrize("operation", ["ensure", "repair"])
+@pytest.mark.parametrize("failure", ["metadata_projection", "event_delivery"])
+def test_durable_success_survives_projection_or_delivery_failure(
+    tmp_path, monkeypatch, operation, failure
+):
+    import vibeocr.backend.runtime_maintenance as maintenance
+
+    _, factory, _, _, _ = _control(tmp_path)
+    original = factory(accelerator="cpu", install_component_ids=())
+    original.ensure()
+    marker = original.paths.runtime_root / ".installed.json"
+    before = json.loads(marker.read_text(encoding="utf-8"))
+    installer = factory(
+        operation_id="commit-test",
+        accelerator="nvidia_cuda" if operation == "ensure" else "cpu",
+        install_component_ids=(),
+    )
+    if operation == "repair":
+        monkeypatch.setattr(
+            installer,
+            "_drifted_component_ids",
+            lambda **kwargs: (
+                ["rapidocr-base"]
+                if json.loads(marker.read_text(encoding="utf-8")) == before
+                else []
+            ),
+        )
+    atomic = maintenance._atomic_json
+
+    def project(path, value):
+        if (
+            failure == "metadata_projection"
+            and path.name == "metadata.json"
+            and (value.get("snapshot") or {}).get("operation_state") == "succeeded"
+        ):
+            raise OSError("metadata projection unavailable after journal fsync")
+        return atomic(path, value)
+
+    def deliver(event):
+        if (
+            failure == "event_delivery"
+            and event["snapshot"]["operation_state"] == "succeeded"
+        ):
+            raise OSError("client disconnected after commit")
+
+    monkeypatch.setattr(maintenance, "_atomic_json", project)
+    monkeypatch.setattr(installer._reporter, "_event_sink", deliver)
+    assert getattr(installer, operation)() is not None
+    snapshot = installer.maintenance_snapshot()
+    assert snapshot["operation_state"] == "succeeded"
+    assert json.loads(marker.read_text(encoding="utf-8")) != before
+    events = [
+        json.loads(line)
+        for line in installer._reporter._store._events_path("commit-test")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    states = [event["snapshot"]["operation_state"] for event in events]
+    assert states.count("succeeded") == 1
+    assert "failed" not in states
+    monkeypatch.undo()
+    store = maintenance.RuntimeOperationStore(installer.paths.state_root)
+    assert store.snapshot("commit-test") == snapshot
+    with pytest.raises(maintenance.RuntimeOperationError, match="terminal"):
+        store.append(
+            "commit-test",
+            event_type="snapshot",
+            snapshot={
+                **snapshot,
+                "sequence": snapshot["sequence"] + 1,
+                "operation_state": "failed",
+            },
+            message_code="runtime.operation_failed",
+        )
+    assert store.snapshot("commit-test") == snapshot
