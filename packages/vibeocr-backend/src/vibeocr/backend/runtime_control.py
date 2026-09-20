@@ -425,6 +425,7 @@ class RuntimeControl:
         }
         if plan_id is not None:
             payload["plan_id"] = plan_id
+            payload["product"] = self._product_binding
             payload["required_capabilities"] = list(required_capabilities)
         payload.update(
             normalized_selection_fields(

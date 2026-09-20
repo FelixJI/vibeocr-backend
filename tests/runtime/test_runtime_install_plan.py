@@ -862,7 +862,7 @@ def _shared_factory(tmp_path):
             runtime_manifest=manifest,
             layout_manifest=layout,
             product_id="classic",
-            install_runner=_fake_install,
+            install_runner=kwargs.pop("install_runner", _fake_install),
             **kwargs,
         )
 
@@ -974,3 +974,56 @@ def test_environment_rejects_missing_shared_layout_binding(tmp_path, monkeypatch
     monkeypatch.delenv("VIBEOCR_PRODUCT_ID", raising=False)
     with pytest.raises(RuntimeIdentityMismatch, match="store differs"):
         RuntimeControl.from_environment()
+
+
+def test_shared_plan_retry_command_replay_checks_product_binding(tmp_path):
+    from vibeocr.backend.runtime_installer import RuntimeInstallError
+    from vibeocr.backend.runtime_maintenance import RuntimeCommandConflict
+
+    factory = _shared_factory(tmp_path)
+    installer = factory(accelerator="cpu")
+    layout = tmp_path / "bundle/portable-layout.json"
+    value = json.loads(layout.read_text(encoding="utf-8"))
+    value["products"]["next"] = {"root": "classic"}
+    layout.write_text(json.dumps(value), encoding="utf-8")
+    owner = RuntimeControl.from_installer_factory(factory)
+    other = RuntimeControl(
+        product_root=installer.product_root,
+        component_lock=installer.component_lock_path,
+        runtime_manifest=installer.manifest.path,
+        layout_manifest=layout,
+        product_id="next",
+    )
+    assert other.state_root == owner.state_root
+    plan = owner.preview_install_plan(
+        install_component_ids=(), required_capabilities=(CAPABILITY,)
+    )["plan"]
+
+    def fail(*args):
+        raise RuntimeInstallError("candidate failed")
+
+    owner._installer_factory = lambda **kwargs: factory(install_runner=fail, **kwargs)
+    with pytest.raises(RuntimeInstallError):
+        owner.execute(
+            operation="ensure",
+            operation_id="failed",
+            plan_id=plan["plan_id"],
+            required_capabilities=(CAPABILITY,),
+        )
+    owner._installer_factory = factory
+    fresh = owner.preview_install_plan(
+        install_component_ids=(), required_capabilities=(CAPABILITY,)
+    )["plan"]
+    request = dict(
+        command_id="retry",
+        command="retry",
+        target_operation_id="failed",
+        new_operation_id="new-op",
+        plan_id=fresh["plan_id"],
+        required_capabilities=(CAPABILITY,),
+    )
+    receipt = owner.command(**request)
+    assert receipt["snapshot"]["operation_state"] == "succeeded"
+    with pytest.raises(RuntimeCommandConflict):
+        other.command(**request)
+    assert owner.command(**request) == receipt
