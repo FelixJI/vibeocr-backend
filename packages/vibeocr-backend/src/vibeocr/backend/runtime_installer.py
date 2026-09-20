@@ -520,7 +520,9 @@ def _lock_allowed_hashes(lock_path: Path) -> dict[str, set[str]]:
     return allowed
 
 
-def _parse_resolve_report(report_path: Path) -> tuple[_ResolvedArtifact, ...]:
+def _parse_resolve_report(
+    report_path: Path, download_root: Path | None = None
+) -> tuple[_ResolvedArtifact, ...]:
     try:
         document = json.loads(report_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -543,10 +545,19 @@ def _parse_resolve_report(report_path: Path) -> tuple[_ResolvedArtifact, ...]:
             not isinstance(name, str)
             or not name
             or not isinstance(url, str)
-            or not url.startswith(("http://", "https://"))
+            or not url.startswith(("http://", "https://", "file://"))
             or (sha256 is not None and not isinstance(sha256, str))
         ):
             raise RuntimeInstallError("pip resolve report artifact is invalid")
+        if url.startswith("file://"):
+            parsed = urllib.parse.urlsplit(url)
+            local = Path(urllib.request.url2pathname(parsed.path)).resolve()
+            if (
+                download_root is None
+                or parsed.netloc not in {"", "localhost"}
+                or local.parent != download_root.resolve()
+            ):
+                raise RuntimeInstallError("resolve artifact is outside download cache")
         filename = urllib.parse.unquote(url.rsplit("/", 1)[-1])
         if (
             not filename
@@ -693,8 +704,20 @@ def _resolve_online_report(
     inputs = {"lock": lock.read_text(encoding="utf-8"), "endpoint": endpoint}
     try:
         if json.loads(inputs_path.read_text(encoding="utf-8")) == inputs:
-            _parse_resolve_report(report_path)
-            return report_path
+            artifacts = _parse_resolve_report(
+                report_path, cache / "downloads/artifacts"
+            )
+            allowed = _lock_allowed_hashes(lock)
+            for artifact in artifacts:
+                if artifact.url.startswith("file://"):
+                    local = cache / "downloads/artifacts" / artifact.filename
+                    if not local.is_file() or _file_sha256(local) not in allowed.get(
+                        _normalize_dist_name(artifact.name), set()
+                    ):
+                        local.unlink(missing_ok=True)
+                        break
+            else:
+                return report_path
     except (OSError, ValueError, RuntimeInstallError):
         pass
     _run_install_command(
@@ -733,7 +756,7 @@ def _resolve_online_report(
         reporter=reporter,
         heartbeat_code="runtime.resolve_packages",
     )
-    _parse_resolve_report(report_path)
+    _parse_resolve_report(report_path, cache / "downloads/artifacts")
     inputs_path.write_text(json.dumps(inputs, sort_keys=True), encoding="utf-8")
     return report_path
 
@@ -762,7 +785,8 @@ def _prepare_online_artifacts(
             shutil.copyfile(wheel, downloads / wheel.name)
     return _download_resolved_artifacts(
         _parse_resolve_report(
-            _resolve_online_report(python, lock, endpoint, cache, reporter, env)
+            _resolve_online_report(python, lock, endpoint, cache, reporter, env),
+            downloads,
         ),
         allowed,
         downloads,

@@ -14,9 +14,11 @@ adapters behind the same interface.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Protocol
 
+from vibeocr.backend.runtime_lock import RuntimeLockTimeout
 from vibeocr.backend.runtime_selection import normalize_download_source_ids
 from vibeocr.runtime_contracts import (
     TERMINAL_JOB_STATES,
@@ -159,6 +161,7 @@ class SupervisorModule:
         self.recognition_mode_registry = recognition_mode_registry
         self._lock = threading.RLock()
         self._draining = False
+        self._runtime_maintenance = False
         self._shutdown = False
         self._settings_store = settings_store
         default_settings = SettingsSnapshot(default_ttl_seconds=300, pipelines=())
@@ -250,6 +253,22 @@ class SupervisorModule:
     # Submit
     # ------------------------------------------------------------------
 
+    def run_runtime_maintenance[T](self, action: Callable[[], T]) -> T:
+        """Exclude job admission through the complete maintenance transaction."""
+        with self._lock:
+            if self._runtime_maintenance or any(
+                record.state not in TERMINAL_JOB_STATES for record in self.registry
+            ):
+                raise RuntimeLockTimeout(
+                    "recognition jobs or runtime maintenance are active"
+                )
+            self._runtime_maintenance = True
+        try:
+            return action()
+        finally:
+            with self._lock:
+                self._runtime_maintenance = False
+
     def submit(
         self,
         *,
@@ -261,50 +280,52 @@ class SupervisorModule:
         client_items: tuple[SubmitItem, ...] | None = None,
     ) -> JobRef:
         with self._lock:
-            if self._draining or self._shutdown:
+            if self._draining or self._shutdown or self._runtime_maintenance:
                 raise ShutdownRequested("supervisor is draining")
-        # Allocate a job id first so staging lives under the real job dir.
-        job_id = new_job_id()
-        staged, items = self.stager.stage_job_with_item_errors(job_id, uploads)
-        if client_items is not None:
-            if len(client_items) != len(items):
-                self.stager.release(job_id)
-                raise StagingQuotaError("client item manifest does not match uploads")
-            items = [
-                replace(
-                    item,
-                    client_item_key=client_items[index].client_item_key,
-                    ordinal=client_items[index].ordinal,
-                )
-                for index, item in enumerate(items)
-            ]
-        record = self.registry.create(
-            kind=kind,
-            priority=priority,
-            items=items,
-            progress_total=len(items),
-            stage="queued",
-            job_id=job_id,
-            request_id=request_id,
-            pipeline=pipeline,
-        )
-        record.transition(JobState.QUEUED)
-        record.append_event("queued", detail={"item_count": len(items)})
-        for item in items:
-            if item.state is not None and item.state.value == "failed":
-                record.commit_item_failure(
-                    item.item_id,
-                    error_code="QUOTA_EXCEEDED",
-                    error=item.error or "staging failed",
-                )
-        # Kick off the executor in the background.
-        self._dispatch(record, staged)
-        return JobRef(
-            job_id=record.job_id,
-            instance_id=self.options.instance_id,
-            state=record.state,
-            items=tuple(record.items),
-        )
+            # Allocate a job id first so staging lives under the real job dir.
+            job_id = new_job_id()
+            staged, items = self.stager.stage_job_with_item_errors(job_id, uploads)
+            if client_items is not None:
+                if len(client_items) != len(items):
+                    self.stager.release(job_id)
+                    raise StagingQuotaError(
+                        "client item manifest does not match uploads"
+                    )
+                items = [
+                    replace(
+                        item,
+                        client_item_key=client_items[index].client_item_key,
+                        ordinal=client_items[index].ordinal,
+                    )
+                    for index, item in enumerate(items)
+                ]
+            record = self.registry.create(
+                kind=kind,
+                priority=priority,
+                items=items,
+                progress_total=len(items),
+                stage="queued",
+                job_id=job_id,
+                request_id=request_id,
+                pipeline=pipeline,
+            )
+            record.transition(JobState.QUEUED)
+            record.append_event("queued", detail={"item_count": len(items)})
+            for item in items:
+                if item.state is not None and item.state.value == "failed":
+                    record.commit_item_failure(
+                        item.item_id,
+                        error_code="QUOTA_EXCEEDED",
+                        error=item.error or "staging failed",
+                    )
+            # Kick off the executor in the background.
+            self._dispatch(record, staged)
+            return JobRef(
+                job_id=record.job_id,
+                instance_id=self.options.instance_id,
+                state=record.state,
+                items=tuple(record.items),
+            )
 
     def submit_request(
         self,
@@ -406,45 +427,48 @@ class SupervisorModule:
         return self.registry.request_cancel(job_id, mode=mode)
 
     def retry(self, job_id: str) -> JobRef:
-        source = self.registry.get(job_id)
-        if source.state not in TERMINAL_JOB_STATES:
-            raise ContractError("source job must be terminal before retry")
-        retryable_source_ids = [
-            item.item_id
-            for item in source.items
-            if item.state.value in {"failed", "cancelled"}
-        ]
-        if not retryable_source_ids:
-            raise ValueError("source job has no failed/cancelled items to retry")
-        missing = [
-            item_id
-            for item_id in retryable_source_ids
-            if not self.stager.has_staged_item(job_id, item_id)
-        ]
-        if missing:
-            raise InputExpiredError(
-                "retry input expired or unavailable: " + ", ".join(missing)
-            )
-        new_record = self.registry.create_retry(job_id)
-        staged = self.stager.clone_for_retry(
-            source_job_id=job_id,
-            retry_job_id=new_record.job_id,
-            source_to_retry_item_ids=list(
-                zip(
-                    new_record.source_item_ids,
-                    [item.item_id for item in new_record.items],
+        with self._lock:
+            if self._draining or self._shutdown or self._runtime_maintenance:
+                raise ShutdownRequested("supervisor is draining")
+            source = self.registry.get(job_id)
+            if source.state not in TERMINAL_JOB_STATES:
+                raise ContractError("source job must be terminal before retry")
+            retryable_source_ids = [
+                item.item_id
+                for item in source.items
+                if item.state.value in {"failed", "cancelled"}
+            ]
+            if not retryable_source_ids:
+                raise ValueError("source job has no failed/cancelled items to retry")
+            missing = [
+                item_id
+                for item_id in retryable_source_ids
+                if not self.stager.has_staged_item(job_id, item_id)
+            ]
+            if missing:
+                raise InputExpiredError(
+                    "retry input expired or unavailable: " + ", ".join(missing)
                 )
-            ),
-        )
-        new_record.transition(JobState.QUEUED)
-        new_record.append_event("retry_queued", detail={"source": job_id})
-        self._dispatch(new_record, staged)
-        return JobRef(
-            job_id=new_record.job_id,
-            instance_id=self.options.instance_id,
-            state=new_record.state,
-            items=tuple(new_record.items),
-        )
+            new_record = self.registry.create_retry(job_id)
+            staged = self.stager.clone_for_retry(
+                source_job_id=job_id,
+                retry_job_id=new_record.job_id,
+                source_to_retry_item_ids=list(
+                    zip(
+                        new_record.source_item_ids,
+                        [item.item_id for item in new_record.items],
+                    )
+                ),
+            )
+            new_record.transition(JobState.QUEUED)
+            new_record.append_event("retry_queued", detail={"source": job_id})
+            self._dispatch(new_record, staged)
+            return JobRef(
+                job_id=new_record.job_id,
+                instance_id=self.options.instance_id,
+                state=new_record.state,
+                items=tuple(new_record.items),
+            )
 
     def delete(self, job_id: str) -> None:
         record = self.registry.get(job_id)

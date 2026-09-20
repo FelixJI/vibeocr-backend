@@ -388,3 +388,68 @@ def test_settings_roundtrip(module: SupervisorModule) -> None:
     out = module.update_settings(snap)
     assert out.default_ttl_seconds == 600
     assert module.settings().default_ttl_seconds == 600
+
+
+def test_maintenance_excludes_submit_retry_and_other_maintenance(module):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from vibeocr.backend.runtime_lock import RuntimeLockTimeout
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def maintain():
+        entered.set()
+        assert release.wait(5)
+        raise ValueError("failed installation")
+
+    with ThreadPoolExecutor() as pool:
+        future = pool.submit(module.run_runtime_maintenance, maintain)
+        assert entered.wait(5)
+        try:
+            with pytest.raises(ShutdownRequested):
+                module.submit(
+                    kind=JobKind.RECOGNITION,
+                    priority=JobPriority.INTERACTIVE,
+                    uploads=[("sample.png", "image/png", b"x")],
+                )
+            with pytest.raises(ShutdownRequested):
+                module.retry("not-admitted")
+            with pytest.raises(RuntimeLockTimeout):
+                module.run_runtime_maintenance(lambda: None)
+        finally:
+            release.set()
+        with pytest.raises(ValueError, match="failed installation"):
+            future.result()
+    assert module.run_runtime_maintenance(lambda: "released") == "released"
+
+
+def test_maintenance_cannot_pass_job_during_staging(module, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from vibeocr.backend.runtime_lock import RuntimeLockTimeout
+
+    entered = threading.Event()
+    release = threading.Event()
+    original = module.stager.stage_job_with_item_errors
+
+    def stage(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module.stager, "stage_job_with_item_errors", stage)
+    monkeypatch.setattr(module, "_dispatch", lambda *args: None)
+    with ThreadPoolExecutor() as pool:
+        job = pool.submit(
+            module.submit,
+            kind=JobKind.RECOGNITION,
+            priority=JobPriority.INTERACTIVE,
+            uploads=[("sample.png", "image/png", b"x")],
+        )
+        assert entered.wait(5)
+        maintenance = pool.submit(module.run_runtime_maintenance, lambda: None)
+        release.set()
+        job.result()
+        with pytest.raises(RuntimeLockTimeout):
+            maintenance.result()

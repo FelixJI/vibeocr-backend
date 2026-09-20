@@ -2754,7 +2754,7 @@ def test_different_scope_locks_reuse_verified_download_without_second_request(
     monkeypatch.setattr(
         installer, "_resolve_online_report", lambda *args: tmp_path / "report.json"
     )
-    monkeypatch.setattr(installer, "_parse_resolve_report", lambda path: (artifact,))
+    monkeypatch.setattr(installer, "_parse_resolve_report", lambda *args: (artifact,))
     monkeypatch.setattr(installer, "_remote_content_length", lambda url: len(payload))
     requests = []
 
@@ -2786,3 +2786,30 @@ def test_different_scope_locks_reuse_verified_download_without_second_request(
         {},
     )
     assert len(requests) == 2
+
+
+def test_resolve_report_accepts_only_files_in_bound_download_cache(tmp_path):
+    from vibeocr.backend import runtime_installer as installer
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    wheel = cache / "shared-1-py3-none-any.whl"
+    wheel.write_bytes(b"artifact")
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "install": [
+                    {
+                        "metadata": {"name": "shared"},
+                        "download_info": {"url": wheel.as_uri()},
+                    }
+                ]
+            }
+        )
+    )
+    assert installer._parse_resolve_report(report, cache)[0].filename == wheel.name
+    with pytest.raises(RuntimeInstallError, match="outside download cache"):
+        installer._parse_resolve_report(report, tmp_path / "other")
+    with pytest.raises(RuntimeInstallError, match="outside download cache"):
+        installer._parse_resolve_report(report)

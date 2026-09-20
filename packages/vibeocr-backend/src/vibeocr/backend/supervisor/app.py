@@ -11,7 +11,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
-from functools import cache
+from functools import cache, partial
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
 
@@ -63,7 +63,6 @@ from vibeocr.backend.runtime_selection import (
 )
 from vibeocr.runtime_contracts import (
     SCHEMA_VERSION,
-    TERMINAL_JOB_STATES,
     ErrorCode,
     ErrorPayload,
     JobCommandKind,
@@ -599,12 +598,6 @@ def create_app(
             body = _strict_wire_payload(
                 await request.json(), wire.RuntimeMaintenanceRequest
             )
-            if body["operation"] in {"ensure", "repair"} and any(
-                item.state not in TERMINAL_JOB_STATES for item in module.registry
-            ):
-                raise RuntimeLockTimeout(
-                    "recognition jobs are active; finish or cancel before maintenance"
-                )
             install_component_ids = body.get("install_component_ids")
             download_source_ids = body.get("download_source_ids")
             if (
@@ -624,7 +617,7 @@ def create_app(
                 download_source_ids = (
                     list(settings_sources) if settings_sources else None
                 )
-            receipt = await asyncio.to_thread(
+            action = partial(
                 control().execute,
                 operation=body["operation"],
                 operation_id=body.get("operation_id"),
@@ -643,6 +636,11 @@ def create_app(
                     else None
                 ),
             )
+            receipt = (
+                await asyncio.to_thread(module.run_runtime_maintenance, action)
+                if body["operation"] in {"ensure", "repair"}
+                else await asyncio.to_thread(action)
+            )
             refresh_engine_probes(receipt)
             return receipt
         except Exception as exc:
@@ -658,12 +656,6 @@ def create_app(
             body = _strict_wire_payload(
                 await request.json(), wire.RuntimeMaintenanceCommandRequest
             )
-            if body["command"] == "retry" and any(
-                item.state not in TERMINAL_JOB_STATES for item in module.registry
-            ):
-                raise RuntimeLockTimeout(
-                    "recognition jobs are active; finish or cancel before maintenance"
-                )
             install_component_ids = body.get("install_component_ids")
             download_source_ids = body.get("download_source_ids")
             if (
@@ -672,7 +664,7 @@ def create_app(
                 raise ValueError(
                     "Runtime selection fields are only valid for command retry"
                 )
-            receipt = await asyncio.to_thread(
+            action = partial(
                 control().command,
                 command_id=body["command_id"],
                 command=body["command"],
@@ -697,6 +689,11 @@ def create_app(
                     if download_source_ids is not None
                     else None
                 ),
+            )
+            receipt = (
+                await asyncio.to_thread(module.run_runtime_maintenance, action)
+                if body["command"] == "retry"
+                else await asyncio.to_thread(action)
             )
             refresh_engine_probes(receipt)
             return receipt
