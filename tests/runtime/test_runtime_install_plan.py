@@ -1031,7 +1031,7 @@ def test_shared_plan_retry_command_replay_checks_product_binding(tmp_path):
 
 @pytest.mark.parametrize("operation", ["ensure", "repair"])
 @pytest.mark.parametrize(
-    "failure", ["final_probe", "launch_directory", "success_event"]
+    "failure", ["final_probe", "launch_directory", "success_event", "success_fsync"]
 )
 def test_activation_failure_restores_previous_runtime_and_choice(
     tmp_path, monkeypatch, operation, failure
@@ -1100,6 +1100,27 @@ def test_activation_failure_restores_previous_runtime_and_choice(
         return append(operation_id, **kwargs)
 
     monkeypatch.setattr(installer._reporter._store, "append", persist)
+    if failure == "success_fsync":
+        import vibeocr.backend.runtime_maintenance as maintenance
+
+        fsync = maintenance.os.fsync
+        journal = installer._reporter._store._events_path("activation-failed")
+        injected = False
+
+        def sync(fd):
+            nonlocal injected
+            if not injected and journal.exists():
+                lines = journal.read_text(encoding="utf-8").splitlines()
+                if (
+                    lines
+                    and json.loads(lines[-1])["snapshot"]["operation_state"]
+                    == "succeeded"
+                ):
+                    injected = True
+                    raise OSError("success journal fsync failed")
+            return fsync(fd)
+
+        monkeypatch.setattr(maintenance.os, "fsync", sync)
     with pytest.raises((RuntimeInstallError, OSError)):
         getattr(installer, operation)()
     assert json.loads(marker.read_text(encoding="utf-8")) == before
@@ -1185,3 +1206,57 @@ def test_durable_success_survives_projection_or_delivery_failure(
             message_code="runtime.operation_failed",
         )
     assert store.snapshot("commit-test") == snapshot
+
+
+@pytest.mark.parametrize("operation", ["ensure", "repair"])
+def test_committed_running_event_projection_failure_records_failed_and_allows_retry(
+    tmp_path, monkeypatch, operation
+):
+    import vibeocr.backend.runtime_maintenance as maintenance
+
+    control, factory, _, _, _ = _control(tmp_path)
+    original = factory(accelerator="cpu", install_component_ids=())
+    original.ensure()
+    marker = original.paths.runtime_root / ".installed.json"
+    before = marker.read_bytes()
+    installer = factory(
+        operation_id="projection-failed",
+        accelerator="cpu",
+        install_component_ids=("paddleocr-cpu",) if operation == "ensure" else (),
+    )
+    if operation == "repair":
+        monkeypatch.setattr(
+            installer, "_drifted_component_ids", lambda **kwargs: ["rapidocr-base"]
+        )
+    atomic = maintenance._atomic_json
+    injected = False
+
+    def project(path, value):
+        nonlocal injected
+        snapshot = value.get("snapshot") or {}
+        if (
+            not injected
+            and path.name == "metadata.json"
+            and snapshot.get("operation_id") == "projection-failed"
+            and snapshot.get("sequence") == 2
+        ):
+            injected = True
+            raise OSError("running event metadata projection failed")
+        return atomic(path, value)
+
+    monkeypatch.setattr(maintenance, "_atomic_json", project)
+    with pytest.raises(OSError, match="running event metadata"):
+        getattr(installer, operation)()
+    assert injected
+    assert marker.read_bytes() == before
+    snapshot = installer._reporter._store.snapshot("projection-failed")
+    assert snapshot["operation_state"] == "failed"
+    assert snapshot["sequence"] == 3
+    monkeypatch.undo()
+    receipt = control.command(
+        command_id="retry-projection",
+        command="retry",
+        target_operation_id="projection-failed",
+        new_operation_id="projection-retry",
+    )
+    assert receipt["snapshot"]["operation_state"] == "succeeded"

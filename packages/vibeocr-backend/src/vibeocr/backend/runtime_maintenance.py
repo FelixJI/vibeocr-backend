@@ -534,10 +534,23 @@ class RuntimeOperationStore:
             event["_projection"] = projection
         events_path = self._events_path(operation_id)
         events_path.parent.mkdir(parents=True, exist_ok=True)
-        with events_path.open("a", encoding="utf-8") as stream:
-            stream.write(_normalized(event) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
+        journal_offset = None
+        try:
+            with events_path.open("a", encoding="utf-8") as stream:
+                journal_offset = stream.tell()
+                stream.write(_normalized(event) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+        except OSError:
+            # A visible line is not a committed event when its append failed.
+            # Restore the previous tail under the operation lock before callers
+            # roll back activation and append their failure record.
+            if journal_offset is not None:
+                with events_path.open("r+b") as stream:
+                    stream.truncate(journal_offset)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            raise
         metadata["through_sequence"] = sequence
         metadata["snapshot"] = snapshot
         metadata["message_code"] = message_code
@@ -1422,12 +1435,9 @@ class RuntimeMaintenanceReporter:
                 progress={"unit": "steps", "current": current, "total": total},
                 message_code=message_code,
             )
-        except _CommittedEventProjectionError as exc:
+        except _CommittedEventProjectionError:
             # The authoritative success event is already durable. Do not turn
             # a failed projection into a failed installation or roll it back.
-            self._snapshot = dict(exc.event["snapshot"])
-            self._sequence = int(self._snapshot["sequence"])
-            self._message_code = message_code
             logging.getLogger(__name__).warning(
                 "Runtime success committed; metadata projection awaits recovery"
             )
@@ -1581,6 +1591,7 @@ class RuntimeMaintenanceReporter:
             snapshot["plan_id"] = self._plan_id
         if self._source is not None:
             snapshot["source"] = dict(self._source)
+        projection_error = None
         try:
             event = self._store.append(
                 self._operation_id,
@@ -1590,6 +1601,9 @@ class RuntimeMaintenanceReporter:
                 failure=failure,
                 fallback_message=fallback_message,
             )
+        except _CommittedEventProjectionError as exc:
+            event = exc.event
+            projection_error = exc
         except RuntimeOperationError:
             if operation_state != "cancelled" and self._store.cancel_requested(
                 self._operation_id
@@ -1604,6 +1618,8 @@ class RuntimeMaintenanceReporter:
         self._sequence = sequence
         self._snapshot = snapshot
         self._message_code = message_code
+        if projection_error is not None:
+            raise projection_error
         if self._event_sink is not None:
             try:
                 self._event_sink(event)
