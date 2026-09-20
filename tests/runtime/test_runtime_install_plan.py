@@ -281,3 +281,28 @@ def test_read_only_preview_reports_blocker_and_confirmation_does_not_install(
             required_capabilities=(CAPABILITY,),
         )
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "version,blocked",
+    [("527.00", True), ("528.33", False), ("610.88", False), ("unknown", True)],
+)
+def test_cuda_preview_checks_driver_compatibility_floor(
+    tmp_path, monkeypatch, version, blocked
+):
+    from types import SimpleNamespace
+
+    control, factory, _, _, _ = _control(tmp_path)
+    installer = factory(
+        accelerator="nvidia_cuda", install_component_ids=("paddleocr-cuda",)
+    )
+    installer._runner_reports_phases = True
+    monkeypatch.setattr(
+        "vibeocr.backend.runtime_installer.platform.machine", lambda: "AMD64"
+    )
+    monkeypatch.setattr(
+        "vibeocr.backend.runtime_installer.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=version),
+    )
+    codes = [item["code"] for item in installer._installation_blockers()]
+    assert any(code.startswith("nvidia_driver_") for code in codes) is blocked

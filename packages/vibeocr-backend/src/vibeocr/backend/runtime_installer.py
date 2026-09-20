@@ -1679,15 +1679,26 @@ class RuntimeInstaller:
                         timeout=10,
                         check=False,
                     )
-                    driver_available = result.returncode == 0 and bool(
-                        result.stdout.strip()
+                    # CUDA 12.x Windows minor compatibility has a 528.33 floor:
+                    # docs.nvidia.com/cuda/archive/12.6.0/cuda-toolkit-release-notes/
+                    versions = [
+                        tuple(int(part) for part in line.strip().split("."))
+                        for line in result.stdout.splitlines()
+                        if re.fullmatch(r"[0-9]+\.[0-9]+", line.strip())
+                    ]
+                    driver_available = result.returncode == 0 and bool(versions)
+                    driver_compatible = driver_available and all(
+                        version >= (528, 33) for version in versions
                     )
                 except (OSError, subprocess.TimeoutExpired):
                     driver_available = False
-                if not driver_available:
+                    driver_compatible = False
+                if not driver_compatible:
                     blockers.append(
                         {
-                            "code": "nvidia_driver_unavailable",
+                            "code": "nvidia_driver_incompatible"
+                            if driver_available
+                            else "nvidia_driver_unavailable",
                             "next_action": "install_supported_driver",
                         }
                     )
