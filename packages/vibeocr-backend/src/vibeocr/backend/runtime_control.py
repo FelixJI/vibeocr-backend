@@ -88,7 +88,8 @@ class RuntimeControl:
             product_root=str(required["product_root"]),
             component_lock=str(required["component_lock"]),
             runtime_manifest=str(required["runtime_manifest"]),
-            accelerator=os.environ.get("VIBEOCR_RUNTIME_ACCELERATOR"),
+            # A running Supervisor may still carry the pre-switch launch device.
+            # New maintenance intents follow the persisted choice/product default.
         )
 
     @property
@@ -163,19 +164,28 @@ class RuntimeControl:
         accelerator: str | None = None,
         install_component_ids: tuple[str, ...] | None = None,
         download_source_ids: tuple[str, ...] | None = None,
+        default_download_source_ids: tuple[str, ...] | None = None,
         required_capabilities: tuple[str, ...] = (),
         additional_blockers: tuple[dict[str, str], ...] = (),
     ) -> dict[str, Any]:
         installer = self._installer(
             accelerator=accelerator,
             install_component_ids=install_component_ids,
-            download_source_ids=download_source_ids,
+            download_source_ids=(
+                download_source_ids
+                if download_source_ids is not None
+                else default_download_source_ids
+            ),
             required_capabilities=required_capabilities,
         )
         return {
             "schema_version": 2,
             "plan": installer.preview_install_plan(
-                additional_blockers=additional_blockers
+                additional_blockers=additional_blockers,
+                inherit_download_sources=(
+                    download_source_ids is None
+                    and default_download_source_ids is not None
+                ),
             ),
             "negotiated_capabilities": list(required_capabilities),
         }

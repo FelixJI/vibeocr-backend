@@ -574,10 +574,10 @@ def create_app(
                 await request.json(), wire.RuntimeInstallPlanRequest
             )
             sources = body.get("download_source_ids")
-            if sources is None:
-                sources = list(module.settings().download_source_ids) or None
             return await asyncio.to_thread(
                 control().preview_install_plan,
+                default_download_source_ids=module.settings().download_source_ids
+                or None,
                 additional_blockers=module.runtime_maintenance_blockers(),
                 accelerator=body.get("accelerator"),
                 install_component_ids=tuple(body["install_component_ids"])

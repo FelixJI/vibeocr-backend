@@ -645,3 +645,95 @@ def test_confirmation_rechecks_receipt_after_http_admission_race(tmp_path):
     assert receipt["snapshot"] == other._store.snapshot("op")
     assert receipt["snapshot"]["operation_state"] == "failed"
     assert calls == []
+
+
+@pytest.mark.parametrize("devices", [("cpu", "nvidia_cuda"), ("nvidia_cuda", "cpu")])
+def test_environment_control_follows_committed_device_after_switch(
+    tmp_path, monkeypatch, devices
+):
+    _, factory, _, manifest, component = _control(tmp_path)
+    original, switched = devices
+    factory(accelerator=original, install_component_ids=()).ensure()
+    monkeypatch.setenv("VIBEOCR_PRODUCT_ROOT", str(tmp_path / "product"))
+    monkeypatch.setenv("VIBEOCR_COMPONENT_LOCK", str(component))
+    monkeypatch.setenv("VIBEOCR_RUNTIME_MANIFEST", str(manifest))
+    monkeypatch.setenv("VIBEOCR_RUNTIME_ACCELERATOR", original)
+    control = RuntimeControl.from_environment()
+    request = dict(install_component_ids=(), required_capabilities=(CAPABILITY,))
+    assert control.preview_install_plan(**request)["plan"]["accelerator"] == original
+    factory(accelerator=switched, install_component_ids=()).ensure()
+    assert control.preview_install_plan(**request)["plan"]["accelerator"] == switched
+    assert (
+        RuntimeControl.from_environment().preview_install_plan(**request)["plan"][
+            "accelerator"
+        ]
+        == switched
+    )
+    assert (
+        control.preview_install_plan(accelerator=original, **request)["plan"][
+            "accelerator"
+        ]
+        == original
+    )
+    factory(accelerator=original, install_component_ids=()).ensure()
+    assert control.preview_install_plan(**request)["plan"]["accelerator"] == original
+
+
+async def test_http_preview_distinguishes_inherited_and_explicit_download_sources(
+    tmp_path,
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    import httpx
+    from vibeocr.backend.supervisor.app import create_app
+    from vibeocr.backend.supervisor.module import SupervisorModule, SupervisorOptions
+    from vibeocr.runtime_contracts import SettingsSnapshot
+
+    control, _, _, _, _ = _control(tmp_path)
+    with ThreadPoolExecutor() as executor:
+        module = SupervisorModule(
+            options=SupervisorOptions(instance_id="source-test"),
+            stager_root=tmp_path / "staging",
+            executor=executor,
+        )
+        module.update_settings(SettingsSnapshot(download_source_ids=("pypi",)))
+        app = create_app(module, "test-token", runtime_control=control)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://127.0.0.1",
+            headers={"Authorization": "Bearer test-token"},
+        ) as http:
+            request = {
+                "required_capabilities": [CAPABILITY],
+                "install_component_ids": [],
+            }
+            inherited = await http.post("/v2/runtime/install-plan", json=request)
+            assert inherited.status_code == 200, inherited.text
+            plan = inherited.json()["plan"]
+            assert plan["requested_download_source_ids"] is None
+            assert plan["effective_download_source_ids"] == ["pypi"]
+            assert read_plan(control.state_root, plan["plan_id"])["plan"] == plan
+            explicit = await http.post(
+                "/v2/runtime/install-plan",
+                json={**request, "download_source_ids": ["tuna-pypi"]},
+            )
+            assert explicit.status_code == 200, explicit.text
+            assert explicit.json()["plan"]["requested_download_source_ids"] == [
+                "tuna-pypi"
+            ]
+            assert explicit.json()["plan"]["effective_download_source_ids"] == [
+                "tuna-pypi"
+            ]
+            receipt = await http.post(
+                "/v2/runtime/maintenance",
+                json={
+                    "operation": "ensure",
+                    "operation_id": "inherit-sources",
+                    "plan_id": plan["plan_id"],
+                    "required_capabilities": [CAPABILITY],
+                },
+            )
+            assert receipt.status_code == 200, receipt.text
+            snapshot = receipt.json()["snapshot"]
+            assert snapshot.get("requested_download_source_ids") is None
+            assert snapshot["effective_download_source_ids"] == ["pypi"]

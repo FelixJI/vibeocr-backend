@@ -1748,7 +1748,10 @@ class RuntimeInstaller:
         return blockers
 
     def preview_install_plan(
-        self, *, additional_blockers: tuple[dict[str, str], ...] = ()
+        self,
+        *,
+        additional_blockers: tuple[dict[str, str], ...] = (),
+        inherit_download_sources: bool = False,
     ) -> dict[str, Any]:
         if CAPABILITY not in self._required_capabilities:
             raise RuntimeCapabilityUnavailable(
@@ -1757,7 +1760,9 @@ class RuntimeInstaller:
         with RuntimeStoreLock(self.paths.locks_root / "runtime-store.lock", timeout=0):
             return create_plan(
                 self.paths.state_root,
-                self._selection,
+                replace(self._selection, requested_download_source_ids=None)
+                if inherit_download_sources
+                else self._selection,
                 self._source,
                 self._plan_baseline(),
                 [*self._installation_blockers(), *additional_blockers],
