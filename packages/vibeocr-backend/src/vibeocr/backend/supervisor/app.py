@@ -620,6 +620,7 @@ def create_app(
                 )
             action = partial(
                 control().execute,
+                run_maintenance=module.run_runtime_maintenance,
                 operation=body["operation"],
                 operation_id=body.get("operation_id"),
                 **({"plan_id": body["plan_id"]} if "plan_id" in body else {}),
@@ -637,11 +638,7 @@ def create_app(
                     else None
                 ),
             )
-            receipt = (
-                await asyncio.to_thread(module.run_runtime_maintenance, action)
-                if body["operation"] in {"ensure", "repair"}
-                else await asyncio.to_thread(action)
-            )
+            receipt = await asyncio.to_thread(action)
             refresh_engine_probes(receipt)
             return receipt
         except Exception as exc:
@@ -667,6 +664,7 @@ def create_app(
                 )
             action = partial(
                 control().command,
+                run_maintenance=module.run_runtime_maintenance,
                 command_id=body["command_id"],
                 command=body["command"],
                 target_operation_id=body["target_operation_id"],
@@ -691,11 +689,7 @@ def create_app(
                     else None
                 ),
             )
-            receipt = (
-                await asyncio.to_thread(module.run_runtime_maintenance, action)
-                if body["command"] == "retry"
-                else await asyncio.to_thread(action)
-            )
+            receipt = await asyncio.to_thread(action)
             refresh_engine_probes(receipt)
             return receipt
         except Exception as exc:

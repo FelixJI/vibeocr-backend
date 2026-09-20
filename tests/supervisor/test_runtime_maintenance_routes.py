@@ -147,6 +147,7 @@ async def test_start_and_retry_forward_idempotency_and_negotiation_fields(
     assert control.execute_calls == [
         {
             "operation": "repair",
+            "run_maintenance": pdf_module.run_runtime_maintenance,
             "operation_id": "op-1",
             "component_ids": ("ocr_engine",),
             "required_capabilities": ("runtime.component-repair.v1",),

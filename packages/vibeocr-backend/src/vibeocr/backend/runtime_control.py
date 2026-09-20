@@ -192,6 +192,8 @@ class RuntimeControl:
         install_component_ids: tuple[str, ...] | None = None,
         download_source_ids: tuple[str, ...] | None = None,
         plan_id: str | None = None,
+        run_maintenance: Callable[[Callable[[], RuntimeLaunch]], RuntimeLaunch]
+        | None = None,
     ) -> dict[str, Any]:
         if operation not in {"inspect", "ensure", "repair"}:
             raise ValueError("invalid Runtime maintenance operation")
@@ -205,6 +207,7 @@ class RuntimeControl:
             install_component_ids=install_component_ids,
             download_source_ids=download_source_ids,
             plan_id=plan_id,
+            run_maintenance=run_maintenance,
         )
         return result.receipt
 
@@ -220,6 +223,8 @@ class RuntimeControl:
         install_component_ids: tuple[str, ...] | None = None,
         download_source_ids: tuple[str, ...] | None = None,
         plan_id: str | None = None,
+        run_maintenance: Callable[[Callable[[], RuntimeLaunch]], RuntimeLaunch]
+        | None = None,
     ) -> RuntimeControlResult:
         """Execute once while exposing adapter-only launch projection."""
         if operation not in {"inspect", "ensure", "repair"}:
@@ -253,14 +258,6 @@ class RuntimeControl:
                     or download_source_ids is not None
                 ):
                     raise RuntimeOperationConflict(operation_id)
-                if previous["operation_state"] == "failed":
-                    self._store.raise_replayed_failure(operation_id)
-                if previous["operation_state"] == "cancelled":
-                    raise RuntimeOperationCancelled(operation_id)
-                if previous["operation_state"] != "succeeded":
-                    raise RuntimeLockTimeout(
-                        "planned operation is still running or interrupted"
-                    )
                 return self.project_receipt(
                     {
                         "schema_version": 2,
@@ -288,7 +285,8 @@ class RuntimeControl:
                 inspection = installer.inspect_snapshot()
                 launch = None
             else:
-                launch = getattr(installer, operation)()
+                action = getattr(installer, operation)
+                launch = run_maintenance(action) if run_maintenance else action()
         finally:
             self._active_snapshot = installer.maintenance_snapshot()
         receipt = self._receipt(installer, required_capabilities)
@@ -349,6 +347,8 @@ class RuntimeControl:
         download_source_ids: tuple[str, ...] | None = None,
         plan_id: str | None = None,
         required_capabilities: tuple[str, ...] = (),
+        run_maintenance: Callable[[Callable[[], RuntimeLaunch]], RuntimeLaunch]
+        | None = None,
     ) -> dict[str, Any]:
         # 选择字段只对 retry 合法；cancel 不接受 selection（计划 §4.3）。
         if command != "retry" and (
@@ -413,6 +413,7 @@ class RuntimeControl:
                     source_operation_id=target_operation_id,
                     plan_id=plan_id,
                     required_capabilities=required_capabilities,
+                    run_maintenance=run_maintenance,
                 )
             if "plan_id" in intent:
                 raise ValueError(
@@ -497,6 +498,7 @@ class RuntimeControl:
                 profile_id=str(intent["profile_id"]),
                 install_component_ids=retry_install,
                 download_source_ids=retry_sources,
+                run_maintenance=run_maintenance,
             )
 
         return self._store.apply_command(command_id, payload, apply)

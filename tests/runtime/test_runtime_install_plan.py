@@ -375,3 +375,170 @@ def test_preview_persists_supervisor_blocker_until_fresh_preview(tmp_path):
         required_capabilities=(CAPABILITY,),
     )
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("state", ["failed", "cancelled"])
+def test_unsuccessful_confirmation_replays_receipt_after_expiry(tmp_path, state):
+    from vibeocr.backend.runtime_installer import RuntimeInstallError
+    from vibeocr.backend.runtime_maintenance import RuntimeOperationCancelled
+
+    control, factory, calls, _, _ = _control(tmp_path)
+    plan = control.preview_install_plan(
+        install_component_ids=(), required_capabilities=(CAPABILITY,)
+    )["plan"]
+    failure = RuntimeInstallError if state == "failed" else RuntimeOperationCancelled
+
+    def fail(partial, manifest, profile):
+        if state == "cancelled":
+            control._store.request_cancel("op")
+            return _fake_install(partial, manifest, profile)
+        raise failure("interrupted candidate")
+
+    control._installer_factory = lambda **kwargs: factory(install_runner=fail, **kwargs)
+    request = dict(
+        operation="ensure",
+        operation_id="op",
+        plan_id=plan["plan_id"],
+        required_capabilities=(CAPABILITY,),
+    )
+    with pytest.raises(failure):
+        control.execute(**request)
+    snapshot = control._store.snapshot("op")
+    assert snapshot["operation_state"] == state
+    record = read_plan(control.state_root, plan["plan_id"])
+    record["plan"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    (control.state_root / "install-plans" / f"{plan['plan_id']}.json").write_text(
+        json.dumps(record)
+    )
+    restarted = RuntimeControl.from_installer_factory(factory)
+    assert restarted.execute(**request)["snapshot"] == snapshot
+    assert calls == []
+
+
+def test_running_confirmation_replays_without_second_install(tmp_path):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    control, factory, calls, _, _ = _control(tmp_path)
+    plan = control.preview_install_plan(
+        install_component_ids=(), required_capabilities=(CAPABILITY,)
+    )["plan"]
+    entered, release = threading.Event(), threading.Event()
+
+    def install(partial, manifest, profile):
+        entered.set()
+        assert release.wait(10)
+        return _fake_install(partial, manifest, profile)
+
+    control._installer_factory = lambda **kwargs: factory(
+        install_runner=install, **kwargs
+    )
+    request = dict(
+        operation="ensure",
+        operation_id="op",
+        plan_id=plan["plan_id"],
+        required_capabilities=(CAPABILITY,),
+    )
+    other = RuntimeControl.from_installer_factory(factory)
+    with ThreadPoolExecutor() as pool:
+        pending = pool.submit(control.execute, **request)
+        assert entered.wait(5)
+        try:
+            replay = other.execute(**request)
+            assert replay["snapshot"]["operation_state"] == "running"
+            assert replay["snapshot"]["plan_id"] == plan["plan_id"]
+            assert calls == []
+        finally:
+            release.set()
+        assert pending.result()["snapshot"]["operation_state"] == "succeeded"
+
+
+async def test_http_replays_confirm_and_retry_while_ocr_blocks_new_installs(
+    tmp_path, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    import httpx
+    from vibeocr.backend.runtime_installer import RuntimeInstallError
+    from vibeocr.backend.supervisor.app import create_app
+    from vibeocr.backend.supervisor.module import SupervisorModule, SupervisorOptions
+    from vibeocr.runtime_contracts import JobKind, JobPriority
+
+    control, factory, calls, _, _ = _control(tmp_path)
+    plan = control.preview_install_plan(
+        install_component_ids=(), required_capabilities=(CAPABILITY,)
+    )["plan"]
+
+    def fail(*args):
+        raise RuntimeInstallError("candidate failed")
+
+    control._installer_factory = lambda **kwargs: factory(install_runner=fail, **kwargs)
+    with pytest.raises(RuntimeInstallError):
+        control.execute(
+            operation="ensure",
+            operation_id="failed",
+            plan_id=plan["plan_id"],
+            required_capabilities=(CAPABILITY,),
+        )
+    control._installer_factory = factory
+    fresh = control.preview_install_plan(
+        install_component_ids=(), required_capabilities=(CAPABILITY,)
+    )["plan"]
+    retry = dict(
+        command_id="retry",
+        command="retry",
+        target_operation_id="failed",
+        new_operation_id="retried",
+        plan_id=fresh["plan_id"],
+        required_capabilities=[CAPABILITY],
+    )
+    with ThreadPoolExecutor() as executor:
+        module = SupervisorModule(
+            options=SupervisorOptions(instance_id="test-instance"),
+            stager_root=tmp_path / "staging",
+            executor=executor,
+        )
+        monkeypatch.setattr(module, "_dispatch", lambda *args: None)
+        app = create_app(module, "test-token", runtime_control=control)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://127.0.0.1",
+            headers={"Authorization": "Bearer test-token"},
+        ) as http:
+            accepted = await http.post("/v2/runtime/maintenance/command", json=retry)
+            assert accepted.status_code == 200, accepted.text
+            preview = control.preview_install_plan(
+                install_component_ids=(), required_capabilities=(CAPABILITY,)
+            )["plan"]
+            confirm = dict(
+                operation="ensure",
+                operation_id="confirmed",
+                plan_id=preview["plan_id"],
+                required_capabilities=[CAPABILITY],
+            )
+            original = await http.post("/v2/runtime/maintenance", json=confirm)
+            assert original.status_code == 200, original.text
+            new = control.preview_install_plan(
+                install_component_ids=(), required_capabilities=(CAPABILITY,)
+            )["plan"]
+            module.submit(
+                kind=JobKind.RECOGNITION,
+                priority=JobPriority.INTERACTIVE,
+                uploads=[("sample.png", "image/png", b"x")],
+            )
+            assert module.runtime_maintenance_blockers()
+            replay = await http.post("/v2/runtime/maintenance", json=confirm)
+            assert replay.status_code == 200, replay.text
+            assert replay.json() == original.json()
+            replay_retry = await http.post(
+                "/v2/runtime/maintenance/command", json=retry
+            )
+            assert replay_retry.status_code == 200, replay_retry.text
+            assert replay_retry.json() == accepted.json()
+            blocked = await http.post(
+                "/v2/runtime/maintenance",
+                json={**confirm, "operation_id": "new", "plan_id": new["plan_id"]},
+            )
+            assert blocked.status_code == 423, blocked.text
+            assert blocked.json()["code"] == "RUNTIME_BUSY"
+            assert calls == ["win-x64-base"]
