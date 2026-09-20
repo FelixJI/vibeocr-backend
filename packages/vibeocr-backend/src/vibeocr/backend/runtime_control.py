@@ -54,6 +54,7 @@ class RuntimeControl:
         self._installer_factory: Callable[..., RuntimeInstaller] | None = None
         self._active_snapshot: dict[str, Any] | None = None
         probe = self._installer()
+        self._product_binding = probe.product_binding
         self._locks_root = probe.paths.locks_root
         self._state_root = probe.paths.state_root
         self._store = RuntimeOperationStore(self._state_root)
@@ -72,6 +73,7 @@ class RuntimeControl:
         control._installer_factory = installer_factory
         control._active_snapshot = None
         probe = control._installer()
+        control._product_binding = probe.product_binding
         control._locks_root = probe.paths.locks_root
         control._state_root = probe.paths.state_root
         control._store = RuntimeOperationStore(control._state_root)
@@ -271,6 +273,7 @@ class RuntimeControl:
                 intent = self._store.intent(operation_id)
                 if (
                     intent.get("plan_id") != plan_id
+                    or intent.get("product") != self._product_binding
                     or intent.get("operation") != operation
                     or intent.get("required_capabilities")
                     != list(required_capabilities)

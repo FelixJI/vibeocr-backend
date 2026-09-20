@@ -869,6 +869,8 @@ def create_app(
                 pipelines,
                 recognition_modes=recognition_modes,
             )
+        except RuntimeLockTimeout as exc:
+            return _runtime_exception_response(exc, instance_id)
         except RecognitionModeError as exc:
             return _recognition_mode_error_response(exc, instance_id)
         except OcrEngineError as exc:

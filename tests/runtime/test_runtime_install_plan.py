@@ -781,3 +781,58 @@ def test_preview_holds_writer_lock_while_resolving_inherited_selection(tmp_path)
             required_capabilities=(CAPABILITY,),
         )
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("same_root", [False, True])
+def test_shared_layout_plan_and_receipt_are_bound_to_initiating_product(
+    tmp_path, same_root
+):
+    _, _, _, manifest, component = _control(tmp_path)
+    bundle = tmp_path / "bundle"
+    products = {"classic": "classic", "next": "classic" if same_root else "next"}
+    for relative in set(products.values()):
+        (bundle / relative).mkdir(parents=True)
+    layout = bundle / "portable-layout.json"
+    layout.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "shared_root": "shared",
+                "products": {key: {"root": value} for key, value in products.items()},
+            }
+        )
+    )
+
+    def control_for(product_id):
+        def factory(**kwargs):
+            kwargs.setdefault("accelerator", "cpu")
+            return RuntimeInstaller(
+                product_root=bundle / products[product_id],
+                component_lock=component,
+                runtime_manifest=manifest,
+                layout_manifest=layout,
+                product_id=product_id,
+                install_runner=_fake_install,
+                **kwargs,
+            )
+
+        return RuntimeControl.from_installer_factory(factory)
+
+    owner, other = control_for("classic"), control_for("next")
+    assert owner.state_root == other.state_root
+    plan = owner.preview_install_plan(
+        install_component_ids=(), required_capabilities=(CAPABILITY,)
+    )["plan"]
+    request = dict(
+        operation="ensure",
+        operation_id="owner-op",
+        plan_id=plan["plan_id"],
+        required_capabilities=(CAPABILITY,),
+    )
+    with pytest.raises(RuntimeInstallPlanStale):
+        other.execute(**request)
+    receipt = owner.execute(**request)
+    with pytest.raises(RuntimeOperationConflict):
+        other.execute(**request)
+    assert owner.execute(**request) == receipt
+    assert "product" not in plan

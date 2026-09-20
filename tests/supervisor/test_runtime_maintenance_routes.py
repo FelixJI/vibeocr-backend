@@ -9,6 +9,10 @@ from typing import Any
 import httpx
 from vibeocr.backend.runtime_maintenance import RuntimeCursorExpired
 from vibeocr.backend.supervisor.app import create_app
+from vibeocr.backend.supervisor.inference.recognition_modes import (
+    ModeAvailability,
+    RecognitionModeRegistry,
+)
 
 
 def _snapshot(
@@ -378,3 +382,34 @@ async def test_install_plan_http_preserves_selection_and_confirmation_binding(
         assert confirmation.json()["code"] == "RUNTIME_INSTALL_PLAN_STALE"
     assert control.execute_calls[0]["plan_id"] == plan["plan_id"]
     assert control.execute_calls[0]["download_source_ids"] is None
+
+
+async def test_preload_route_maps_active_maintenance_to_runtime_busy(
+    pdf_module, supervisor_token
+):
+    pdf_module.recognition_mode_registry = RecognitionModeRegistry(
+        availability_probe=lambda definition: ModeAvailability("ready")
+    )
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    entered, release = threading.Event(), threading.Event()
+
+    def maintain():
+        entered.set()
+        assert release.wait(5)
+
+    app = create_app(pdf_module, supervisor_token, runtime_control=FakeRuntimeControl())
+    with ThreadPoolExecutor() as pool:
+        pending = pool.submit(pdf_module.run_runtime_maintenance, maintain)
+        assert entered.wait(5)
+        try:
+            async with _http(supervisor_token, app) as http:
+                response = await http.post(
+                    "/v2/runtime/preload", json={"pipelines": ["MinerU"]}
+                )
+            assert response.status_code == 423, response.text
+            assert response.json()["code"] == "RUNTIME_BUSY"
+        finally:
+            release.set()
+        pending.result()

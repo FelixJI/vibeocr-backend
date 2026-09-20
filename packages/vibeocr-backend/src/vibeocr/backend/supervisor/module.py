@@ -262,6 +262,13 @@ class SupervisorModule:
                         "next_action": "wait_for_maintenance",
                     },
                 )
+            if self._preload_count > 0:
+                return (
+                    {
+                        "code": "engine_preparation_active",
+                        "next_action": "wait_for_preparation",
+                    },
+                )
             if any(record.state not in TERMINAL_JOB_STATES for record in self.registry):
                 return (
                     {"code": "recognition_jobs_active", "next_action": "close_tasks"},
@@ -273,7 +280,7 @@ class SupervisorModule:
         with self._lock:
             if self.runtime_maintenance_blockers():
                 raise RuntimeLockTimeout(
-                    "recognition jobs or runtime maintenance are active"
+                    "recognition jobs, engine preparation or runtime maintenance are active"
                 )
             self._runtime_maintenance = True
         try:
@@ -539,6 +546,8 @@ class SupervisorModule:
             recognition_modes, pipelines
         )
         with self._lock:
+            if self._runtime_maintenance:
+                raise RuntimeLockTimeout("runtime maintenance is active")
             self._preload_count += 1
             status = self._residency_snapshot
         try:

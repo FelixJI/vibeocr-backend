@@ -1167,6 +1167,7 @@ class RuntimeInstaller:
         plan_id: str | None = None,
     ) -> None:
         self.product_root = Path(product_root).resolve()
+        self._product_id = product_id
         self.component_lock_path = Path(component_lock).resolve()
         self.manifest = load_runtime_manifest(runtime_manifest)
         self.component_lock = _load_component_lock(self.component_lock_path)
@@ -1304,6 +1305,13 @@ class RuntimeInstaller:
             ),
             event_sink=event_sink,
         )
+
+    @property
+    def product_binding(self) -> dict[str, str | None]:
+        return {
+            "root": os.path.normcase(str(self.product_root)),
+            "id": self._product_id,
+        }
 
     def _preference_path(self) -> Path:
         return self.paths.state_root / "runtime-preference.json"
@@ -1541,6 +1549,7 @@ class RuntimeInstaller:
             source_operation_id=self._source_operation_id,
             required_capabilities=self._required_capabilities,
             plan_id=self._plan_id if operation == "ensure" else None,
+            product_binding=self.product_binding if self._plan_id else None,
         )
 
     def inspect_snapshot(self, *, emit: bool = True) -> RuntimeInspection:
@@ -1667,6 +1676,7 @@ class RuntimeInstaller:
                 return None
 
         return {
+            "product": self.product_binding,
             "marker": marker,
             "probes": probes,
             "versions": versions,

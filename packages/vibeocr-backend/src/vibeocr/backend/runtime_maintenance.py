@@ -1230,6 +1230,7 @@ class RuntimeMaintenanceReporter:
         source_operation_id: str | None = None,
         required_capabilities: tuple[str, ...] = (),
         plan_id: str | None = None,
+        product_binding: dict[str, str | None] | None = None,
     ) -> bool:
         self._operation = operation
         self._operation_id = operation_id or str(uuid4())
@@ -1283,6 +1284,7 @@ class RuntimeMaintenanceReporter:
         }
         if plan_id is not None:
             intent["plan_id"] = plan_id
+            intent["product"] = product_binding
         # normalized selection 与 command identity 使用同一投影，避免 retry
         # 手工重建字段形状后发生漂移。
         intent.update(
