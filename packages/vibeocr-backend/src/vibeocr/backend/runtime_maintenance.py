@@ -1323,24 +1323,41 @@ class RuntimeMaintenanceReporter:
                 effective_download_source_ids=download_source_ids,
             )
         )
-        started = self._store.start(
-            self._operation_id,
-            intent,
-            source_operation_id=source_operation_id,
-            initial_snapshot=initial_snapshot,
-            initial_message_code="runtime.validate_binding",
-        )
+        projection_error = None
+        try:
+            started = self._store.start(
+                self._operation_id,
+                intent,
+                source_operation_id=source_operation_id,
+                initial_snapshot=initial_snapshot,
+                initial_message_code="runtime.validate_binding",
+            )
+        except _CommittedEventProjectionError as exc:
+            # The operation was accepted even though its projection failed.
+            # Adopt its durable identity before recording the startup failure.
+            started = RuntimeOperationStart(
+                created=True,
+                snapshot=dict(exc.event["snapshot"]),
+                event=exc.event,
+            )
+            projection_error = exc
         self._snapshot = started.snapshot
         self._sequence = (
             int(started.snapshot["sequence"]) if started.snapshot is not None else 0
         )
         self._message_code = "runtime.validate_binding"
-        if (
-            started.created
-            and started.event is not None
-            and self._event_sink is not None
-        ):
-            self._event_sink(started.event)
+        try:
+            if projection_error is not None:
+                raise projection_error
+            if (
+                started.created
+                and started.event is not None
+                and self._event_sink is not None
+            ):
+                self._event_sink(started.event)
+        except Exception as exc:
+            self.fail(exc)
+            raise
         if (
             not started.created
             and plan_id is None

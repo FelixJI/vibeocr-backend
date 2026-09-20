@@ -1209,8 +1209,11 @@ def test_durable_success_survives_projection_or_delivery_failure(
 
 
 @pytest.mark.parametrize("operation", ["ensure", "repair"])
-def test_committed_running_event_projection_failure_records_failed_and_allows_retry(
-    tmp_path, monkeypatch, operation
+@pytest.mark.parametrize(
+    "failure, sequence", [("projection", 1), ("projection", 2), ("delivery", 1)]
+)
+def test_committed_event_failure_records_failed_and_allows_retry(
+    tmp_path, monkeypatch, operation, failure, sequence
 ):
     import vibeocr.backend.runtime_maintenance as maintenance
 
@@ -1235,23 +1238,31 @@ def test_committed_running_event_projection_failure_records_failed_and_allows_re
         nonlocal injected
         snapshot = value.get("snapshot") or {}
         if (
-            not injected
+            failure == "projection"
+            and not injected
             and path.name == "metadata.json"
             and snapshot.get("operation_id") == "projection-failed"
-            and snapshot.get("sequence") == 2
+            and snapshot.get("sequence") == sequence
         ):
             injected = True
-            raise OSError("running event metadata projection failed")
+            raise OSError("event metadata projection failed")
         return atomic(path, value)
 
+    def deliver(event):
+        nonlocal injected
+        if failure == "delivery" and not injected and event["sequence"] == sequence:
+            injected = True
+            raise OSError("event delivery failed")
+
     monkeypatch.setattr(maintenance, "_atomic_json", project)
-    with pytest.raises(OSError, match="running event metadata"):
+    monkeypatch.setattr(installer._reporter, "_event_sink", deliver)
+    with pytest.raises(OSError, match="event .*failed"):
         getattr(installer, operation)()
     assert injected
     assert marker.read_bytes() == before
     snapshot = installer._reporter._store.snapshot("projection-failed")
     assert snapshot["operation_state"] == "failed"
-    assert snapshot["sequence"] == 3
+    assert snapshot["sequence"] == sequence + 1
     monkeypatch.undo()
     receipt = control.command(
         command_id="retry-projection",
