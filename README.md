@@ -58,6 +58,12 @@ Supervisor 是进程与协议边界；application/services 负责用例编排；
 
 这也是初学者最值得先读的纵向链，详见 [源码阅读指南](docs/source-reading-guide.md)。
 
+批量请求可在一个 job 中提交多个文件，但合并传输不等于引擎原生批量推理。默认 RapidOCR 逐图调用，
+并复用已加载模型；可选 Paddle OCR 才支持一次处理多张图。Supervisor 对计算批次设有资源预算，
+同一设备上的推理经调度器依次取得租约。RapidOCR 在 CPU 上默认给每个 ONNX Runtime session
+分配最多 8 个线程（不足 8 个逻辑核时按核数），inter-op 为 1；显式 RapidOCR 参数优先，
+自定义 `config_path` 保留其配置。线程预算只调整运行资源，不改变识别模型或输出契约。
+
 ## MinerU 4 配置与运行时边界
 
 Backend 的 MinerU 依赖固定为正式 4.0.2，使用 `mineru.parser.api_server` 的
