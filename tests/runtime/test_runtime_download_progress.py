@@ -107,6 +107,27 @@ def test_slow_real_http_head_is_visible_and_cancellable(tmp_path, monkeypatch):
     assert replay["events"][-1]["message_args"]["reason_code"] == "cancelled"
 
 
+def test_parallel_download_checks_observe_one_terminal_cancellation(tmp_path):
+    reporter = _reporter(tmp_path / "state")
+    store = RuntimeOperationStore(tmp_path / "state")
+    store.request_cancel("download-test")
+
+    # The download task and its heartbeat supervisor may both see this request.
+    with pytest.raises(RuntimeOperationCancelled):
+        reporter.check_cancelled()
+    with pytest.raises(RuntimeOperationCancelled):
+        reporter.check_cancelled()
+
+    replay = store.observe("download-test", after_sequence=0, limit=100)
+    terminal = [
+        event
+        for event in replay["events"]
+        if event["snapshot"]["operation_state"] == "cancelled"
+    ]
+    assert len(terminal) == 1
+    assert replay["events"][-1]["snapshot"]["operation_state"] == "cancelled"
+
+
 @pytest.mark.parametrize("failure", ["cancel", "disconnect"])
 def test_interrupted_body_closes_stream_and_removes_only_own_partial(
     tmp_path, monkeypatch, failure

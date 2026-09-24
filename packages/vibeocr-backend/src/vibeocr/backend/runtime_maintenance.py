@@ -1620,6 +1620,8 @@ class RuntimeMaintenanceReporter:
         if latest is not None:
             self._snapshot = latest
             self._sequence = int(latest["sequence"])
+            if latest["operation_state"] == "cancelled":
+                raise RuntimeOperationCancelled(self._operation_id)
         self.cancel()
         raise RuntimeOperationCancelled(self._operation_id)
 
