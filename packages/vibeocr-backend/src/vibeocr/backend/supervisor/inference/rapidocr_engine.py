@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import threading
 from typing import Any
 
@@ -118,7 +119,20 @@ class RapidOcrEngine:
             try:
                 from rapidocr import RapidOCR
 
-                self._engine = RapidOCR(**self._engine_params)
+                engine_params = dict(self._engine_params)
+                if not engine_params.get("config_path"):
+                    cpu_count = os.cpu_count()
+                    if cpu_count is not None and cpu_count > 0:
+                        params = dict(engine_params.get("params") or {})
+                        params.setdefault(
+                            "EngineConfig.onnxruntime.intra_op_num_threads",
+                            min(8, cpu_count),
+                        )
+                        params.setdefault(
+                            "EngineConfig.onnxruntime.inter_op_num_threads", 1
+                        )
+                        engine_params["params"] = params
+                self._engine = RapidOCR(**engine_params)
             except Exception as exc:
                 self._init_error = str(exc)
                 logger.exception("[Supervisor][RapidOCR] engine init failed")

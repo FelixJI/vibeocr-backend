@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from vibeocr.backend.supervisor.inference import rapidocr_engine
 from vibeocr.backend.supervisor.inference.budgets import InputItem
 from vibeocr.backend.supervisor.inference.ocr_engines import (
     REASON_ENGINE_INIT_FAILED,
@@ -156,6 +157,70 @@ class TestRecognizeMany:
         capability = RapidOcrEngine().capabilities()
         assert capability.real_batch is False
         assert capability.max_compute_batch == 1
+
+
+class TestEngineThreads:
+    @pytest.mark.parametrize(("cpu_count", "expected"), [(32, 8), (2, 2)])
+    def test_default_budget(
+        self,
+        fake_rapidocr: type[_FakeRapidOCR],
+        monkeypatch: pytest.MonkeyPatch,
+        cpu_count: int,
+        expected: int,
+    ) -> None:
+        monkeypatch.setattr(rapidocr_engine.os, "cpu_count", lambda: cpu_count)
+        RapidOcrEngine().preload(("OCR",))
+        assert fake_rapidocr.instances[0].params == {
+            "params": {
+                "EngineConfig.onnxruntime.intra_op_num_threads": expected,
+                "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+            }
+        }
+
+    def test_unknown_cpu_count_keeps_upstream_auto_threads(
+        self, fake_rapidocr: type[_FakeRapidOCR], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(rapidocr_engine.os, "cpu_count", lambda: None)
+        original_init = fake_rapidocr.__init__
+
+        def init_with_upstream_guard(self: _FakeRapidOCR, **kwargs: Any) -> None:
+            thread_count = kwargs.get("params", {}).get(
+                "EngineConfig.onnxruntime.intra_op_num_threads", -1
+            )
+            # RapidOCR 3.9.2 compares explicit values with os.cpu_count().
+            if (
+                thread_count != -1
+                and 1 <= thread_count <= rapidocr_engine.os.cpu_count()
+            ):
+                self.session_threads = thread_count
+            original_init(self, **kwargs)
+
+        monkeypatch.setattr(fake_rapidocr, "__init__", init_with_upstream_guard)
+        RapidOcrEngine().preload(("OCR",))
+        assert fake_rapidocr.instances[0].params == {}
+
+    def test_explicit_params_win_without_mutating_caller(
+        self, fake_rapidocr: type[_FakeRapidOCR]
+    ) -> None:
+        params = {"EngineConfig.onnxruntime.intra_op_num_threads": 3}
+        engine_params = {"params": params}
+        RapidOcrEngine(engine_params=engine_params).preload(("OCR",))
+        assert fake_rapidocr.instances[0].params["params"] == {
+            "EngineConfig.onnxruntime.intra_op_num_threads": 3,
+            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+        }
+        assert params == {"EngineConfig.onnxruntime.intra_op_num_threads": 3}
+        assert engine_params == {"params": params}
+
+    def test_explicit_config_path_keeps_upstream_configuration(
+        self, fake_rapidocr: type[_FakeRapidOCR]
+    ) -> None:
+        engine_params = {
+            "config_path": "custom.yaml",
+            "params": {"Global.text_score": 0.7},
+        }
+        RapidOcrEngine(engine_params=engine_params).preload(("OCR",))
+        assert fake_rapidocr.instances[0].params == engine_params
 
 
 class TestInitFailureMemoization:
