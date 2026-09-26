@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.1
+
+### Bug Fixes
+
+- **runtime:** 修复并发取消的终态回执 (#106) (a21f141)
+
+### Performance
+
+- **ocr:** 限制默认推理线程预算以改善批量吞吐 (#109) (a8f24bb)
+
 ## 0.14.0
 
 ### Features
