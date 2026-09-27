@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.1
+
+### Bug Fixes
+
+- **mineru:** 保留无扩展名上传的媒体类型 (#117) (b730bad)
+
 ## 0.15.0
 
 ### Features
