@@ -48,6 +48,7 @@ from vibeocr.runtime_contracts.utils.http_log import (
 
 from .mineru_api import MineruApiClient, MineruApiError, MineruDocument
 from .mineru_config import migrate_legacy_options
+from .mineru_readiness import CONNECTION_REMOTE, current_connection
 from .mineru_result import project_document
 
 if TYPE_CHECKING:
@@ -77,7 +78,10 @@ class MinerUService(metaclass=SingletonMeta):
                 if (
                     not self._initialized
                 ):  # pragma: no cover - DCL inner recheck, only races under concurrency
-                    self._ensure_api_running()
+                    # 远程连接不管理本地 mineru-api 子进程；首次真实请求时
+                    # 由 _call_api 直接访问自部署服务器。
+                    if current_connection().mode != CONNECTION_REMOTE:
+                        self._ensure_api_running()
                     self._initialized = True
 
     @classmethod
@@ -336,9 +340,22 @@ class MinerUService(metaclass=SingletonMeta):
         cancelled: Callable[[], bool] = lambda: False,
     ) -> dict[str, MineruDocument | MineruApiError]:
         config = self._config(options)
+        # 在途解析固定原端点：入口快照连接，配置中途变更不串用。
+        connection = current_connection()
         # Language is service-wide. Serialize jobs through shutdown/start and
         # result download; never mutate a live service used by another job.
         with self._lock:
+            if connection.mode == CONNECTION_REMOTE:
+                # 远程自部署服务器：绝不回退本地，失败原样上抛。
+                return MineruApiClient(
+                    connection.api_url,
+                    timeout=Constants.Timeout.MINERU_HTTP_TOTAL,
+                    api_key=connection.api_key or None,
+                ).parse(
+                    files if files is not None else [(filename, data)],
+                    config,
+                    cancelled=cancelled,
+                )
             tier = (
                 "standard"
                 if config.tier in (MineruTier.STANDARD, MineruTier.ADVANCED)
@@ -376,6 +393,10 @@ class MinerUService(metaclass=SingletonMeta):
             )
             data = pdf.tobytes()
         for tier in MineruTier:
+            # 逐 tier 快照连接：观察归属“实际服务该次解析的连接”。生产路径
+            # 由 adapter 租约保证解析期间连接不被切换；无租约的直接调用下，
+            # 迟到的旧结果也只会记在旧连接名下，不计入新连接。
+            connection = current_connection()
             try:
                 document = self._call_api(
                     data,
@@ -397,7 +418,7 @@ class MinerUService(metaclass=SingletonMeta):
             except Exception:
                 mark_failed(tier)
                 raise
-            mark_executed(tier)
+            mark_executed(tier, connection=connection)
 
     def parse(
         self,

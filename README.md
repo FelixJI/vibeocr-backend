@@ -100,6 +100,23 @@ MinerU home，不覆盖旧 `mineru.json` 或旧模型。默认 `model.small_back
 当前进程必须实际完成该 tier 的准备解析。准备结果不跨 Supervisor 重启保留；失败不降为 flash。
 客户端须先按正式 Protocol 公布的生命周期能力完成准备，再重新读取目录、构造 typed 请求。
 
+### 远程自部署 MinerU 4 连接
+
+除本地 `mineru-api` 子进程外，Backend 支持自部署 MinerU 4 服务器的 V1 完整解析链
+（uploads → parse/jobs → files）。连接配置保存在 Runtime Settings 的
+`extra.mineru_connection`：`mode` 为 `local`（缺省，管理本地子进程）或 `remote`；
+`remote` 模式必须提供 `api_url`（仅 `http`/`https`，禁止 userinfo/query/fragment，
+允许反向代理路径），可选 `api_key` 作为 Bearer 凭据（拒绝包含 CR/LF）。非法配置
+fail closed，不静默回退 local。
+
+远程模式不 spawn/停止任何本地 mineru-api 子进程，也不宣称本地模型驻留；远程
+shutdown/TTL/release 绝不影响对端服务器。远程失败原样上抛，绝不回退本地；HTTP
+重定向一律拒绝，错误消息不回显配置 URL、凭据或服务器正文。tier 就绪观察按连接
+归属：连接变更会清空观察集，且清空后迟到的旧端点结果也不会计入新连接；
+存在活动 MinerU 任务时连接变更被拒绝，在途解析固定原端点。远程模式要求前端
+协商新 Protocol capability
+`ocr.mineru-remote-api.v1`，避免旧 Backend 静默接收该配置后仍走本地。
+
 Paddle 与 Base/RapidOCR/MinerU 使用不同解释器及 site-packages：Paddle 位于 runtime 的
 `engines/paddle`，独立锁固定其 OpenCV contrib 和框架，主环境使用 OpenCV Python。
 两个环境在同一未激活安装候选中构建并分别执行 `pip check`，任一失败不替换原有效 runtime；

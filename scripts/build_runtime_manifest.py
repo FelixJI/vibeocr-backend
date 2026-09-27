@@ -53,6 +53,7 @@ DEFAULT_CAPABILITIES = (
     "ocr.engine-selection.v1",
     "ocr.recognition-modes.v1",
     "ocr.mineru-config.v1",
+    "ocr.mineru-remote-api.v1",
     "runtime.download-sources.v1",
     "runtime.component-selection.v1",
     "runtime.install-plan.v1",

@@ -52,10 +52,13 @@ class MineruApiClient:
         *,
         timeout: float = 3600,
         transport: httpx.BaseTransport | None = None,
+        api_key: str | None = None,
     ) -> None:
         self.url = url.rstrip("/")
         self.timeout = timeout
         self.transport = transport
+        # 远程自部署服务器可选 Bearer 鉴权；空 key 不发送 Authorization。
+        self.api_key = api_key or None
 
     def parse(
         self,
@@ -78,6 +81,11 @@ class MineruApiClient:
             trust_env=False,
             transport=self.transport,
             timeout=httpx.Timeout(15, connect=5),
+            # 永不跟随重定向：自部署/反代端点固定，3xx 一律视为可疑。
+            follow_redirects=False,
+            headers={"Authorization": f"Bearer {self.api_key}"}
+            if self.api_key
+            else None,
         ) as client:
 
             def request(method: str, path: str, **kwargs: object) -> httpx.Response:
@@ -87,10 +95,18 @@ class MineruApiClient:
                 response = client.request(
                     method, path, timeout=min(15, remaining), **kwargs
                 )
-                if response.is_error:
+                if 300 <= response.status_code < 400:
+                    # follow_redirects 已关闭；跨源/同源重定向一律拒绝，
+                    # 且不回显 Location（可能携带攻击者可控 URL）。
                     raise MineruApiError(
                         f"MinerU {method} {path}: HTTP {response.status_code} "
-                        f"{response.text[:500]}"
+                        "redirect rejected"
+                    )
+                if response.is_error:
+                    # 只回显方法/相对路径/状态码：服务器正文可能回显配置
+                    # URL 或凭据，绝不进入错误消息与日志。
+                    raise MineruApiError(
+                        f"MinerU {method} {path}: HTTP {response.status_code}"
                     )
                 return response
 

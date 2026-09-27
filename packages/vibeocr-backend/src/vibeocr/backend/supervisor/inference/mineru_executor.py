@@ -50,6 +50,25 @@ class MinerUExecutor(AdapterExecutor):
             return
         super()._commit_payload(record, item, payload_type, payload)
 
+    def configure_settings(self, snapshot: Any):
+        """连接配置在共同位置生效，即使惰性 adapter 尚未构建。
+
+        adapter 已构建时由 ``MinerUProcessAdapter.configure_settings`` 原子
+        应用（含活动任务门禁）；这里只覆盖 adapter 不存在的窗口，保持
+        mode/tier 目录与实际连接一致。非法配置在此 fail closed，
+        ``update_settings`` 的 configure→store→rollback 链照常回滚。
+        """
+        if self._adapter is None:
+            from vibeocr.backend.services.mineru_readiness import (
+                configure_connection,
+                connection_from_extra,
+            )
+
+            configure_connection(
+                connection_from_extra(getattr(snapshot, "extra", None))
+            )
+        return super().configure_settings(snapshot)
+
     @property
     def adapter(self) -> MinerUProcessAdapter:  # type: ignore[override]
         return super().adapter  # type: ignore[return-value]

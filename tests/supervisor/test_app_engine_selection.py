@@ -496,7 +496,7 @@ async def test_mineru_prepare_refresh_and_typed_submit(
     from vibeocr.runtime_contracts import MineruTier
 
     monkeypatch.setattr(readiness.metadata, "version", lambda _: "4.0.2")
-    monkeypatch.setattr(readiness, "_ready", set())
+    monkeypatch.setattr(readiness, "_observations", {})
     module, executor = _module(tmp_path, None)
     module.recognition_mode_registry = RecognitionModeRegistry(
         availability_probe=lambda definition: ModeAvailability("ready")
@@ -552,6 +552,9 @@ async def test_mineru_only_composition_preloads_real_service_interface(
     from vibeocr.backend.services.mineru_service import MinerUService
 
     calls = []
+    monkeypatch.setattr(
+        "vibeocr.backend.supervisor.composition._mineru_available", lambda: True
+    )
     monkeypatch.setattr(MinerUService, "_ensure_api_running", lambda self: None)
     monkeypatch.setattr(MinerUService, "prepare", lambda self: calls.append("prepare"))
     monkeypatch.setattr(MinerUService, "shutdown", lambda self: None)

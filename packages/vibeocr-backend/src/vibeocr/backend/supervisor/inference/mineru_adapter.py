@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
-from vibeocr.runtime_contracts import EvictionReason, PipelineSelection
+from vibeocr.runtime_contracts import ErrorCode, EvictionReason, PipelineSelection
 
 from .budgets import AdapterCapability, InputItem
 
@@ -110,6 +110,10 @@ class MinerUProcessAdapter:
 
     def ensure_started(self) -> None:
         with self._process_lock:
+            if self._remote_locked():
+                # 远程连接由自部署服务器承担解析：本地不 spawn/拥有
+                # mineru-api 子进程，也不承担进程驻留/TTL 生命周期。
+                return
             if self._process_started:
                 return
             # When a real lifecycle is injected, drive the mineru-api subprocess
@@ -120,6 +124,16 @@ class MinerUProcessAdapter:
             self._last_used = time.monotonic()
             self._eviction_reason = EvictionReason.NONE
             self._ensure_watcher_locked()
+
+    @staticmethod
+    def _remote_locked() -> bool:
+        """当前连接是否为远程（调用方必须已持有 ``_process_lock``）."""
+        from vibeocr.backend.services.mineru_readiness import (
+            CONNECTION_REMOTE,
+            current_connection,
+        )
+
+        return current_connection().mode == CONNECTION_REMOTE
 
     def stop(self, *, reason: Any = None) -> None:
         """Stop the MinerU API subprocess; disk models are NOT deleted."""
@@ -333,18 +347,18 @@ class MinerUProcessAdapter:
         try:
             default_ttl = int(getattr(self._settings, "default_ttl_seconds", 300))
             pinned, ttl = self._policy_locked()
+            # 远程连接不宣称本地进程驻留：local 会话遗留的子进程（等待 TTL
+            # 回收）不得显示为当前 MinerU 资源的本地/远程驻留；本地清理路径
+            # （TTL/release/close）照常回收它，远程服务器永不受影响。
+            started = self._process_started and not self._remote_locked()
             kind = (
                 ResidencyKind.PINNED
-                if self._process_started and pinned
-                else (
-                    ResidencyKind.SOFT_TTL
-                    if self._process_started
-                    else ResidencyKind.EVICTED
-                )
+                if started and pinned
+                else (ResidencyKind.SOFT_TTL if started else ResidencyKind.EVICTED)
             )
             remaining = (
                 max(0, int(ttl - (time.monotonic() - self._last_used)))
-                if self._process_started and not pinned and ttl > 0
+                if started and not pinned and ttl > 0
                 else None
             )
             active_leases = self._active_leases
@@ -378,7 +392,24 @@ class MinerUProcessAdapter:
         return self.residency_status()
 
     def configure_settings(self, snapshot: Any) -> None:
+        from vibeocr.backend.services.mineru_config import MineruConfigError
+        from vibeocr.backend.services.mineru_readiness import (
+            configure_connection,
+            connection_from_extra,
+            current_connection,
+        )
+
+        # 非法连接配置 fail closed；合法变更在无活动 MinerU 任务时原子应用。
+        connection = connection_from_extra(getattr(snapshot, "extra", None))
         with self._process_lock:
+            if connection != current_connection() and self._active_leases > 0:
+                # 在途解析固定原端点：活动任务期间拒绝改连接，避免串用/
+                # 旧任务 mark_executed 污染新连接的 tier 观察集。
+                raise MineruConfigError(
+                    ErrorCode.VALIDATION_ERROR,
+                    "mineru_connection_change_blocked_by_active_tasks",
+                )
+            configure_connection(connection)
             self._settings = snapshot
             self._ensure_watcher_locked()
         self._watch_wakeup.set()

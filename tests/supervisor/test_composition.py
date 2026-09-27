@@ -225,6 +225,10 @@ def test_build_supervisor_explicit_executor_wins(
 def test_build_supervisor_picks_composite_when_paddle_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """缺省（use_mineru=None）总是惰性构建 MinerU executor，即使未安装。
+
+    远程自部署连接不依赖本地 mineru 包；显式 opt-out 见下个测试。
+    """
     captured: dict[str, Any] = {}
 
     def fake_composite(
@@ -243,9 +247,33 @@ def test_build_supervisor_picks_composite_when_paddle_available(
     module, _ = build_supervisor(
         instance_id="comp-test", stager_root=tmp_path / "stage"
     )
-    assert captured == {"use_paddle": True, "use_mineru": False}
+    assert captured == {"use_paddle": True, "use_mineru": True}
     # paddle 存在时引擎目录随 module 暴露。
     assert module.engine_registry is not None
+
+
+def test_build_supervisor_explicit_mineru_optout_keeps_old_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """显式 use_mineru=False 保留测试 opt-out：不构建 MinerU executor。"""
+    captured: dict[str, Any] = {}
+
+    def fake_composite(
+        *,
+        use_paddle,
+        use_mineru,
+        engine_registry=None,  # type: ignore[no-untyped-def]
+        engine_resolver=None,  # type: ignore[no-untyped-def]
+    ):
+        captured.update(use_paddle=use_paddle, use_mineru=use_mineru)
+        return _NullExecutor()
+
+    monkeypatch.setattr(composition, "_paddle_available", lambda: True)
+    monkeypatch.setattr(composition, "_build_composite_executor", fake_composite)
+    build_supervisor(
+        instance_id="comp-test", stager_root=tmp_path / "stage", use_mineru=False
+    )
+    assert captured == {"use_paddle": True, "use_mineru": False}
 
 
 def test_build_supervisor_picks_composite_when_mineru_available(
