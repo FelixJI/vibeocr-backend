@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.0
+
+### Features
+
+- **mineru:** 支持无需本地依赖的远程解析 API (#114) (4cd2b27)
+
 ## 0.14.2
 
 ### Bug Fixes
