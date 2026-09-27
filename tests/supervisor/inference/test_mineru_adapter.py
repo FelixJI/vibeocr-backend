@@ -14,7 +14,9 @@ from vibeocr.backend.supervisor.inference.mineru_adapter import (
 )
 
 
-def _raw_item(item_id: str, display_name: str, data: bytes) -> InputItem:
+def _raw_item(
+    item_id: str, display_name: str, data: bytes, content_type: str = ""
+) -> InputItem:
     return InputItem(
         item_id=item_id,
         display_name=display_name,
@@ -22,6 +24,7 @@ def _raw_item(item_id: str, display_name: str, data: bytes) -> InputItem:
         encoded_bytes=len(data),
         decoded_pixels=0,
         estimated_pages=1,
+        content_type=content_type,
     )
 
 
@@ -56,6 +59,35 @@ def test_unique_stem_strips_unsafe_chars() -> None:
     assert "<" not in stem
     assert ">" not in stem
     assert " " not in stem
+
+
+def test_unique_stem_keeps_supported_suffix_without_mime() -> None:
+    """已有受支持后缀时直接沿用，不需要 content_type。"""
+    assert unique_stem("photo.jpg", 0).endswith(".jpg")
+    assert unique_stem("doc.PDF", 0).endswith(".PDF")
+
+
+def test_unique_stem_appends_extension_from_declared_mime() -> None:
+    """无扩展名 display_name + 可信 MIME（剪贴板 PNG，Backend #116）。"""
+    stem = unique_stem("clipboard", 0, "image/png")
+    assert stem.endswith(".png")
+    # 带参数/大小写噪声的 MIME 声明同样解析到底层映射。
+    assert unique_stem("clipboard", 1, "Image/PNG; charset=binary").endswith(".png")
+
+
+def test_unique_stem_replaces_unknown_suffix_with_declared_mime() -> None:
+    """未知后缀不可路由，信任声明的 MIME 并替换为受支持扩展名。"""
+    stem = unique_stem("scan.bin", 0, "application/pdf")
+    assert stem.endswith(".pdf")
+    assert not stem.endswith(".bin")
+
+
+def test_unique_stem_fails_closed_without_trusted_type() -> None:
+    """无扩展名且无可信 MIME：显式拒绝而不是猜测类型（不默认 .pdf）。"""
+    with pytest.raises(ValueError, match="unsupported file type"):
+        unique_stem("clipboard", 0)
+    with pytest.raises(ValueError, match="unsupported file type"):
+        unique_stem("clipboard", 0, "application/x-unknown")
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +175,36 @@ def test_recognize_many_raises_on_missing_raw_bytes() -> None:
     plain = InputItem(item_id="x", encoded_bytes=1, decoded_pixels=1, estimated_pages=1)
     with pytest.raises(ValueError, match="no raw bytes"):
         adapter.recognize_many([plain])
+
+
+def test_recognize_many_uploads_clipboard_png_with_extension() -> None:
+    """剪贴板 PNG（display_name 无后缀）必须携带 .png 上传（Backend #116）。
+
+    远端 MinerU 4 按 filename 后缀路由，此前生成
+    ``0000-clipboard-092c25`` 这类无后缀名并报 Unsupported file type。
+    """
+    fake = _FakeMinerUClient()
+    adapter = MinerUProcessAdapter(client_factory=lambda: fake)
+    png = b"\x89PNG\r\n\x1a\n" + b"payload"
+    items = [
+        _raw_item("it-0", "clipboard", png, "image/png"),
+        _raw_item("it-1", "clipboard", png, "image/png"),
+    ]
+    results = adapter.recognize_many(items)
+    names = [name for name, _ in fake.received[0]]
+    assert len(names) == 2
+    assert all(name.endswith(".png") for name in names)
+    assert len(set(names)) == 2  # 唯一命名仍然成立
+    assert len(results) == 2  # 回映射保持输入顺序
+
+
+def test_recognize_many_fails_closed_before_upload_on_unknown_type() -> None:
+    """无可信类型的输入在上传前显式失败，不触发任何 MinerU 请求。"""
+    fake = _FakeMinerUClient()
+    adapter = MinerUProcessAdapter(client_factory=lambda: fake)
+    with pytest.raises(ValueError, match="unsupported file type"):
+        adapter.recognize_many([_raw_item("it-0", "clipboard", b"\x89PNG\r\n\x1a\n")])
+    assert fake.received == []
 
 
 def test_recognize_many_empty_returns_empty() -> None:
