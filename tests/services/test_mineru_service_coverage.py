@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import threading
 from pathlib import Path
@@ -26,6 +27,41 @@ def _make_service():
     MinerUService._api_process = None
     MinerUService._job_guard = None
     return s
+
+
+def _run_start_api_capture_env(monkeypatch, tmp_path) -> dict:
+    """运行 _start_api 并捕获实际传给 Popen 的 env（MINERU_HOME 隔离到 tmp）。"""
+    s = _make_service()
+    mock_proc = MagicMock()
+    mock_proc.pid = 12345
+    mock_proc.poll.return_value = None
+    monkeypatch.setenv("MINERU_HOME", str(tmp_path / "mineru4"))
+    monkeypatch.delenv("MINERU_CONFIG", raising=False)
+    monkeypatch.delenv("MINERU_MODEL_SOURCE", raising=False)
+
+    captured_env = {}
+
+    def _capture_popen(cmd, **kwargs):
+        captured_env.update(kwargs.get("env", {}))
+        return mock_proc
+
+    with (
+        patch.object(
+            MinerUService,
+            "_resolve_python_executable",
+            return_value=Path("/fake/python.exe"),
+        ),
+        patch(
+            "vibeocr.backend.services.mineru_service.subprocess.Popen",
+            side_effect=_capture_popen,
+        ),
+        patch("vibeocr.backend.services.mineru_service.httpx"),
+        patch("vibeocr.backend.services.mineru_service.socket"),
+        patch("vibeocr.backend.services.mineru_service.JobObjectGuard"),
+        patch.object(MinerUService, "_check_api_running", return_value=True),
+    ):
+        s._start_api()
+    return captured_env
 
 
 class TestResetAndInit:
@@ -260,43 +296,90 @@ class TestStartApi:
             with pytest.raises(RuntimeError, match="超时"):
                 s._start_api()
 
-    def test_start_api_does_not_select_native_model_source(self, monkeypatch):
+    def test_start_api_does_not_select_native_model_source(self, monkeypatch, tmp_path):
         """MinerU 原生下载器拥有 source 选择，Backend 只透传启动环境。"""
-        s = _make_service()
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-        mock_proc.poll.return_value = None
-
-        captured_env = {}
-
-        class _FakeDetector:
-            def __init__(self, root):
-                self.mineru_source = "modelscope"
-
-        def _capture_popen(cmd, **kwargs):
-            captured_env.update(kwargs.get("env", {}))
-            return mock_proc
-
         monkeypatch.delenv("MINERU_MODEL_SOURCE", raising=False)
 
-        with (
-            patch.object(
-                MinerUService,
-                "_resolve_python_executable",
-                return_value=Path("/fake/python.exe"),
-            ),
-            patch(
-                "vibeocr.backend.services.mineru_service.subprocess.Popen",
-                side_effect=_capture_popen,
-            ),
-            patch("vibeocr.backend.services.mineru_service.httpx"),
-            patch("vibeocr.backend.services.mineru_service.socket"),
-            patch("vibeocr.backend.services.mineru_service.JobObjectGuard"),
-            patch("vibeocr.backend.network_detector.NetworkDetector", _FakeDetector),
-            patch.object(MinerUService, "_check_api_running", return_value=True),
-        ):
-            s._start_api()
+        captured_env = _run_start_api_capture_env(monkeypatch, tmp_path)
+
         assert "MINERU_MODEL_SOURCE" not in captured_env
+
+
+class TestStartApiDeviceVisibility:
+    """_start_api 的子进程设备可见性契约（Backend #99）。
+
+    CPU 意图时仅在子进程 env 副本内隐藏 GPU；accelerator 权威、缺失时回退
+    legacy VIBEOCR_USE_GPU；父进程 os.environ 不被改写。
+    """
+
+    def setup_method(self):
+        MinerUService._api_url = ""
+        MinerUService._api_process = None
+        MinerUService._job_guard = None
+
+    @staticmethod
+    def _parent_visibility():
+        return {
+            name: os.environ.get(name)
+            for name in ("CUDA_VISIBLE_DEVICES", "GGML_VK_VISIBLE_DEVICES")
+        }
+
+    def test_default_cpu_overrides_only_child_env(self, monkeypatch, tmp_path):
+        """缺省（无设备意图变量，与 composition 的 cpu 缺省一致）：只覆盖子进程 env。"""
+        monkeypatch.delenv("VIBEOCR_RUNTIME_ACCELERATOR", raising=False)
+        monkeypatch.delenv("VIBEOCR_USE_GPU", raising=False)
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+        monkeypatch.delenv("GGML_VK_VISIBLE_DEVICES", raising=False)
+        parent_before = self._parent_visibility()
+
+        captured = _run_start_api_capture_env(monkeypatch, tmp_path)
+
+        assert captured["CUDA_VISIBLE_DEVICES"] == "-1"
+        assert captured["GGML_VK_VISIBLE_DEVICES"] == " "
+        assert self._parent_visibility() == parent_before
+
+    def test_legacy_gpu_without_accelerator_preserves_visibility(
+        self, monkeypatch, tmp_path
+    ):
+        """legacy：仅 VIBEOCR_USE_GPU=true（ocr_service 同样只读它）→ 保留可见性。"""
+        monkeypatch.delenv("VIBEOCR_RUNTIME_ACCELERATOR", raising=False)
+        monkeypatch.setenv("VIBEOCR_USE_GPU", "true")
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+        monkeypatch.setenv("GGML_VK_VISIBLE_DEVICES", "0")
+
+        captured = _run_start_api_capture_env(monkeypatch, tmp_path)
+
+        assert captured["CUDA_VISIBLE_DEVICES"] == "0,1"
+        assert captured["GGML_VK_VISIBLE_DEVICES"] == "0"
+
+    def test_accelerator_cpu_wins_over_legacy_gpu_flag(self, monkeypatch, tmp_path):
+        """冲突时 accelerator 权威：cpu 压过 use_gpu=true 与继承可见性。"""
+        monkeypatch.setenv("VIBEOCR_RUNTIME_ACCELERATOR", "cpu")
+        monkeypatch.setenv("VIBEOCR_USE_GPU", "true")
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+        parent_before = self._parent_visibility()
+
+        captured = _run_start_api_capture_env(monkeypatch, tmp_path)
+
+        assert captured["CUDA_VISIBLE_DEVICES"] == "-1"
+        assert captured["GGML_VK_VISIBLE_DEVICES"] == " "
+        assert self._parent_visibility() == parent_before
+
+    def test_accelerator_nvidia_cuda_wins_over_legacy_cpu_flag(
+        self, monkeypatch, tmp_path
+    ):
+        """accelerator=nvidia_cuda 压过 use_gpu=false：保留用户设备可见性。"""
+        monkeypatch.setenv("VIBEOCR_RUNTIME_ACCELERATOR", "nvidia_cuda")
+        monkeypatch.setenv("VIBEOCR_USE_GPU", "false")
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+        monkeypatch.setenv("GGML_VK_VISIBLE_DEVICES", "0")
+        parent_before = self._parent_visibility()
+
+        captured = _run_start_api_capture_env(monkeypatch, tmp_path)
+
+        assert captured["CUDA_VISIBLE_DEVICES"] == "0,1"
+        assert captured["GGML_VK_VISIBLE_DEVICES"] == "0"
+        assert self._parent_visibility() == parent_before
 
 
 class TestEnsureApiRunning:

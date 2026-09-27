@@ -232,6 +232,19 @@ class MinerUService(metaclass=SingletonMeta):
         env["MINERU_HOME"] = str(home)
         env["MINERU_CONFIG"] = str(config_path)
 
+        # 设备意图：accelerator 权威，缺失时回退 legacy VIBEOCR_USE_GPU。CPU 时
+        # 仅在子进程 env 隐藏设备（llama-cpp 默认 n_gpu_layers=99 会抢占 GPU，
+        # VlmConfig 无该字段）；GGML 空设备列表须用单空格（空串在 Windows 等于删除）。
+        accelerator = env.get("VIBEOCR_RUNTIME_ACCELERATOR")
+        gpu_selected = (
+            accelerator == "nvidia_cuda"
+            if accelerator is not None
+            else env.get("VIBEOCR_USE_GPU", "").lower() == "true"
+        )
+        if not gpu_selected:
+            env["CUDA_VISIBLE_DEVICES"] = "-1"
+            env["GGML_VK_VISIBLE_DEVICES"] = " "
+
         self.__class__._api_process = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
