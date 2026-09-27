@@ -264,7 +264,7 @@ def test_catalog_requires_actual_execution_not_just_installed_packages(monkeypat
     from vibeocr.backend.services import mineru_readiness as readiness
 
     monkeypatch.setattr(readiness.metadata, "version", lambda _: "4.0.2")
-    monkeypatch.setattr(readiness, "_ready", set())
+    monkeypatch.setattr(readiness, "_observations", {})
     assert all(
         tier["availability"] == "preparation_required"
         for tier in readiness.catalog_payload()["tiers"]

@@ -249,12 +249,14 @@ class _MinerUServiceLifecycle:
 
 
 def _build_mineru_executor(*, scheduler: Any = None) -> Executor:
-    """Construct a real MinerUExecutor owning the MinerU API subprocess.
+    """Construct a real MinerUExecutor owning the MinerU transport.
 
     The ``client_factory`` returns the singleton ``MinerUService``, whose
     ``file_parse`` issues one budgeted multi-file MinerU 4 job and
     returns ``{stem: payload}``. The lifecycle wrapper starts/stops the
-    mineru-api subprocess; the heavy model download happens on first parse.
+    local mineru-api subprocess; a remote ``mineru_connection`` never
+    spawns it and the heavy model download only happens on first local
+    parse.
     """
     from .inference.mineru_adapter import MinerUProcessAdapter
     from .inference.mineru_executor import MinerUExecutor
@@ -287,6 +289,22 @@ def _build_recognition_mode_registry(
     accelerator = os.environ.get("VIBEOCR_RUNTIME_ACCELERATOR", "cpu")
     suffix = "cuda" if accelerator == "nvidia_cuda" else "cpu"
 
+    def mineru_document_ready() -> bool:
+        """MinerU 文档模式可用性在读取时动态判定。
+
+        远程连接的自部署服务器承担解析，本地无 mineru 包/模型即可用；
+        local 连接仍以本地依赖可导入为门禁。"""
+        if not use_mineru:
+            return False
+        from vibeocr.backend.services.mineru_readiness import (
+            CONNECTION_REMOTE,
+            current_connection,
+        )
+
+        if current_connection().mode == CONNECTION_REMOTE:
+            return True
+        return _mineru_available()
+
     def availability(definition) -> ModeAvailability:  # type: ignore[no-untyped-def]
         if definition.engine is not None:
             descriptors = {
@@ -313,7 +331,7 @@ def _build_recognition_mode_registry(
                 required_component=required_component,
             )
         is_mineru = definition.mode_id is RecognitionModeId.MINERU_DOCUMENT
-        ready = use_mineru if is_mineru else use_paddle
+        ready = mineru_document_ready() if is_mineru else use_paddle
         component = f"mineru-{suffix}" if is_mineru else f"paddleocr-{suffix}"
         return ModeAvailability(
             RecognitionModeAvailability.READY
@@ -345,9 +363,11 @@ def _build_composite_executor(
     """Build a CompositeExecutor over whichever real backends are available.
 
     Paddle handles ``RECOGNITION`` jobs (optionally behind the OCR engine
-    router); MinerU handles ``MINERU_PARSE`` jobs. If only one is available
-    the composite still routes correctly; if neither is, the caller falls
-    back to ``_NullExecutor``.
+    router); MinerU handles ``MINERU_PARSE`` jobs. The MinerU executor is
+    built lazily by default even without a local ``mineru`` package: a
+    remote self-hosted connection needs no local dependency, and the local
+    path is still gated by the mode/tier catalogs at read time. Only an
+    explicit ``use_mineru=False`` opts out (tests).
     """
     from vibeocr.runtime_contracts import JobKind
 
@@ -400,15 +420,18 @@ def build_supervisor(
     backed by the singleton :class:`~vibeocr.backend.services.ocr_service.OCRService`,
     so recognition jobs actually run Paddle OCR.
 
-    When ``use_mineru`` is True (or left as None and a MinerU backend is
-    importable), a real
+    When ``use_mineru`` is not False (the default), a real
     :class:`~vibeocr.backend.supervisor.inference.mineru_executor.MinerUExecutor`
-    (owning the mineru-api subprocess) is added alongside Paddle behind a
+    is added alongside Paddle behind a
     :class:`~vibeocr.backend.supervisor.inference.composite_executor.CompositeExecutor`
     that routes by ``JobKind`` (RECOGNITION → Paddle, MINERU_PARSE → MinerU).
+    The MinerU executor is lazy: without a local ``mineru`` package it only
+    serves a remote ``mineru_connection`` (Settings extra); local execution
+    stays gated by the dynamic mode/tier catalogs. An explicit
+    ``use_mineru=False`` opts out entirely for tests.
 
-    Otherwise (or in lightweight test environments without paddle/mineru) the
-    null executor is used so the job engine stays importable and unit-testable
+    Otherwise (or in lightweight test environments without paddle) the null
+    executor is used so the job engine stays importable and unit-testable
     without model dependencies.
 
     When ``with_pdf_adapter`` is True, the module owns a
@@ -430,7 +453,10 @@ def build_supervisor(
         want_paddle = use_real_paddle is True or (
             use_real_paddle is None and _paddle_available()
         )
-        want_mineru = use_mineru is True or (use_mineru is None and _mineru_available())
+        # 默认总是惰性构建 MinerU executor：远程自部署连接无需本地 mineru
+        # 包；显式 use_mineru=False 保留测试 opt-out。local 连接的门禁由
+        # mode/tier 目录在读取时动态判定。
+        want_mineru = use_mineru is not False
         if engine_registry is None:
             engine_registry = _build_ocr_engine_registry(_paddle_adapter_factory)
         from .inference.ocr_engines import OcrEngineResolver
