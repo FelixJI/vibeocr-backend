@@ -451,6 +451,7 @@ class AdapterExecutor:
                     estimated_pages=1,
                     display_name=getattr(entry, "display_name", "input"),
                     data=data,
+                    content_type=getattr(entry, "content_type", None) or "",
                 )
             )
         return out

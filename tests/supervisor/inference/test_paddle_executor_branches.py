@@ -696,6 +696,31 @@ def test_staged_to_items_handles_entry_without_path_attribute() -> None:
     assert items[0].encoded_bytes == 0
 
 
+def test_staged_to_items_carries_declared_content_type(tmp_path: Path) -> None:
+    """StagedInput 的传输层 MIME 声明进入 InputItem（Backend #116 链路）。"""
+    p = tmp_path / "0000-clipboard-abcd1234"
+    p.write_bytes(b"\x89PNG\r\n\x1a\n")
+    staged = [
+        StagedInput(
+            item_id="it-0",
+            display_name="clipboard",
+            path=p,
+            size_bytes=8,
+            content_type="image/png",
+        ),
+        StagedInput(
+            item_id="it-1",
+            display_name="a.pdf",
+            path=p,
+            size_bytes=8,
+            content_type=None,
+        ),
+    ]
+    items = AdapterExecutor._staged_to_items(staged)
+    assert items[0].content_type == "image/png"
+    assert items[1].content_type == ""
+
+
 def test_adapter_property_returns_cached_instance_on_second_access() -> None:
     """Two ``.adapter`` accesses return the same instance (line 87->94 False branch)."""
     calls: list[int] = []

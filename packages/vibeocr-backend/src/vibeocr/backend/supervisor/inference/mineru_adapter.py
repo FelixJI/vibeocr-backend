@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
+from vibeocr.backend.utils.mime_types import extension_to_mime, mime_to_extension
 from vibeocr.runtime_contracts import ErrorCode, EvictionReason, PipelineSelection
 
 from .budgets import AdapterCapability, InputItem
@@ -41,15 +42,31 @@ _SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 logger = logging.getLogger(__name__)
 
 
-def unique_stem(original: str, index: int) -> str:
+def unique_stem(original: str, index: int, content_type: str = "") -> str:
     """Build a unique, filesystem-safe stem for one input in a batch.
 
     Duplicate stems are disambiguated by an index + short random token so a
     single multi-file native parse job cannot collide on result keys.
+
+    The stem must carry a MinerU-supported extension: mineru-api routes
+    parsing (and PDF page ranges) by the upload filename. An extension the
+    shared MIME map already recognises in ``original`` wins; otherwise the
+    item's transport-declared ``content_type`` resolves one through the same
+    map. There is deliberately no ``.pdf`` fallback here: without a trusted
+    source we refuse the upload (fail closed) instead of guessing a type.
     """
     p = Path(original or "")
     name = p.stem
     ext = p.suffix
+    if extension_to_mime(ext) is None:
+        mime = content_type.split(";", 1)[0].strip().lower()
+        resolved = mime_to_extension(mime) if mime else None
+        if resolved is None:
+            raise ValueError(
+                f"unsupported file type for MinerU upload: no known extension "
+                f"from display_name {original!r} or content_type {content_type!r}"
+            )
+        ext = resolved
     cleaned = _SAFE_RE.sub("_", name).strip("._-") or "input"
     cleaned = cleaned[:48]
     return f"{index:04d}-{cleaned}-{uuid.uuid4().hex[:6]}{ext}"
@@ -236,7 +253,8 @@ class MinerUProcessAdapter:
                         f"InputItem {item.item_id} has no raw bytes for MinerU upload"
                     )
                 display = getattr(item, "display_name", None) or f"input-{idx}"
-                stem = unique_stem(display, idx)
+                content_type = getattr(item, "content_type", "") or ""
+                stem = unique_stem(display, idx, content_type=content_type)
                 stem_to_index[stem] = idx
                 stem_to_index[Path(stem).stem] = idx
                 files.append((stem, bytes(raw)))

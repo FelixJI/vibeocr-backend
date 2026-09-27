@@ -142,3 +142,77 @@ def test_mineru_executor_property_returns_adapter() -> None:
     inner_adapter = MinerUProcessAdapter(client_factory=lambda: _FakeMinerUClient())
     executor = MinerUExecutor(adapter_factory=lambda: inner_adapter)
     assert executor.adapter is inner_adapter
+
+
+def test_executor_fails_closed_per_item_on_unsupported_type(tmp_path) -> None:
+    """未知类型只失败对应 item，其余输入照常上传（Backend #116）。
+
+    display_name 无后缀且无可信 MIME 的输入在 adapter 边界显式拒绝
+    （VALIDATION_ERROR），不猜测类型，也不影响同批其它文件。
+    """
+    from vibeocr.backend.supervisor.inference.mineru_executor import MinerUExecutor
+    from vibeocr.backend.supervisor.jobs.registry import JobRegistry
+    from vibeocr.backend.supervisor.jobs.staging import StagedInput
+    from vibeocr.runtime_contracts import (
+        ItemState,
+        JobItem,
+        JobKind,
+        JobPriority,
+        JobState,
+    )
+
+    class _RecordingClient:
+        def __init__(self) -> None:
+            self.uploads: list[list[str]] = []
+
+        def file_parse(self, files, backend=None, **kwargs):  # type: ignore[no-untyped-def]
+            self.uploads.append([name for name, _ in files])
+            return {name: {"markdown": "md"} for name, _ in files}
+
+    client = _RecordingClient()
+    adapter = MinerUProcessAdapter(client_factory=lambda: client)
+    executor = MinerUExecutor(adapter_factory=lambda: adapter)
+
+    good = tmp_path / "0000-a.pdf-00000001"
+    good.write_bytes(b"%PDF-a")
+    bad = tmp_path / "0001-clipboard-00000002"
+    bad.write_bytes(b"\x89PNG\r\n\x1a\n")
+    staged = [
+        StagedInput(
+            item_id="it-0",
+            display_name="a.pdf",
+            path=good,
+            size_bytes=6,
+            content_type="application/pdf",
+        ),
+        StagedInput(
+            item_id="it-1",
+            display_name="clipboard",
+            path=bad,
+            size_bytes=8,
+            content_type=None,
+        ),
+    ]
+    registry = JobRegistry(instance_id="t")
+    record = registry.create(
+        kind=JobKind.MINERU_PARSE,
+        priority=JobPriority.INTERACTIVE,
+        items=[
+            JobItem(item_id="it-0", display_name="a.pdf", state=ItemState.QUEUED),
+            JobItem(item_id="it-1", display_name="clipboard", state=ItemState.QUEUED),
+        ],
+        progress_total=2,
+    )
+    record.transition(JobState.QUEUED)
+
+    executor.execute(record, staged)
+
+    snap = record.snapshot()
+    states = {item.item_id: item.state for item in snap.items}
+    assert states["it-0"] is ItemState.SUCCEEDED
+    assert states["it-1"] is ItemState.FAILED
+    assert record.item_errors["it-1"] == "VALIDATION_ERROR"
+    # 仅受支持文件到达上传缝；无后缀名从未被上传。
+    assert len(client.uploads) == 1
+    assert len(client.uploads[0]) == 1
+    assert client.uploads[0][0].endswith(".pdf")

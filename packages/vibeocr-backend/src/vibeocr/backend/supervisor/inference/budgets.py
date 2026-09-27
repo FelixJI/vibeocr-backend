@@ -25,8 +25,11 @@ class InputItem:
 
     ``data`` carries the raw payload bytes (image bytes for Paddle, file
     bytes for MinerU). ``display_name`` is the original (untrusted) name for
-    logging/UI; the server never uses it as a path. Both are optional so the
-    same dataclass can describe already-decoded inputs in pure budget tests.
+    logging/UI; the server never uses it as a path. ``content_type`` is the
+    transport-declared MIME of ``data``: MinerU uploads route by filename
+    extension, so the adapter uses it to recover a supported extension when
+    the display name carries none. All are optional so the same dataclass can
+    describe already-decoded inputs in pure budget tests.
     """
 
     item_id: str
@@ -35,6 +38,7 @@ class InputItem:
     estimated_pages: int = 1
     display_name: str = ""
     data: bytes = b""
+    content_type: str = ""
 
 
 @dataclass(frozen=True, slots=True)
