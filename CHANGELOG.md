@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.2
+
+### Bug Fixes
+
+- **mineru:** 按 CPU 选择隔离子进程 GPU 设备 (#111) (9ae2d22)
+
 ## 0.14.1
 
 ### Bug Fixes
