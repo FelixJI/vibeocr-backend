@@ -1,6 +1,6 @@
 # Contributing
 
-Open an issue before large changes. Keep generated files reproducible, run the repository CI commands, and never commit local path or editable dependencies.
+新功能、修复和问题反馈统一进入 [VibeOCR Next Issues](https://github.com/FelixJI/vibeocr-next/issues)，开发规则以 [Next CONTRIBUTING](https://github.com/FelixJI/vibeocr-next/blob/main/CONTRIBUTING.md) 为准。本仓仅保留历史源码和发布资产，不再承接新的业务开发；下列规则用于理解历史提交和维护记录。
 
 ## Commits and changelog
 
