@@ -18,8 +18,10 @@ VibeOCR Backend 是 Classic 与 Next 共用的本地计算组件：它通过 Fas
 Protocol v2 API，管理 OCR/PDF job、模型调度、运行时安装与 CPU/CUDA 12.6 profile。
 
 > [!IMPORTANT]
-> 本仓库没有桌面 UI。普通用户应从 VibeOCR Classic 或 Next 的 Release 开始；前端通过绑定的
-> VibeOCR Protocol 与已验证的 Backend Release 通信。
+> **维护入口已迁至 [VibeOCR Next](https://github.com/FelixJI/vibeocr-next)。** 本仓的运行时功能已整合到 VibeOCR Next，按识别、文档、二维码、任务、环境与进程职责维护。
+> 新功能、修复和问题反馈请使用 [Next Issues](https://github.com/FelixJI/vibeocr-next/issues)；开发入口见 [贡献指南](https://github.com/FelixJI/vibeocr-next/blob/main/CONTRIBUTING.md) 和 [源码导读](https://github.com/FelixJI/vibeocr-next/blob/main/docs/source-reading-guide.md)。
+> 当前实现：[Runtime 功能源码](https://github.com/FelixJI/vibeocr-next/tree/main/src/runtime/vibeocr/runtime)。
+> 本仓保留历史提交、许可证、tag 与 [正式 Release/资产](https://github.com/FelixJI/vibeocr-backend/releases)，供旧版本追溯和下载；下文是历史架构与发布说明，不代表当前 Next 的依赖方式。未完成事项迁移后继续跟踪，不视为已验收。
 
 ## 项目定位
 
